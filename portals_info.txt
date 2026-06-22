@@ -1,0 +1,41 @@
+=== Map 12000 (10 warps) ===
+  Idx 1: ClickID=1, Name=類點1, DestMap=60000, DestX=2882, DestY=3009
+  Idx 2: ClickID=2, Name=類點2, DestMap=60001, DestX=2344, DestY=269
+  Idx 3: ClickID=3, Name=類點3, DestMap=12001, DestX=335, DestY=442
+  Idx 4: ClickID=4, Name=類點4, DestMap=12002, DestX=295, DestY=439
+  Idx 5: ClickID=5, Name=類點5, DestMap=12004, DestX=559, DestY=442
+  Idx 6: ClickID=6, Name=類點6, DestMap=12003, DestX=543, DestY=450
+  Idx 7: ClickID=7, Name=類點7, DestMap=12005, DestX=3407, DestY=2420
+  Idx 8: ClickID=8, Name=泡湯時的傳送點, DestMap=12000, DestX=1007, DestY=1465
+  Idx 9: ClickID=9, Name=類點9, DestMap=12008, DestX=2772, DestY=2544
+  Idx 10: ClickID=10, Name=蘿卡滾, DestMap=12000, DestX=1607, DestY=1540
+=== Map 11016 (3 warps) ===
+  Idx 1: ClickID=1, Name=上岸, DestMap=11016, DestX=828, DestY=882
+  Idx 2: ClickID=2, Name=類點2, DestMap=60000, DestX=1857, DestY=2602
+  Idx 3: ClickID=3, Name=夏譚島, DestMap=13504, DestX=1750, DestY=3950
+=== Map 60000 (12 warps) ===
+  Idx 1: ClickID=1, Name=海灘, DestMap=11016, DestX=1181, DestY=243
+  Idx 2: ClickID=2, Name=60000左上, DestMap=58001, DestX=7453, DestY=8461
+  Idx 3: ClickID=3, Name=60000左下, DestMap=58001, DestX=7512, DestY=8829
+  Idx 4: ClickID=4, Name=新手村, DestMap=12000, DestX=892, DestY=734
+  Idx 5: ClickID=5, Name=60000右上, DestMap=58001, DestX=7851, DestY=8554
+  Idx 6: ClickID=6, Name=60000右下, DestMap=58001, DestX=8026, DestY=8663
+  Idx 7: ClickID=7, Name=類點7, DestMap=60003, DestX=5604, DestY=1071
+  Idx 8: ClickID=8, Name=類點8, DestMap=12100, DestX=1821, DestY=1301
+  Idx 9: ClickID=9, Name=類點9, DestMap=12450, DestX=520, DestY=1169
+  Idx 10: ClickID=10, Name=類點10, DestMap=12500, DestX=799, DestY=1594
+  Idx 11: ClickID=11, Name=類點11, DestMap=60012, DestX=3127, DestY=370
+  Idx 12: ClickID=12, Name=類點12, DestMap=12601, DestX=1070, DestY=600
+=== Map 60001 (12 warps) ===
+  Idx 1: ClickID=1, Name=克蘭村, DestMap=12000, DestX=2407, DestY=2231
+  Idx 2: ClickID=2, Name=類點2, DestMap=11034, DestX=590, DestY=484
+  Idx 3: ClickID=3, Name=威靈村, DestMap=12050, DestX=400, DestY=219
+  Idx 4: ClickID=4, Name=類點4, DestMap=12050, DestX=2994, DestY=287
+  Idx 5: ClickID=5, Name=類點5, DestMap=11030, DestX=2811, DestY=2437
+  Idx 6: ClickID=6, Name=類點6, DestMap=11026, DestX=2744, DestY=2383
+  Idx 7: ClickID=7, Name=類點7, DestMap=60001, DestX=1148, DestY=3871
+  Idx 8: ClickID=8, Name=小雞農場, DestMap=11083, DestX=1029, DestY=343
+  Idx 9: ClickID=12, Name=大地圖左上, DestMap=58001, DestX=7450, DestY=8860
+  Idx 10: ClickID=13, Name=大地圖左下, DestMap=58001, DestX=7504, DestY=9148
+  Idx 11: ClickID=14, Name=大地圖右上, DestMap=58001, DestX=8122, DestY=9080
+  Idx 12: ClickID=15, Name=大地圖右下, DestMap=58001, DestX=7969, DestY=9262
