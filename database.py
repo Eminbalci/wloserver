@@ -62,6 +62,7 @@ class DatabaseManager:
                     inventory TEXT DEFAULT '[]',
                     skills TEXT DEFAULT '[]',
                     quests TEXT DEFAULT '[]',
+                    points INTEGER DEFAULT 0,
                     FOREIGN KEY(user_id) REFERENCES users(id),
                     UNIQUE(user_id, slot)
                 )
@@ -83,6 +84,10 @@ class DatabaseManager:
                 pass
             try:
                 conn.execute("ALTER TABLE characters ADD COLUMN potential INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE characters ADD COLUMN points INTEGER DEFAULT 0")
             except sqlite3.OperationalError:
                 pass
             conn.commit()
@@ -209,9 +214,25 @@ class DatabaseManager:
  
                 default_equips = json.dumps([{"item_id": eq_id} for eq_id in beginner_equips])
                 
-                # Determine starting skill
+                # Determine starting skills (stunt skill + element starting physical and magic skills)
                 starter_skill_id = self.get_starter_skill_id(body, head)
-                default_skills = json.dumps([{"skill_id": starter_skill_id, "grade": 1, "exp": 0}])
+                skills_list = [{"skill_id": starter_skill_id, "grade": 1, "exp": 0}]
+                
+                # 1 = Earth, 2 = Water, 3 = Fire, 4 = Wind
+                if element == 1: # Earth
+                    skills_list.append({"skill_id": 15085, "grade": 1, "exp": 0}) # Rock Attack (physical)
+                    skills_list.append({"skill_id": 30113, "grade": 1, "exp": 0}) # Stone Strike (magic)
+                elif element == 2: # Water
+                    skills_list.append({"skill_id": 15091, "grade": 1, "exp": 0}) # Ice Attack (physical)
+                    skills_list.append({"skill_id": 30079, "grade": 1, "exp": 0}) # Water Arrow (magic)
+                elif element == 3: # Fire
+                    skills_list.append({"skill_id": 11016, "grade": 1, "exp": 0}) # Flame Attack (physical)
+                    skills_list.append({"skill_id": 30112, "grade": 1, "exp": 0}) # Fire Puff (magic)
+                elif element == 4: # Wind
+                    skills_list.append({"skill_id": 11007, "grade": 1, "exp": 0}) # Wind Attack (physical)
+                    skills_list.append({"skill_id": 30111, "grade": 1, "exp": 0}) # Thunderbolt (magic)
+                    
+                default_skills = json.dumps(skills_list)
  
                 start_hp = int(round(((1**0.35) * con_val * 2) + 1 + (con_val * 2) + 180))
                 start_sp = int(round(((1**0.3) * wis_val * 3.2) + 1 + (wis_val * 2) + 94))
@@ -254,6 +275,7 @@ class DatabaseManager:
                 char_dict['skills'] = json.loads(char_dict['skills'])
                 char_dict['quests'] = json.loads(char_dict['quests'])
                 char_dict['potential'] = char_dict.get('potential', 0)
+                char_dict['points'] = char_dict.get('points', 0)
                 char_dict['pets'] = json.loads(char_dict.get('pets', '[]') or '[]')
                 return char_dict
         return None
@@ -269,7 +291,7 @@ class DatabaseManager:
                     reborn = ?, job = ?, equipments = ?, inventory = ?,
                     skills = ?, quests = ?,
                     str = ?, con = ?, int = ?, wis = ?, agi = ?, exp = ?,
-                    pets = ?, potential = ?
+                    pets = ?, potential = ?, points = ?
                 WHERE id = ?
             """, (
                 data.get('level', 1), data.get('element', 0), data.get('hp', 100), data.get('max_hp', 100),
@@ -283,6 +305,7 @@ class DatabaseManager:
                 data.get('exp', 0),
                 json.dumps(data.get('pets', [])),
                 data.get('potential', 0),
+                data.get('points', 0),
                 char_id
             ))
             conn.commit()

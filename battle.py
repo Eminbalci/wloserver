@@ -1,86 +1,144 @@
+"""
+WLO Battle Engine - Sıfırdan yazılmış PvE/PvP savaş motoru.
+C# referans: Battle.cs -> Send_Attack, Send_11_250, Send_11_5
+"""
 import asyncio
 import logging
 import random
-from typing import Dict, Any, Optional
+import struct
 
-logger = logging.getLogger('gameserver.battle')
+logger = logging.getLogger("WLO_Battle")
 
-class BattleInstance:
-    """
-    Manages a synchronous PvP battle between two players (team A vs team B).
-    In the future, this can be expanded to 4v4 with pets.
-    """
-    def __init__(self, attacker_session, defender_session):
-        self.attacker = attacker_session
-        self.defender = defender_session
-        
-        # Track pending actions for the current turn
-        # Key: char_id, Value: action dict
-        self.queued_actions: Dict[int, Dict[str, Any]] = {}
-        
-        # Background task for turn resolution timeout
-        self.turn_timeout_task = None
-        self.turn_number = 1
 
-    def add_action(self, char_id: int, action: Dict[str, Any]):
-        """Queue an action for a player."""
-        self.queued_actions[char_id] = action
-        logger.info(f"[Battle] Player {char_id} queued action: {action['type']}")
-        
-        # If both players have submitted actions, resolve the turn immediately
-        if self.is_turn_ready():
-            asyncio.create_task(self.resolve_turn())
+# ─── Fighter ──────────────────────────────────────────────────────────────────
+
+class Fighter:
+    """Savaştaki bir katılımcıyı temsil eder (oyuncu, canavar, pet)."""
+
+    def __init__(
+        self,
+        char_id: int,
+        name: str,
+        level: int,
+        hp: int,
+        max_hp: int,
+        sp: int,
+        max_sp: int,
+        element: int,
+        role: int,       # 5=Attacking, 2=Defending
+        f_type: int,     # 2=Player, 7=Monster, 4=Pet
+        is_monster: bool = False,
+        session=None,
+    ):
+        self.char_id  = char_id
+        self.name     = name
+        self.level    = level
+        self.hp       = hp
+        self.max_hp   = max_hp
+        self.sp       = sp
+        self.max_sp   = max_sp
+        self.element  = element
+        self.role     = role
+        self.f_type   = f_type
+        self.is_monster = is_monster
+        self.session  = session   # None for monsters
+
+        # Grid pozisyonu
+        self.x: int = 0
+        self.y: int = 0
+
+        # click_id isteğe bağlı
+        self.click_id: int = 0
+
+        # Tur aksiyonu
+        self.queued_action: dict | None = None
+
+        # Ölüm durumu
+        self.is_dead: bool = False
+
+        # Hız (agility) - daha yüksek → daha önce saldırır
+        self.agi_val: int = level * 2
+        if session:
+            self.agi_val = getattr(session, "agi_val", self.agi_val)
+
+    def take_damage(self, amount: int) -> None:
+        self.hp = max(0, self.hp - amount)
+        if self.hp == 0:
+            self.is_dead = True
+
+
+# ─── BattleManager ────────────────────────────────────────────────────────────
+
+class BattleManager:
+    """Savaşı yöneten ana sınıf."""
+
+    def __init__(self, battle_id: int, bg_id: int = 2):
+        self.battle_id = battle_id
+        self.bg_id     = bg_id
+
+        # role=5 → Attacking side, role=2 → Defending side
+        self.attackers: list[Fighter] = []
+        self.defenders: list[Fighter] = []
+
+        self.turn_number: int = 1
+        self.finished: bool   = False
+
+    # ── Fighters ─────────────────────────────────────────────────────────────
+
+    def add_fighter(self, f: Fighter) -> None:
+        if f.role == 5:
+            self.attackers.append(f)
+        else:
+            self.defenders.append(f)
+
+    def all_fighters(self) -> list[Fighter]:
+        return self.attackers + self.defenders
+
+    def get_fighter(self, char_id: int) -> Fighter | None:
+        for f in self.all_fighters():
+            if f.char_id == char_id:
+                return f
+        return None
+
+    # ── Turn helpers ─────────────────────────────────────────────────────────
 
     def is_turn_ready(self) -> bool:
-        """Check if both players have submitted an action."""
-        has_attacker = self.attacker.char_id in self.queued_actions
-        has_defender = self.defender.char_id in self.queued_actions
-        return has_attacker and has_defender
+        """Tüm canlı oyuncular aksiyon gönderdi mi?"""
+        for f in self.all_fighters():
+            if f.is_dead or f.is_monster:
+                continue
+            if f.queued_action is None:
+                return False
+        return True
 
-    async def start_turn_timer(self):
-        """Start a 20-second timer for the turn (WLO standard is 20s)."""
-        if self.turn_timeout_task:
-            self.turn_timeout_task.cancel()
-            
-        async def turn_timer():
-            await asyncio.sleep(20.0)
-            logger.info(f"[Battle] Turn {self.turn_number} timed out. Resolving with default actions.")
-            # Auto-defend for missing actions
-            if self.attacker.char_id not in self.queued_actions:
-                self.queued_actions[self.attacker.char_id] = {"type": "defend"}
-            if self.defender.char_id not in self.queued_actions:
-                self.queued_actions[self.defender.char_id] = {"type": "defend"}
-            await self.resolve_turn()
-            
-        self.turn_timeout_task = asyncio.create_task(turn_timer())
+    def queue_ai_actions(self) -> None:
+        """Canavarlar için rastgele saldırı atar."""
+        for f in self.all_fighters():
+            if f.is_dead or not f.is_monster:
+                continue
+            if f.queued_action is not None:
+                continue
+            opponents = self.attackers if f.role == 2 else self.defenders
+            living = [o for o in opponents if not o.is_dead]
+            if living:
+                tgt = random.choice(living)
+                f.queued_action = {
+                    "type":     "attack",
+                    "skill_id": 0,
+                    "target_x": tgt.x,
+                    "target_y": tgt.y,
+                }
+            else:
+                f.queued_action = {"type": "defend"}
 
-    def get_opponent(self, session):
-        """Returns the opposing player session."""
-        if session.char_id == self.attacker.char_id:
-            return self.defender
-        return self.attacker
+    def clear_actions(self) -> None:
+        for f in self.all_fighters():
+            f.queued_action = None
 
-    async def broadcast(self, packet):
-        """Sends a packet to both players."""
-        if self.attacker.writer:
-            await self.attacker.send_packet(packet)
-        if self.defender.writer:
-            await self.defender.send_packet(packet)
+    # ── Broadcast ────────────────────────────────────────────────────────────
 
-    async def resolve_turn(self):
-        """Executes the queued actions and broadcasts animations/damage."""
-        if self.turn_timeout_task:
-            self.turn_timeout_task.cancel()
-            self.turn_timeout_task = None
-
-        logger.info(f"[Battle] Resolving turn {self.turn_number} between {self.attacker.char_name} and {self.defender.char_name}")
-        
-        # 1. Acknowledge turn start to both players (AC 50 Sub 6)
-        # Attacker is typically at Grid 4,2
-        # Defender is typically at Grid 1,2 (but from their perspective, they are 4,2)
-        # We will handle perspective later inside gameserver.py sending.
-
-        # For now, we will handle the battle resolution inside gameserver.py to easily access `PacketWriter` 
-        # and other helper functions like `get_player_atk`.
-        # This BattleInstance just holds state.
-        pass
+    async def broadcast(self, pkt) -> None:
+        """Paketi tüm insan oyuncularına gönderir."""
+        for f in self.all_fighters():
+            if f.session and not f.is_monster:
+                await f.session.send_packet(pkt)

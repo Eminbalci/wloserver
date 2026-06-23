@@ -6,14 +6,16 @@ import json
 import traceback
 import math
 import sys
+import random
 from server.quest_manager import QuestManager
 from datetime import datetime
 
 from server.network import PacketReader, PacketWriter, xor_crypt
 from server.database import DatabaseManager
+from server.battle import Fighter, BattleManager
 
 # Setup logger
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("WLO_Server")
 
 # Version string for AC 0 Response
@@ -206,7 +208,8 @@ class PlayerSession:
         self.skills = []  # List of skills: {"skill_id": id, "grade": grade, "exp": exp}
         self.quests = []
         self.exp = 0
-        self.potential = 0  # Available stat points to distribute
+        self.potential = 0  # Character Potential (0-12)
+        self.points = 0     # Distributable stat points (Attribute Points, Puan)
         self.pets = []  # List of pets: {"pet_id": id, "level": lvl, "exp": exp, ...}
         
         # Stats details
@@ -225,6 +228,7 @@ class PlayerSession:
         self.logged_in = False
         self.is_warping = False
         self.in_map = False
+        self.pending_battle_unlock = False
         
         # Send lock to avoid parallel write corruption
         self.send_lock = asyncio.Lock()
@@ -342,68 +346,6 @@ class PlayerSession:
         except:
             pass
 
-class BattleInstance:
-    """Manages a synchronous PvP battle between two players."""
-    def __init__(self, battle_id: int, attacker: PlayerSession, defender: PlayerSession):
-        self.battle_id = battle_id
-        self.attacker = attacker
-        self.defender = defender
-        self.queued_actions = {}  # char_id -> dict of action details
-        self.turn_number = 1
-
-    def is_turn_ready(self) -> bool:
-        return (self.attacker.char_id in self.queued_actions and 
-                self.defender.char_id in self.queued_actions)
-
-    def get_opponent(self, char_id: int):
-        if self.attacker.char_id == char_id:
-            return self.defender
-        return self.attacker
-
-
-class MonsterSession:
-    """Mock session object representing a monster in combat to unify the Battle Engine."""
-    def __init__(self, npc_id: int, name: str, level: int, hp: int, sp: int, element: int):
-        self.char_id = -npc_id  # Negative ID ensures it never conflicts with real players
-        self.npc_id = npc_id
-        self.char_name = name
-        self.level = level
-        self.hp = hp
-        self.max_hp = hp
-        self.sp = sp
-        self.max_sp = sp
-        self.element = element
-        self.reborn = 0
-        self.job = 0
-        
-        # Approximate stats
-        self.str_val = level * 2
-        self.con_val = level * 2
-        self.int_val = level * 2
-        self.wis_val = level * 2
-        self.agi_val = level * 2
-        
-        self.is_monster = True
-        
-    async def send_packet(self, packet):
-        """Mock send_packet that does nothing for AI sessions."""
-        pass
-        
-        self.in_battle = True
-        self.pvp_battle_id = None
-        self.is_monster = True
-
-    async def send_packet(self, packet):
-        """Mock method; AI monsters don't need network packets."""
-        pass
-
-    def get_action(self):
-        """Simple AI that randomly chooses to attack or use a skill."""
-        import random
-        # 80% regular attack, 20% skill 0 (just to mock it)
-        if random.random() < 0.2:
-            return {"type": "attack", "skill_id": 1, "target_x": 4, "target_y": 2}
-        return {"type": "attack", "skill_id": 0, "target_x": 4, "target_y": 2}
 
 
 class GameServer:
@@ -768,6 +710,7 @@ class GameServer:
             'exp': session.exp,
             'pets': session.pets,
             'potential': session.potential,
+            'points': session.points,
         }
         self.db.save_character(session.char_id, data)
 
@@ -784,10 +727,10 @@ class GameServer:
             levels_gained = new_level - old_level
             session.level = new_level
             # Give 3 stat points (POINT) per level gained
-            session.potential = min(255, session.potential + levels_gained * 3)
+            session.points = min(255, session.points + levels_gained * 3)
             # Recalculate HP/SP for new level
             session.update_max_hp_sp()
-            logger.info(f"[{session.char_name}] Level up! {old_level} -> {new_level}, +{levels_gained*3} potential points")
+            logger.info(f"[{session.char_name}] Level up! {old_level} -> {new_level}, +{levels_gained*3} stat points")
         
         # Save to DB after exp change
         self.save_player_to_db(session)
@@ -821,7 +764,7 @@ class GameServer:
         """Dispatches decrypted Action Codes to corresponding handlers."""
         # Log received packets for debugging
         sub_code = reader.data[1] if len(reader.data) > 1 else 0
-        logger.debug(f"[{session.username or session.ip}] Action Code: {action_code}, Sub: {sub_code}, Payload size: {len(reader.data)}")
+        logger.debug(f"[{session.username or session.ip}] Action Code: {action_code}, Sub: {sub_code}, Payload size: {len(reader.data)}, Hex: {reader.data.hex()}")
 
         if action_code == 0:
             await self.handle_handshake(session, reader)
@@ -881,10 +824,10 @@ class GameServer:
                 allocations.append((stat_id, amount))
                 total_allocated += amount
                 
-            # Verify potential points
+            # Verify points
             if target_type == 1: # Player
-                if session.potential >= total_allocated:
-                    session.potential -= total_allocated
+                if session.points >= total_allocated:
+                    session.points -= total_allocated
                     for stat_id, amount in allocations:
                         if stat_id == 28: # STR
                             session._str_val += amount
@@ -900,9 +843,9 @@ class GameServer:
                     self.save_player_to_db(session)
                     await self.send_stats_update(session)
                     await self.send_sidebar_stats(session)
-                    logger.info(f"[AC8] Player allocated stats: {allocations}. Remaining potential: {session.potential}")
+                    logger.info(f"[AC8] Player allocated stats: {allocations}. Remaining points: {session.points}")
                 else:
-                    logger.warning(f"[AC8] Player tried to allocate {total_allocated} points but only has {session.potential}")
+                    logger.warning(f"[AC8] Player tried to allocate {total_allocated} points but only has {session.points}")
             
             elif target_type == 2: # Pet
                 if 1 <= target_slot <= len(session.pets):
@@ -1268,12 +1211,12 @@ class GameServer:
         # Cumulative: 100 * (1 + 2 + ... + (grade-1)) = 100 * grade * (grade-1) / 2
         return int(100 * grade * (grade - 1) / 2)
 
-    def give_skill_exp(self, session: PlayerSession, skill_id: int, amount: int):
-        """Adds skill EXP and handles skill grade level-ups."""
+    async def give_skill_exp(self, session: PlayerSession, skill_id: int, amount: int):
+        """Adds skill EXP and handles skill grade level-ups, sending updates to client."""
         if skill_id <= 0 or amount <= 0:
             return 0
         
-        for sk in session.skills:
+        for idx, sk in enumerate(session.skills):
             if sk['skill_id'] == skill_id:
                 old_grade = sk.get('grade', 1)
                 old_exp = sk.get('exp', 0)
@@ -1291,8 +1234,19 @@ class GameServer:
                 if new_grade > old_grade:
                     sk['grade'] = new_grade
                     logger.info(f"[Skill] {session.char_name}'s skill {skill_id} leveled up: grade {old_grade} -> {new_grade} (exp: {sk['exp']})")
-                    return new_grade - old_grade  # Return levels gained
-                return 0
+                
+                # Send update packet (AC 5 Sub 13) to client
+                slot = idx + 1
+                pkt = PacketWriter()
+                pkt.write_8(5).write_8(13)
+                pkt.write_8(slot)
+                pkt.write_16(skill_id)
+                pkt.write_8(new_grade)
+                pkt.write_32(sk['exp'])
+                await session.send_packet(pkt)
+                
+                self.save_player_to_db(session)
+                return new_grade - old_grade
         return 0
 
     def load_character_into_session(self, session: PlayerSession, char_id: int):
@@ -1323,8 +1277,14 @@ class GameServer:
         session.skills = char.get('skills', [])
         session.quests = char.get('quests', [])
         session.exp = char.get('exp', 0)
-        session.potential = char.get('potential', 0)  # Available stat points
+        session.points = char.get('points', 0)
+        session.potential = char.get('potential', 0)
         session.pets = char.get('pets', [])
+        
+        # Migration: if points is 0 but potential > 0, migrate potential to points
+        if session.points == 0 and session.potential > 0:
+            session.points = session.potential
+            session.potential = 0
         
         # Calculate level dynamically based on EXP
         session.level = self.get_level_from_exp(session.exp, session.reborn)
@@ -1339,29 +1299,33 @@ class GameServer:
         # Update HP/SP dynamically using base stats and calculated level
         session.update_max_hp_sp()
 
-        # Dynamically patch starting skill for any character with no skills
+        # Dynamically patch starting skill and element skills if missing
         if not session.skills:
-            starter_skill_id = self.get_starter_skill_id(session.body, session.head)
-            session.skills = [{"skill_id": starter_skill_id, "grade": 1, "exp": 0}]
-            # Persist it to DB so it survives relogs
-            self.db.save_character(session.char_id, {
-                'level': session.level, 'element': session.element,
-                'hp': session.hp, 'max_hp': session.max_hp,
-                'sp': session.sp, 'max_sp': session.max_sp,
-                'gold': session.gold, 'map_id': session.map_id,
-                'x': session.x, 'y': session.y,
-                'body': session.body, 'head': session.head,
-                'hair_color': session.hair_color, 'skin_color': session.skin_color,
-                'clothing_color': session.clothing_color, 'eye_color': session.eye_color,
-                'reborn': session.reborn, 'job': session.job,
-                'equipments': [{'item_id': eid} for eid in session.equipments],
-                'inventory': session.inventory,
-                'skills': session.skills,
-                'quests': session.quests,
-                'str': session._str_val, 'con': session._con_val,
-                'int': session._int_val, 'wis': session._wis_val, 'agi': session._agi_val,
-                'exp': session.exp, 'pets': session.pets,
-            })
+            session.skills = []
+            
+        stunt_id = self.get_starter_skill_id(session.body, session.head)
+        element_skills = []
+        if session.element == 1: # Earth
+            element_skills = [15085, 30113]
+        elif session.element == 2: # Water
+            element_skills = [15091, 30079]
+        elif session.element == 3: # Fire
+            element_skills = [11016, 30112]
+        elif session.element == 4: # Wind
+            element_skills = [11007, 30111]
+            
+        target_skills = [stunt_id] + element_skills
+        existing_ids = {s.get('skill_id') for s in session.skills}
+        
+        has_skill_changes = False
+        for sk_id in target_skills:
+            if sk_id not in existing_ids:
+                session.skills.append({"skill_id": sk_id, "grade": 1, "exp": 0})
+                has_skill_changes = True
+                
+        # If migrated potential or added missing starter skills, save character state
+        if (char.get('points', 0) == 0 and char.get('potential', 0) > 0) or has_skill_changes:
+            self.save_player_to_db(session)
 
         # Fix for existing naked characters: if level == 1 and all equipments are 0, set beginner outfit
         if session.level == 1 and all(eq == 0 for eq in session.equipments):
@@ -1787,7 +1751,7 @@ class GameServer:
             (35, session.level),     # Level
             (36, session.exp + 6),   # Total Exp (int64)
             (37, max(0, session.level - 1)),  # EXP table index used by client (Level - 1)
-            (38, session.potential), # Distributable Stat Points (POINT)
+            (38, session.points), # Distributable Stat Points (POINT)
             (28, session.str_val),   # Base STR
             (29, session.con_val),   # Base CON
             (30, session.agi_val),   # Base AGI
@@ -1845,7 +1809,11 @@ class GameServer:
         sb.write_16(session.max_sp)
         # 7 dummy DWords (Authentic constants 417 and 240)
         sb.write_32(417).write_32(0).write_32(0).write_32(240).write_32(0).write_32(0).write_32(0)
-        sb.write_16(0)  # Skill Count
+        sb.write_16(len(session.skills))
+        for skill in session.skills:
+            sb.write_16(skill.get("skill_id", 0))
+            sb.write_8(skill.get("grade", 1))
+            sb.write_32(skill.get("exp", 0))
         sb.write_32(0)
         sb.write_bool(session.reborn)
         sb.write_8(session.job)
@@ -2118,6 +2086,14 @@ class GameServer:
                 await session.send_packet(PacketWriter().write_8(10).write_8(3).write_32(r.char_id).write_8(255))
                 await session.send_packet(PacketWriter().write_8(23).write_8(76).write_32(r.char_id))
                 
+        # Send visibility states of hidden map NPCs
+        npcs = self.map_npcs.get(session.map_id, [])
+        for npc in npcs:
+            if npc.get('visible', True) is False:
+                pkt_hide = PacketWriter()
+                pkt_hide.write_8(22).write_8(6).write_16(npc['click_id']).write_8(0)
+                await session.send_packet(pkt_hide)
+
         # 3. Map load complete trigger
         await session.send_packet(PacketWriter().write_8(23).write_8(102))
         
@@ -2220,7 +2196,13 @@ class GameServer:
                 await session.send_packet(prompt)
                 await session.send_packet(PacketWriter().write_8(20).write_8(8))
         elif sub == 1:  # NPC click
-            click_id = reader.read_8()
+            # İstemci paketi payload formatı: 20 01 00 00 00 [click_id] ...
+            # decrypted_payload[5] (offset 4 after AC & Sub) click_id barındırır.
+            if reader.remaining_bytes() >= 4:
+                reader.read_bytes(3)  # Skip 3 bytes (unk/padding)
+                click_id = reader.read_8()
+            else:
+                click_id = reader.read_8() if reader.remaining_bytes() > 0 else 0
             native_click_id = click_id
             logger.info(f"[{session.char_name}] Clicked NPC/Object ID {click_id} on map {session.map_id} (native ID: {native_click_id})")
 
@@ -2372,6 +2354,22 @@ class GameServer:
                     await session.send_packet(PacketWriter().write_8(20).write_8(8))
         elif sub == 6:  # Continue interaction
             logger.info(f"[{session.char_name}] Continue interaction (AC 20 Sub 6)")
+            # Check post-battle quest warp
+            win_warp = getattr(session, 'battle_win_warp', None)
+            if win_warp:
+                session.battle_win_warp = None
+                logger.info(f"[{session.char_name}] Triggering post-battle quest warp to map {win_warp['map_id']} pos=({win_warp['x']},{win_warp['y']})")
+                await self.warp_player(session, win_warp['map_id'], win_warp['x'], win_warp['y'])
+                return
+            
+            # Check pending battle unlock
+            if getattr(session, 'pending_battle_unlock', False):
+                session.pending_battle_unlock = False
+                logger.info(f"[{session.char_name}] Post-battle unlock: sending map ready and unlock")
+                await session.send_packet(PacketWriter().write_8(23).write_8(102))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                return
+
             await session.send_packet(PacketWriter().write_8(20).write_8(8))
         elif sub == 9:  # Select dialogue option
             option_id = reader.read_8()
@@ -2759,7 +2757,7 @@ class GameServer:
                         if success:
                             # Send item add success packet to client:
                             item_pkt = PacketWriter()
-                            item_pkt.write_8(23).write_8(6).write_16(item_id).write_8(qnt).write_bytes(bytes(26))
+                            item_pkt.write_8(23).write_8(6).write_16(item_id).write_16(qnt).write_bytes(bytes(27))
                             await session.send_packet(item_pkt)
                             
                     if success:
@@ -3010,9 +3008,9 @@ class GameServer:
                             self.save_player_to_db(session)
                             
                             # Send item add success packet to client:
-                            # [23, 6, item_id (ushort), ammt (byte), 26 bytes of zero]
+                            # [23, 6, item_id (uint16), ammt (uint16), 27 bytes of zero]
                             item_pkt = PacketWriter()
-                            item_pkt.write_8(23).write_8(6).write_16(item_id).write_8(amount).write_bytes(bytes(26))
+                            item_pkt.write_8(23).write_8(6).write_16(item_id).write_16(amount).write_bytes(bytes(27))
                             await session.send_packet(item_pkt)
                             
                             # System chat confirmation
@@ -3173,350 +3171,922 @@ class GameServer:
     def get_monster_def(self, level: int) -> int:
         return level * 2 + 3
 
+    def get_monster_stats(self, level: int, element: int) -> dict:
+        total_stats = int(level * 2.5 + 10)
+        
+        # 1=Earth, 2=Water, 3=Fire, 4=Wind
+        if element == 1: # Earth (CON heavy)
+            con = int(total_stats * 0.40)
+            str_val = int(total_stats * 0.20)
+            int_val = int(total_stats * 0.10)
+            wis_val = int(total_stats * 0.15)
+            agi_val = int(total_stats * 0.15)
+        elif element == 2: # Water (WIS / HP heavy)
+            con = int(total_stats * 0.25)
+            str_val = int(total_stats * 0.15)
+            int_val = int(total_stats * 0.20)
+            wis_val = int(total_stats * 0.25)
+            agi_val = int(total_stats * 0.15)
+        elif element == 3: # Fire (STR / INT heavy)
+            con = int(total_stats * 0.15)
+            str_val = int(total_stats * 0.35)
+            int_val = int(total_stats * 0.30)
+            wis_val = int(total_stats * 0.10)
+            agi_val = int(total_stats * 0.10)
+        elif element == 4: # Wind (AGI heavy)
+            con = int(total_stats * 0.20)
+            str_val = int(total_stats * 0.20)
+            int_val = int(total_stats * 0.15)
+            wis_val = int(total_stats * 0.15)
+            agi_val = int(total_stats * 0.30)
+        else: # Normal
+            con = int(total_stats * 0.20)
+            str_val = int(total_stats * 0.20)
+            int_val = int(total_stats * 0.20)
+            wis_val = int(total_stats * 0.20)
+            agi_val = int(total_stats * 0.20)
+
+        str_val = max(2, str_val)
+        con_val = max(2, con)
+        int_val = max(2, int_val)
+        wis_val = max(2, wis_val)
+        agi_val = max(2, agi_val)
+
+        # ATK
+        if element == 3:
+            atk = int(round(level * 2.0 + str_val * 2.0))
+        else:
+            atk = int(round(level * 1.4 + str_val * 2.0))
+            
+        # DEF
+        if element == 1:
+            def_val = int(round(level * 8.0 + con_val * 1.75))
+        else:
+            def_val = int(round(level * 2.0 + con_val * 1.75))
+            
+        # SPD
+        if element == 4:
+            spd = int(round(level * 2.1 + agi_val * 2.2))
+        else:
+            spd = int(round(level * 1.6 + agi_val * 2.2))
+            
+        # MATK
+        if element == 3:
+            matk = int(round(level * 1.6 + int_val * 2.0))
+        else:
+            matk = int(round(level * 1.4 + int_val * 2.0))
+            
+        # MDEF
+        if element == 3:
+            mdef = int(round(level * 2.2 + wis_val * 2.2))
+        else:
+            mdef = int(round(level * 2.0 + wis_val * 2.2))
+
+        return {
+            "atk": atk,
+            "def": def_val,
+            "matk": matk,
+            "mdef": mdef,
+            "spd": spd,
+            "str": str_val,
+            "con": con_val,
+            "int": int_val,
+            "wis": wis_val,
+            "agi": agi_val
+        }
+
     # No hardcoded tables allowed. Data is fetched from ServerDataBase.db npc_data table.
 
-    async def handle_combat(self, session: PlayerSession, reader: PacketReader):
-        """Processes combat requests (AC 11)."""
+    # ══════════════════════════════════════════════════════════════════════════
+    # BATTLE SYSTEM  (Wireshark analizi ile doğrulanmış paket formatları)
+    #
+    # Sıralama (sunucudan istemciye):
+    #   1. AC 8:1  – stat paketleri (savaş öncesi oyuncu statları)
+    #   2. AC 11:250 – SADECE oyuncu bilgisi (role=1, ftype=2)
+    #   3. AC 11:10 – savaş başla sinyali (1 byte: 0x01)
+    #   4. AC 8:2  – stat paketleri (savaş sırasında)
+    #   5. AC 11:5 – her monster için ayrı paket (role=1, ftype=7)
+    #   Tur sırasında:
+    #   6. AC 51:1 – HP/SP güncelleme: gridX(1) gridY(1) statId(1) value(uint32)
+    #   7. AC 52:1 – tur bitti / sıradaki tur sinyali
+    # ══════════════════════════════════════════════════════════════════════════
+
+    async def handle_combat(self, session: 'PlayerSession', reader: PacketReader):
+        """AC 11: İstemciden gelen savaş başlatma/aksiyon isteği."""
         sub = reader.read_8()
-        if sub == 2:  # Combat/PK Request
-            # Parse monster details
-            type_val = reader.read_8()
-            npc_id = reader.read_32()
-            click_id = reader.read_16()
-            
-            # If already in battle, ignore new combat start
-            if getattr(session, 'in_battle', False) or getattr(session, 'pvp_battle_id', None) is not None:
+        logger.info(f"[{session.char_name}] handle_combat sub={sub}")
+        if sub == 1:
+            # Kaçma (Flee) isteği
+            escape_type = reader.read_8() if reader.remaining_bytes() > 0 else 0
+            logger.info(f"[{session.char_name}] Flee request: escape_type={escape_type}")
+            battle_id = getattr(session, 'pvp_battle_id', None)
+            if battle_id and battle_id in self.active_battles:
+                battle = self.active_battles[battle_id]
+                await self._do_flee(session, battle)
+        elif sub == 2:
+            # İstemci bir NPC'ye tıkladı (Savaş başlatma)
+            # Wireshark analizi:
+            #   pkType (1 byte)
+            #   rawTargetID (4 bytes) -> targetID = rawTargetID >> 8
+            #   clickID (2 bytes)
+            if reader.remaining_bytes() < 7:
+                logger.warning(f"[{session.char_name}] handle_combat sub=2 has too few bytes: {reader.remaining_bytes()}")
                 return
-            
-            if type_val == 1:
-                # PvP Battle Initialization
-                target_session = next((s for s in self.active_sessions if s.char_id == npc_id), None)
-                if not target_session or getattr(target_session, 'in_battle', False) or getattr(target_session, 'pvp_battle_id', None) is not None:
-                    # Target is offline or already in battle
-                    await session.send_packet(PacketWriter().write_8(20).write_8(8))
-                    return
-                
-                # Assign battle ID (unique)
-                battle_id = len(self.active_battles) + 1
-                battle = BattleInstance(battle_id, session, target_session)
-                self.active_battles[battle_id] = battle
-                
-                session.pvp_battle_id = battle_id
-                target_session.pvp_battle_id = battle_id
-                
-                await self.enter_dynamic_battle(battle)
-                return
-            
-            # Transition the player into the actual client battle interface screen!
-            await self.enter_battle(session, click_id, npc_id)
+            pk_type = reader.read_8()
+            raw_target_id = reader.read_32()
+            npc_id = raw_target_id >> 8
+            npc_click_id = reader.read_16()
+            logger.info(f"[{session.char_name}] Combat request: pk_type={pk_type} npc_id={npc_id} npc_click={npc_click_id}")
+            await self._start_pve_battle(session, npc_click_id, npc_id)
 
-    async def enter_dynamic_battle(self, battle):
-        """Puts players into a dynamic battle screen (supports PvP and PvE).
+    async def _start_pve_battle(self, session: 'PlayerSession', click_id: int, npc_id: int,
+                                override_sprite_id: int = 0):
+        """PvE savaşını başlatır. Wireshark analizine göre doğru paket sırası."""
+        import os, sqlite3, random
+
+        if getattr(session, 'in_battle', False):
+            logger.warning(f"[{session.char_name}] Already in battle, skipping")
+            return
+
+        # ── Monster verisi ──────────────────────────────────────────────────
+        # Decode the raw NPC ID to match database ID
+        mapped_npc_id = ((npc_id & 0xFFFF) ^ 0x5209) - 9
+        mapped_override_id = (((override_sprite_id & 0xFFFF) ^ 0x5209) - 9) if override_sprite_id > 0 else 0
         
-        Correct WLO packet sequence:
-        1. Stats refresh (8:1)
-        2. 11:250 - Fighter list with background (opponent side)
-        3. 11:5  - Player's own position spawn
-        4. 11:10 - Battle start signal (uint32 = 1)
-        NOTE: 52:1 is NPC dialogue packet, NOT battle BGM - do NOT send it here.
-        """
-        att = battle.attacker
-        def_s = battle.defender
+        raw_battle_npc_id = override_sprite_id if override_sprite_id > 0 else npc_id
+        battle_npc_id = mapped_override_id if mapped_override_id > 0 else mapped_npc_id
         
-        att.in_battle = True
-        def_s.in_battle = True
-        
-        bg_id = 2   # Default grassland background
-        att_x, att_y = 4, 2  # Attacker grid position (Attacking side x=4)
-        def_x, def_y = 1, 2  # Defender grid position (Defending side x=1)
-        
-        att_name = getattr(att, 'char_name', 'att')
-        def_name = getattr(def_s, 'name', None) or getattr(def_s, 'char_name', 'def')
-        logger.info(f"[Battle] enter_dynamic_battle called: {att_name} vs {def_name}")
-        
-        # Only send packets to human players
-        players_to_notify = [p for p in [att, def_s] if not getattr(p, 'is_monster', False)]
-        
-        for p in players_to_notify:
-            if p is att:
-                p_x, p_y = att_x, att_y
-                opp_x, opp_y = def_x, def_y
-                opp = def_s
-                p_role = 5    # BattleRole.Attacking
-                opp_role = 2  # BattleRole.Defending
-            else:
-                p_x, p_y = def_x, def_y
-                opp_x, opp_y = att_x, att_y
-                opp = att
-                p_role = 2
-                opp_role = 5
-
-            is_opp_monster = getattr(opp, 'is_monster', False)
-            opp_type = 7 if is_opp_monster else 2
-            opp_id = getattr(opp, 'npc_id', None) or getattr(opp, 'char_id', 0)
-            opp_click_id = getattr(opp, 'click_id', 0)
-            opp_hp = opp.max_hp if is_opp_monster else getattr(opp, 'hp', opp.max_hp)
-            opp_sp = opp.max_sp if is_opp_monster else getattr(opp, 'sp', opp.max_sp)
-
-            logger.info(f"[Battle] Building battle packets for {p.char_name}: p_role={p_role} opp={def_name} opp_id={opp_id}")
-
-            # --- Packet 1: Stats refresh (AC 8:1) ---
-            await self.send_stats_update(p)
-
-            # --- Packet 2: AC 11:250 - Battle room info ---
-            # Format: [11][250][bg_u16][fighter1...][fighter2...]
-            # Contains ALL fighters (both player and opponent). NO count byte! The client parses until end of packet.
-            p250 = PacketWriter()
-            p250.write_8(11).write_8(250)
-            p250.write_16(bg_id)           # Background ID (ushort)
-            # Fighter 1: Opponent
-            p250.write_8(opp_role)         # BattleRole (byte)
-            p250.write_8(opp_type)         # TypeofFighter (byte)
-            p250.write_32(opp_id)          # Fighter ID (uint32)
-            p250.write_16(opp_click_id)    # ClickID (ushort)
-            p250.write_32(0)               # OwnerID (uint32)
-            p250.write_8(opp_x)            # GridX (byte)
-            p250.write_8(opp_y)            # GridY (byte)
-            p250.write_32(opp.max_hp)      # MaxHP (uint32)
-            p250.write_16(opp.max_sp)      # MaxSP (ushort)
-            p250.write_32(opp_hp)          # CurHP (uint32)
-            p250.write_16(opp_sp)          # CurSP (ushort)
-            p250.write_8(min(255, opp.level))  # Level (byte)
-            p250.write_8(getattr(opp, 'element', 1))  # Element (byte)
-            p250.write_8(1 if getattr(opp, 'reborn', False) else 0)  # Reborn
-            p250.write_8(getattr(opp, 'job', 0))  # Job (byte)
-            # Fighter 2: Player self
-            p250.write_8(p_role)           # BattleRole (byte)
-            p250.write_8(2)                # TypeofFighter: player
-            p250.write_32(p.char_id)       # Fighter ID (uint32)
-            p250.write_16(0)               # ClickID (ushort)
-            p250.write_32(0)               # OwnerID (uint32)
-            p250.write_8(p_x)              # GridX (byte)
-            p250.write_8(p_y)              # GridY (byte)
-            p250.write_32(p.max_hp)        # MaxHP (uint32)
-            p250.write_16(p.max_sp)        # MaxSP (ushort)
-            p250.write_32(p.hp)            # CurHP (uint32)
-            p250.write_16(p.sp)            # CurSP (ushort)
-            p250.write_8(min(255, p.level))# Level (byte)
-            p250.write_8(getattr(p, 'element', 1))  # Element (byte)
-            p250.write_8(1 if getattr(p, 'reborn', False) else 0)  # Reborn
-            p250.write_8(getattr(p, 'job', 0))  # Job (byte)
-            await p.send_packet(p250)
-            logger.info(f"[Battle] Sent 11:250 (2 fighters) to {p.char_name}, opp_id={opp_id}")
-
-            # NOTE: 11:5 skipped - both fighters already included in 11:250 above
-
-            # --- Packet 3: AC 11:10 - Battle start ---
-            pstart = PacketWriter()
-            pstart.write_8(11).write_8(10).write_32(1)
-            await p.send_packet(pstart)
-            logger.info(f"[Battle] Sent 11:10 battle start to {p.char_name}")
-
-        logger.info(f"[Battle] Dynamic Battle {battle.battle_id} started: {att_name} vs {def_name}")
-
-
-
-    async def enter_battle(self, session: PlayerSession, click_id: int, npc_id: int, override_sprite_id: int = 0):
-        """Puts the player session into a dynamic turn-based PvE battle screen."""
-        import random
-        
-        # 1. Fetch monster details dynamically from ServerDataBase.db
-        import sqlite3
-        import os
         db_path = os.path.join(os.path.dirname(__file__), 'ServerDataBase.db')
         conn = sqlite3.connect(db_path)
         conn.row_factory = sqlite3.Row
-        
-        # Determine battle sprite ID
-        battle_npc_id = override_sprite_id if override_sprite_id > 0 else npc_id
-        
-        # Ensure mapping for beach mobs: if npc_id is 17003 (Seagull?), maybe battle sprite is 17180
-        if npc_id == 17003:
-            battle_npc_id = 17180
-        
-        # Check DB for the battle sprite or original map entity
-        db_monster = conn.execute("SELECT * FROM npc_data WHERE id=?", (battle_npc_id,)).fetchone()
-        if not db_monster and battle_npc_id != npc_id:
-            db_monster = conn.execute("SELECT * FROM npc_data WHERE id=?", (npc_id,)).fetchone()
-            
-        monster_name = ""
-        monster_level = max(1, session.level)
-        mon_max_hp = 0
-        mon_max_sp = 0
-        mon_element = 1
-        
-        if db_monster:
-            monster_name = db_monster['name'].strip('\x00').strip() or "Unknown"
-            monster_level = db_monster['level']
-            mon_max_hp = db_monster['hp'] if db_monster['hp'] > 0 else self.get_monster_max_hp(monster_level)
-            mon_max_sp = self.get_monster_max_sp(monster_level)
-            mon_element = db_monster['element']
-            if not (0 <= mon_element <= 4):
-                mon_element = 1
-        else:
-            # Fallback to map data name
-            if session.map_id in self.map_npcs:
-                for map_npc in self.map_npcs[session.map_id]:
-                    if map_npc['click_id'] == click_id:
-                        if map_npc['name'] and map_npc['name'] not in ["Npc", "Monster", "", "NPC"]:
-                            monster_name = map_npc['name']
-                        break
-            monster_level = random.randint(max(1, session.level - 2), session.level + 2)
-            mon_max_hp = self.get_monster_max_hp(monster_level)
-            mon_max_sp = self.get_monster_max_sp(monster_level)
-            
-        if not monster_name or monster_name == "Unknown Monster":
-            monster_name = "Grape Monster"
-            
+        db_mon = conn.execute("SELECT * FROM npc_data WHERE id=?", (battle_npc_id,)).fetchone()
+        if not db_mon:
+            db_mon = conn.execute("SELECT * FROM npc_data WHERE id=?", (mapped_npc_id,)).fetchone()
         conn.close()
-        
-        # 2. Instantiate MonsterSession
-        monster_session = MonsterSession(
-            npc_id=battle_npc_id,
-            name=monster_name,
-            level=monster_level,
-            hp=mon_max_hp,
-            sp=mon_max_sp,
-            element=mon_element
-        )
-        monster_session.click_id = click_id
-        
-        # 3. Create Dynamic BattleInstance
-        battle_id = len(self.active_battles) + 1
-        battle = BattleInstance(battle_id, session, monster_session)
-        self.active_battles[battle_id] = battle
-        
-        session.pvp_battle_id = battle_id
-        monster_session.pvp_battle_id = battle_id
-        
-        # 4. Trigger Unified Dynamic Battle
-        await self.enter_dynamic_battle(battle)
 
-    async def handle_action_54(self, session: PlayerSession, reader: PacketReader):
-        """Handles shop purchases, compound/crafting, and other AC 54 events."""
-        sub = reader.read_8()
-        logger.info(f"[AC54] handle_action_54 called. SubCmd={sub}, data: {reader.data.hex()}")
+        # Custom stats for starter map monsters due to corrupted level/element columns in db
+        REAL_MONSTER_STATS = {
+            5200: {"name": "Grape Monster", "level": 6, "hp": 200, "element": 2}, # Water
+            5199: {"name": "Globefish", "level": 12, "hp": 560, "element": 2},     # Water
+            30960: {"name": "Persian Cat", "level": 5, "hp": 180, "element": 0},    # None
+            6217: {"name": "Picky Mouse", "level": 3, "hp": 110, "element": 1},    # Earth
+        }
+
+        if battle_npc_id in REAL_MONSTER_STATS:
+            stats = REAL_MONSTER_STATS[battle_npc_id]
+            mon_name = stats["name"]
+            mon_level = stats["level"]
+            mon_max_hp = stats["hp"]
+            mon_element = stats["element"]
+        elif db_mon:
+            mon_name = (db_mon['name'] or '').strip('\x00').strip() or 'Monster'
+            if '?' in mon_name:
+                mon_name = 'Monster'
+            
+            raw_level = int(db_mon['level'] or 1)
+            # Decrypt or fallback if raw level is corrupted (e.g. 93 or 96)
+            if raw_level in (93, 96):
+                mon_level = max(1, (battle_npc_id % 15) + 1)
+            else:
+                mon_level = raw_level
+                
+            mon_max_hp = int(db_mon['hp']) if db_mon['hp'] and 0 < int(db_mon['hp']) < 20000 else self.get_monster_max_hp(mon_level)
+            
+            raw_element = int(db_mon['element'] or 0)
+            if raw_element in (88, 89, 90, 91, 92):
+                mon_element = (raw_element - 88) % 5
+            else:
+                mon_element = raw_element % 5
+        else:
+            mon_name = 'Monster'
+            mon_level = max(1, getattr(session, 'level', 1))
+            mon_max_hp = self.get_monster_max_hp(mon_level)
+            mon_element = 0
+        mon_max_sp = self.get_monster_max_sp(mon_level)
+
+        logger.info(f"[Battle] PvE start: {session.char_name} vs {mon_name} (id={raw_battle_npc_id} lv={mon_level} hp={mon_max_hp})")
+
+        # ── Savaş state ─────────────────────────────────────────────────────
+        battle_id = id(session)
+        session.in_battle     = True
+        session.pvp_battle_id = battle_id
+
+        # Player and Monster combat stats calculation
+        patk = self.get_player_atk(session)
+        pdef = self.get_player_def(session)
+        pmatk = self.get_player_matk(session)
+        pmdef = self.get_player_mdef(session)
+        pspd = self.get_player_spd(session)
         
-        if sub == 3:  # Buy item from shop
-            shop_id = reader.read_8()
-            tab_id = reader.read_8()
-            item_id = reader.read_16()
-            amount = reader.read_8()
+        mstats = self.get_monster_stats(mon_level, mon_element)
+
+        # Fighter nesneleri (basit dict)
+        p_fighter = {
+            'role': 1, 'ftype': 2,
+            'id': session.char_id, 'click_id': 0,
+            'x': 4, 'y': 2,
+            'max_hp': session.max_hp, 'max_sp': getattr(session, 'max_sp', 100),
+            'hp': session.hp,         'sp': getattr(session, 'sp', 100),
+            'level': session.level,   'element': getattr(session, 'element', 0),
+            'name': session.char_name, 'is_player': True,
+            'atk': patk, 'def': pdef, 'matk': pmatk, 'mdef': pmdef, 'spd': pspd
+        }
+        m_fighter = {
+            'role': 1, 'ftype': 7,
+            'id': raw_battle_npc_id, 'click_id': click_id,
+            'x': 2, 'y': 2,
+            'max_hp': mon_max_hp, 'max_sp': mon_max_sp,
+            'hp': mon_max_hp,     'sp': mon_max_sp,
+            'level': mon_level,   'element': mon_element,
+            'name': mon_name, 'is_player': False,
+            'atk': mstats['atk'], 'def': mstats['def'], 'matk': mstats['matk'], 'mdef': mstats['mdef'], 'spd': mstats['spd']
+        }
+
+        battle = {
+            'id': battle_id,
+            'player': p_fighter,
+            'monster': m_fighter,
+            'turn': 0,
+            'finished': False,
+        }
+        self.active_battles[battle_id] = battle
+
+        # ── Paket gönderimi ──────────────────────────────────────────────────
+        await self._send_battle_start(session, battle)
+
+    async def _send_battle_start(self, session: 'PlayerSession', battle: dict):
+        """
+        Wireshark'tan doğrulanan savaş başlangıç paketi sırası (DÜZELTILMIŞ):
+          0. AC 20:12 (battle mode enter)
+          0. AC 6:2 [01]
+          1. AC 8:1  stat paketleri (stat_id 0x01XX, 4-byte padding)
+          2. AC 11:250 (oyuncu, 2-byte trailing pad)
+          3. AC 11:10 [01] (1 byte savaş başla)
+          4. AC 8:2  stat paketleri (prefix 04 01 00, 4-byte padding)
+          5. AC 11:5 (monsterlar, 2-byte trailing pad)
+
+        KRİTİK HATALAR DÜZELTILDI:
+          - Stat ID'ler 0x0119 formatında (0x0100 prefix ŞARTT!)
+          - Padding 6 byte değil 4 byte!
+          - 11:250 ve 11:5 sonunda 2 byte trailing pad
+          - AC 20:12 ve AC 6:2 eklendi
+        """
+        pf = battle['player']
+        mf = battle['monster']
+
+        # ── 0a. AC 20:12 – savaş modu girişi (boş payload) ─────────────────
+        await session.send_packet(PacketWriter().write_8(20).write_8(12))
+
+        # ── 0b. AC 6:2 [01] – mod değişimi sinyali ─────────────────────────
+        pkt_62 = PacketWriter()
+        pkt_62.write_8(6).write_8(2).write_8(1)
+        await session.send_packet(pkt_62)
+
+        # ── 1. AC 8:1 stat paketleri (savaş öncesi) ────────────────────────
+        # KRİTİK: stat_id = 0x012a DEĞİL, Wireshark'taki gerçek değerler:
+        #   HP=0x0119, SP=0x011a, ATK=0x012a, DEF=0x012d, vb.
+        # KRİTİK: padding = 4 byte (eski kodda 6 byte vardı, stream bozuyordu!)
+        # Format: AC(1) Sub(1) stat_id(2) value(4) padding(4) = 12 bytes TOPLAM
+        p_atk  = max(1, pf['level'] * 3 + 5)
+        p_def  = max(0, pf['level'] * 2)
+        stats_8_1 = [
+            (0x012a, 6),              # ? (Wireshark'ta her zaman 6)
+            (0x012a, 6),              # ? (tekrar, orijinal sunucu da gönderiyordu)
+            (0x01cf, 0),
+            (0x0119, pf['max_hp']),   # MaxHP
+            (0x01d0, 0),
+            (0x011a, pf['max_sp']),   # MaxSP
+            (0x01d2, 0),
+            (0x0129, p_atk),          # ATK/MATK
+            (0x01d3, 2),
+            (0x012a, p_atk),          # ATK
+            (0x01d6, 0),
+            (0x012d, p_def),          # DEF
+            (0x01d7, 0),
+            (0x012b, p_def),
+            (0x01d8, 0),
+            (0x012c, max(1, pf['level'])),
+        ]
+        for stat_id, val in stats_8_1:
+            pkt = PacketWriter()
+            pkt.write_8(8).write_8(1)
+            pkt.write_16(stat_id)
+            pkt.write_32(val)
+            pkt.write_32(0)           # 4 byte padding (6 değil!)
+            await session.send_packet(pkt)
+
+        # ── 2. AC 11:250 – SADECE oyuncu (role=1, ftype=2) ─────────────────
+        # Format: sig(2) len(2) AC(1) Sub(1) bg_id(2) + fighter_block(30) + pad(2)
+        # TOPLAM len = 36 (Wireshark'tan)
+        bg_id = 0x0451
+        p250 = PacketWriter()
+        p250.write_8(11).write_8(250)
+        p250.write_16(bg_id)
+        # Oyuncu fighter block (30 bytes)
+        p250.write_8(pf['role'])                 # role=1
+        p250.write_8(pf['ftype'])                # ftype=2
+        p250.write_32(pf['id'])
+        p250.write_16(pf['click_id'])            # 0
+        p250.write_32(0)                         # ownerID
+        p250.write_8(pf['x'])
+        p250.write_8(pf['y'])
+        p250.write_32(pf['max_hp'])
+        p250.write_16(min(0xFFFF, pf['max_sp']))
+        p250.write_32(pf['hp'])
+        p250.write_16(min(0xFFFF, pf['sp']))
+        p250.write_8(min(255, pf['level']))
+        p250.write_8(pf['element'])
+        p250.write_8(0)                          # reborn
+        p250.write_8(getattr(session, 'job', 0)) # job
+        p250.write_16(0)                         # 2-byte trailing padding (Wireshark!)
+        await session.send_packet(p250)
+        logger.info(f"[Battle] -> {session.char_name}: 11:250 ({len(p250.buffer)}b bg={bg_id})")
+
+        # ── 3. AC 11:10 – savaş başla (1 byte = 0x01) ──────────────────────
+        p10 = PacketWriter()
+        p10.write_8(11).write_8(10)
+        p10.write_8(1)
+        await session.send_packet(p10)
+
+        # ── 4. AC 8:2 stat paketleri (savaş sırasında) ─────────────────────
+        # Format: AC(1) Sub(1) 04 01 00 stat_id(2) value(4) padding(4) = 15 bytes
+        stats_8_2 = [
+            (0x01cf, 0),
+            (0x0119, pf['hp']),       # current HP
+            (0x01d0, 0),
+            (0x011a, pf['sp']),       # current SP
+            (0x01d2, 0),
+            (0x0129, p_atk),
+            (0x01d3, 0),
+            (0x012a, p_atk),
+            (0x01d7, 0),
+            (0x012b, p_def),
+            (0x01d8, 0),
+            (0x012c, max(1, pf['level'])),
+            (0x01d6, 0),
+            (0x012d, p_def),
+        ]
+        for stat_id, val in stats_8_2:
+            pkt = PacketWriter()
+            pkt.write_8(8).write_8(2)
+            pkt.write_8(4).write_8(1).write_8(0)  # prefix: 04 01 00
+            pkt.write_16(stat_id)
+            pkt.write_32(val)
+            pkt.write_32(0)           # 4 byte padding (6 değil!)
+            await session.send_packet(pkt)
+
+        # ── 5. AC 11:5 – monster (role=1, ftype=7) ─────────────────────────
+        # Format: AC(1) Sub(1) fighter_block(30) + pad(2) = 34 bytes
+        p5 = PacketWriter()
+        p5.write_8(11).write_8(5)
+        p5.write_8(mf['role'])               # role=1
+        p5.write_8(mf['ftype'])              # ftype=7
+        p5.write_32(mf['id'])
+        p5.write_16(mf['click_id'])
+        p5.write_32(0)                       # ownerID
+        p5.write_8(mf['x'])
+        p5.write_8(mf['y'])
+        p5.write_32(mf['max_hp'])
+        p5.write_16(min(0xFFFF, mf['max_sp']))
+        p5.write_32(mf['hp'])
+        p5.write_16(min(0xFFFF, mf['sp']))
+        p5.write_8(min(255, mf['level']))
+        p5.write_8(mf['element'])
+        p5.write_8(0)                        # reborn
+        p5.write_8(0)                        # job
+        p5.write_16(0)                       # 2-byte trailing padding (Wireshark!)
+        await session.send_packet(p5)
+        logger.info(f"[Battle] -> {session.char_name}: 11:5 ({mf['name']} id={mf['id']})")
+
+        # ── 6. İlk tur init: AC 51:1 HP/SP tüm fighterlar + AC 52:1 ─────────
+        # Wireshark Capture 3: savaş başladıktan sonra sunucu önce HP/SP
+        # sync paketleri gönderir, sonra 52:1 ile oyuncuya sıra verir.
+        await self._send_turn_start(session, battle)
+
+    async def handle_battle_action(self, session: 'PlayerSession', reader: PacketReader):
+        """AC 50: İstemciden gelen savaş aksiyonu."""
+        raw_data = reader.data  # tüm paketi logla
+        sub = reader.read_8() if reader.remaining_bytes() > 0 else 0
+        extra = raw_data[1:].hex() if len(raw_data) > 1 else ''
+        logger.info(f"[{session.char_name}] AC50 sub={sub} extra={extra}")
+
+        battle_id = getattr(session, 'pvp_battle_id', None)
+        if battle_id is None or battle_id not in self.active_battles:
+            logger.warning(f"[{session.char_name}] AC50 but not in battle, raw={raw_data.hex()}")
+            return
+
+        battle = self.active_battles[battle_id]
+        if battle['finished']:
+            return
+
+        # Tüm saldırı sub değerlerini saldırı olarak say (doğru sub'u log'dan öğreniriz)
+        if sub in (0, 1, 2, 3, 6, 7):   # saldırı benzeri komutlar
+            skill_id = 10001
+            if sub == 1 and reader.remaining_bytes() >= 8:
+                try:
+                    src_x = reader.read_8()
+                    src_y = reader.read_8()
+                    dst_x = reader.read_8()
+                    dst_y = reader.read_8()
+                    skill_id = reader.read_16()
+                    logger.info(f"[{session.char_name}] Battle action sub=1 parsed skill_id={skill_id}")
+                except Exception as e:
+                    logger.error(f"Error parsing AC50 sub=1 payload: {e}")
+            await self._resolve_pve_turn(session, battle, action='attack', skill_id=skill_id)
+        elif sub == 4:  # Savunma
+            await self._resolve_pve_turn(session, battle, action='defend')
+        elif sub == 5:  # Kaç
+            await self._do_flee(session, battle)
+        else:
+            logger.warning(f"[{session.char_name}] AC50 unhandled sub={sub}")
+
+    async def _send_turn_start(self, session: 'PlayerSession', battle: dict):
+        """
+        Savaş başladıktan sonra tüm savaşçıların HP/SP'ini gönder
+        ve AC=50:6 ile oyuncuya sırayı ver.
+
+        Wireshark CAP-B: sunucu önce 51:1 HP sync, sonra 50:6 turn-start gönderiyor.
+        (Eski kodda hatalı olarak 52:1 kullanılıyordu)
+        """
+        pf = battle['player']
+        mf = battle['monster']
+        # HP/SP sync tüm savaşçılar
+        for x, y, val, stat in [
+            (pf['x'], pf['y'], pf['hp'],  0x19),
+            (pf['x'], pf['y'], pf['sp'],  0x1a),
+            (mf['x'], mf['y'], mf['hp'],  0x19),
+            (mf['x'], mf['y'], mf['sp'],  0x1a),
+        ]:
+            pkt = PacketWriter()
+            pkt.write_8(51).write_8(1)
+            pkt.write_8(x).write_8(y).write_8(stat).write_32(val)
+            await session.send_packet(pkt)
+        # AC 53:5 [player_x, player_y] – hangi savaşçının sırası olduğunu bildir
+        await session.send_packet(
+            PacketWriter().write_8(53).write_8(5).write_8(pf['x']).write_8(pf['y'])
+        )
+        # AC 50:6 [player_x, player_y, 0] – TUR BAŞ ISIGNALI (52:1 değil!)
+        # Wireshark CAP-B PKT02'den doğrulama
+        await session.send_packet(
+            PacketWriter().write_8(50).write_8(6).write_8(pf['x']).write_8(pf['y']).write_8(0)
+        )
+        # AC 52:1 – Oyuncuya komut seçme izni ver (34 01)
+        await session.send_packet(
+            PacketWriter().write_8(52).write_8(1)
+        )
+        logger.info(f"[Battle] -> {session.char_name}: turn-start (p={pf['hp']}HP m={mf['hp']}HP)")
+
+    async def _resolve_pve_turn(self, session: 'PlayerSession', battle: dict, action: str, skill_id: int = 10001):
+        """
+        PvE turünü çözer. Düzeltìlmiş paket formatı:
+
+        Wireshark CAP-B'den doğrulanan sıra:
+          1. AC 53:5 [attacker_x, attacker_y]            -- eylem bildirimi
+          2. AC 50:1 [19 byte saldırı anim paketi]      -- animasyon + hasar
+          3. AC 51:1 [target_x, target_y, HP, new_val]  -- HP güncelle
+          4. AC 50:6 [player_x, player_y, 0]            -- sonraki tur sinyali
+        """
+        import random
+
+        SKILL_INFO = {
+            # skill_id: (name, element, is_magical, multiplier, is_heal, sp_cost)
+            # Starter/Stunt
+            15003: ("Newbie's Stunt", 0, False, 1.5, False, 15),
+            11075: ("Summon Dogs Groups", 0, False, 2.0, False, 25),
+            11076: ("Combo x3 Attack", 0, False, 2.2, False, 30),
+            11077: ("Cure 2 Players", 2, False, 1.8, True, 20), # Water Heal
+            11182: ("Ghost Hammer", 1, False, 2.0, False, 25), # Earth
+            11183: ("Deacon Attack", 0, False, 1.8, False, 20),
+            12036: ("Leap", 4, False, 1.8, False, 20), # Wind
+            12049: ("Fire Dance", 3, False, 1.8, False, 20), # Fire
+            12051: ("Note", 0, True, 1.8, False, 20),
+            12053: ("Gallop", 0, False, 1.8, False, 20),
+            15040: ("Palm", 1, False, 1.8, False, 20), # Earth
+            15041: ("Love Wish", 0, True, 1.8, False, 20),
+            15060: ("Throw Dish", 3, False, 1.8, False, 20), # Fire
+            15039: ("Wine Flame", 3, True, 1.8, False, 20), # Fire
+            # Element
+            15085: ("Rock", 1, True, 1.8, False, 20), # Earth Magic
+            30113: ("Earth Shield", 1, False, 1.5, True, 15), # Earth Heal/Shield
+            15091: ("Water Magic", 2, True, 1.8, False, 20), # Water Magic
+            30079: ("Recovery", 2, True, 2.5, True, 25), # Water Heal
+            11016: ("Fireball", 3, True, 2.2, False, 30), # Fire Magic
+            30112: ("Fire Shield", 3, False, 1.5, True, 15), # Fire Heal/Shield
+            11007: ("Wind Blade", 4, True, 1.8, False, 20), # Wind Magic
+            30111: ("Wind Shield", 4, False, 1.5, True, 15), # Wind Heal/Shield
+        }
+
+        pf = battle['player']
+        mf = battle['monster']
+        battle['turn'] += 1
+        turn = battle['turn']
+
+        # Fallback if not in SKILL_INFO but it's a valid skill
+        if skill_id not in SKILL_INFO and skill_id > 10001:
+            SKILL_INFO[skill_id] = (f"Skill {skill_id}", pf['element'], False, 1.5, False, 20)
+
+        def get_element_correction(hitter_element: int, target_element: int) -> float:
+            # 1=Earth, 2=Water, 3=Fire, 4=Wind, 0=Normal
+            if hitter_element == 3: # Fire
+                if target_element == 2: return 0.6
+                if target_element == 4: return 1.5
+            elif hitter_element == 1: # Earth
+                if target_element == 2: return 1.7
+                if target_element == 4: return 0.6
+            elif hitter_element == 2: # Water
+                if target_element == 3: return 1.7
+                if target_element == 1: return 0.6
+            elif hitter_element == 4: # Wind
+                if target_element == 3: return 0.4
+                if target_element == 1: return 1.7
+            elif hitter_element == 0: # Normal
+                if target_element in (1, 2, 3, 4): return 1.3
+            return 1.0
+
+        def calculate_atk_damage(atk: int, def_val: int, hitter_element: int, target_element: int) -> int:
+            element_corr = get_element_correction(hitter_element, target_element)
+            rand_val = 0.5 + random.random() # Random float between 0.5 and 1.5
             
-            logger.info(f"[AC54] Buy: shop_id={shop_id}, tab={tab_id}, item={item_id}, amt={amount}")
+            if atk >= def_val:
+                est = round(((atk * rand_val) - (def_val * 0.98)) * element_corr)
+            else:
+                est = ((atk * rand_val) - (def_val * 0.98)) * element_corr
+                if est < 0: est = 1
+                
+            if est < 0:
+                return max(1, int(def_val // 3))
+            return max(1, int(round(est)))
+
+        def _hp_pkt(x, y, val):
+            p = PacketWriter()
+            p.write_8(51).write_8(1)
+            p.write_8(x).write_8(y).write_8(0x19).write_32(val)
+            return p
+
+        def _sp_pkt(x, y, val):
+            p = PacketWriter()
+            p.write_8(51).write_8(1)
+            p.write_8(x).write_8(y).write_8(0x1a).write_32(val)
+            return p
+
+        # ── Oyuncu Eylemi (Saldırı, Beceri veya Savunma) ───────────────────────
+        if action in ('attack', 'defend'):
+            skill_info = SKILL_INFO.get(
+                skill_id, ("Attack", pf['element'], False, 1.0, False, 0)
+            )
             
-            # Simple shop pricing: define some prices for known items
-            item_prices = {
-                602: 50,    # Red Potion
-                603: 100,   # Blue Potion
-                701: 200,   # Bread
-                702: 150,   # Meat
-                703: 250,   # Cake
-                27001: 50,  # Red Potion
-                27005: 100, # Blue Potion
-            }
-            price = item_prices.get(item_id, 100) * amount
-            
-            if session.gold >= price:
-                if add_item_to_inventory(session, item_id, amount=amount):
-                    session.gold -= price
+            # Check SP cost and fallback if insufficient
+            sp_cost = skill_info[5] if len(skill_info) > 5 else 0
+            if pf['sp'] < sp_cost:
+                skill_id = 10001
+                skill_info = ("Attack", pf['element'], False, 1.0, False, 0)
+                sp_cost = 0
+                logger.info(f"[Battle] Insufficient SP for skill. Falling back to normal attack.")
+
+            skill_name, skill_elem, is_magical, multiplier, is_heal, _ = skill_info
+
+            # Deduct SP
+            if sp_cost > 0:
+                pf['sp'] = max(0, pf['sp'] - sp_cost)
+                session.sp = pf['sp']
+                await session.send_packet(_sp_pkt(pf['x'], pf['y'], pf['sp']))
+
+            # Gain skill experience (1-3 EXP per use)
+            if skill_id != 10001:
+                await self.give_skill_exp(session, skill_id, random.randint(1, 3))
+
+            # Retrieve skill Grade for damage/healing scaling
+            skill_grade = 1
+            for sk in session.skills:
+                if sk.get('skill_id') == skill_id:
+                    skill_grade = sk.get('grade', 1)
+                    break
+            grade_multiplier = 1.0 + (skill_grade - 1) * 0.05
+
+            if is_heal:
+                # Healing calculation scaled by Grade
+                matk = pf.get('matk', pf['level']*3)
+                heal_val = int(round(matk * multiplier * grade_multiplier))
+                pf['hp'] = min(pf['max_hp'], pf['hp'] + heal_val)
+                session.hp = pf['hp']
+                logger.info(f"[Battle] T{turn}: {pf['name']} heals themselves for {heal_val} HP (Grade {skill_grade}). Current HP: {pf['hp']}/{pf['max_hp']}")
+
+                # AC 53:5 – oyuncu eylem bildirimi
+                await session.send_packet(
+                    PacketWriter().write_8(53).write_8(5).write_8(pf['x']).write_8(pf['y'])
+                )
+
+                # AC 50:1 – heal animasyonu (hedef oyuncunun kendisi)
+                p_anim = PacketWriter()
+                p_anim.write_8(50).write_8(1)
+                p_anim.write_8(0x11).write_8(0x00)          # unk header
+                p_anim.write_8(pf['x']).write_8(pf['y'])    # saldıran pozisyon
+                p_anim.write_16(skill_id)                    # beceri ID'si
+                p_anim.write_8(0)                            # flag
+                p_anim.write_8(1)                            # hit_count
+                p_anim.write_8(pf['x']).write_8(pf['y'])    # hedef pozisyon (kendi)
+                p_anim.write_8(1).write_8(0)                 # flags
+                p_anim.write_8(1)                            # is_hit
+                p_anim.write_8(0x19)                         # stat_id = HP
+                p_anim.write_32(heal_val)                    # yeşil iyileşme miktarı
+                p_anim.write_8(1)                            # final flag
+                await session.send_packet(p_anim)
+
+                # AC 51:1 – oyuncu HP güncelle
+                await session.send_packet(_hp_pkt(pf['x'], pf['y'], pf['hp']))
+                
+                await asyncio.sleep(1.2)
+            else:
+                # Normal or Skill damage calculation scaled by Grade
+                hitter_element = skill_elem if skill_id != 10001 else pf['element']
+                
+                if is_magical:
+                    atk_stat = pf.get('matk', pf['level']*3)
+                    def_stat = mf.get('mdef', mf['level']*2)
+                else:
+                    atk_stat = pf.get('atk', pf['level']*3)
+                    def_stat = mf.get('def', mf['level']*2)
+                
+                # Apply skill and grade multipliers
+                modified_atk = int(round(atk_stat * multiplier * grade_multiplier))
+                dmg_to_mon = calculate_atk_damage(modified_atk, def_stat, hitter_element, mf['element'])
+                
+                if action == 'defend':
+                    dmg_to_mon = max(1, dmg_to_mon // 2)
+                    
+                mf['hp'] = max(0, mf['hp'] - dmg_to_mon)
+                logger.info(f"[Battle] T{turn}: {pf['name']} uses {skill_name} (Grade {skill_grade}) -> {mf['name']}: "
+                            f"{dmg_to_mon} dmg (element={hitter_element}) mon_hp={mf['hp']}/{mf['max_hp']}")
+
+                # AC 53:5 – oyuncu eylem bildirimi
+                await session.send_packet(
+                    PacketWriter().write_8(53).write_8(5).write_8(pf['x']).write_8(pf['y'])
+                )
+
+                # AC 50:1 – saldırı animasyonu + hasar (19 byte payload)
+                p_anim = PacketWriter()
+                p_anim.write_8(50).write_8(1)
+                p_anim.write_8(0x11).write_8(0x00)          # unk header
+                p_anim.write_8(pf['x']).write_8(pf['y'])    # saldıran pozisyon
+                p_anim.write_16(skill_id)                    # beceri ID'si
+                p_anim.write_8(0)                            # flag
+                p_anim.write_8(1)                            # hit_count
+                p_anim.write_8(mf['x']).write_8(mf['y'])    # hedef pozisyon
+                p_anim.write_8(1).write_8(0)                 # flags
+                p_anim.write_8(1)                            # is_hit
+                p_anim.write_8(0x19)                         # stat_id = HP
+                p_anim.write_32(dmg_to_mon)                  # hasar miktarı
+                p_anim.write_8(1)                            # final flag
+                await session.send_packet(p_anim)
+
+                # AC 51:1 – monster HP güncelle
+                await session.send_packet(_hp_pkt(mf['x'], mf['y'], mf['hp']))
+                
+                await asyncio.sleep(1.2)
+
+        # ── Monster Öldü mü? ───────────────────────────────────────────────
+        if mf['hp'] <= 0:
+            await self._end_battle(session, battle, won=True)
+            return
+
+        # ── Monster Karşı Saldırısı ─────────────────────────────────────────
+        dmg_to_p = calculate_atk_damage(mf.get('atk', mf['level']*3), pf.get('def', pf['level']*2), mf['element'], pf['element'])
+        if action == 'defend':
+            dmg_to_p = max(1, dmg_to_p // 2)
+        pf['hp'] = max(0, pf['hp'] - dmg_to_p)
+        session.hp = pf['hp']
+        logger.info(f"[Battle] T{turn}: {mf['name']} -> {pf['name']}: "
+                    f"{dmg_to_p} dmg p_hp={pf['hp']}/{pf['max_hp']}")
+
+        # AC 53:5 – monster eylem bildirimi
+        await session.send_packet(
+            PacketWriter().write_8(53).write_8(5).write_8(mf['x']).write_8(mf['y'])
+        )
+
+        # AC 50:1 – monster saldırı animasyonu
+        p_manim = PacketWriter()
+        p_manim.write_8(50).write_8(1)
+        p_manim.write_8(0x11).write_8(0x00)         # unk header
+        p_manim.write_8(mf['x']).write_8(mf['y'])   # saldıran (monster)
+        p_manim.write_8(0x11).write_8(0x27)         # anim tipi
+        p_manim.write_8(0).write_8(1)               # flag + hit_count
+        p_manim.write_8(pf['x']).write_8(pf['y'])   # hedef (oyuncu)
+        p_manim.write_8(1).write_8(0).write_8(1)    # flags + is_hit
+        p_manim.write_8(0x19)                        # stat = HP
+        p_manim.write_32(dmg_to_p)                   # hasar
+        p_manim.write_8(1)                           # final flag
+        await session.send_packet(p_manim)
+
+        # AC 51:1 – oyuncu HP güncelle
+        await session.send_packet(_hp_pkt(pf['x'], pf['y'], pf['hp']))
+        
+        # Delay to let monster counter-attack animation play on client
+        await asyncio.sleep(1.2)
+
+        # ── Oyuncu Öldü mü? ────────────────────────────────────────────────
+        if pf['hp'] <= 0:
+            await self._end_battle(session, battle, won=False)
+            return
+
+        # ── Sonraki Tur: AC 50:6 (52:1 değil!) ─────────────────────────────
+        # Wireshark CAP-B PKT02 doğruladı: turn-ready = AC 50:6 [x, y, 0]
+        await session.send_packet(
+            PacketWriter().write_8(50).write_8(6).write_8(pf['x']).write_8(pf['y']).write_8(0)
+        )
+        # AC 52:1 – Oyuncuya komut seçme izni ver (34 01)
+        await session.send_packet(
+            PacketWriter().write_8(52).write_8(1)
+        )
+
+    async def _do_flee(self, session: 'PlayerSession', battle: dict):
+        """Kaçma işlemi: Her zaman başarılı (kullanıcı isteği üzerine)."""
+        await self._end_battle(session, battle, won=False, fled=True)
+
+    async def _end_battle(self, session: 'PlayerSession', battle: dict,
+                          won: bool = False, fled: bool = False):
+        """
+        Savaşı sonlandırır. Wireshark CAP-C'den doğrulanan paket sırası:
+
+        1. AC 51:1 [player final HP/SP]
+        2. AC 51:1 [monster_x, monster_y, HP=0] (monster öldü)
+        3. AC 23:6 [dropped_item_id, amount] <-- Eğer canavar eşya düşürdüyse
+        4. AC 53:4 [dropped_item_id, src_x, src_y, dst_x, dst_y] <-- Eşya uçma animasyonu
+        5. AC 11:12 [01]  <-- SAVAŞ BİTİŞ SİNYALİ
+        6. AC 8:1 [stat_id=36, target=1, val=exp_val_64] <-- EXP güncelleme (Wireshark CAP-C)
+        7. AC 22:6 [0b, 00, result]
+        8. AC 22:5 [0b, 00, exp_reward, gold_reward] <-- Savaş ödülleri ekranı (Wireshark CAP-C)
+        9. AC 11:0 [char_id uint32, 0x0000]
+        10. AC 11:1 [player_x, player_y, 0]
+        """
+        pf = battle['player']
+        mf = battle['monster']
+
+        # 1. Oyuncunun son HP ve SP'ı
+        for stat, val in [(0x19, pf['hp']), (0x1a, pf['sp'])]:
+            p = PacketWriter()
+            p.write_8(51).write_8(1)
+            p.write_8(pf['x']).write_8(pf['y']).write_8(stat).write_32(val)
+            await session.send_packet(p)
+
+        # 2. Monster'un son HP'i = 0 (kesin olarak göster)
+        if won:
+            p = PacketWriter()
+            p.write_8(51).write_8(1)
+            p.write_8(mf['x']).write_8(mf['y']).write_8(0x19).write_32(0)
+            await session.send_packet(p)
+
+        # 3. Eşya Düşme Mantığı (Drop Item Logic)
+        # Wireshark CAP-C'den doğrulandı: AC 23:6 ve AC 53:4
+        dropped_item_id = 0
+        if won:
+            # 50% şansla rastgele bir potion düşür
+            if random.random() < 0.5:
+                dropped_item_id = random.choice([27001, 27005]) # Red Potion veya Blue Potion
+                if add_item_to_inventory(session, dropped_item_id, amount=1):
                     self.save_player_to_db(session)
                     
-                    # Gold update
-                    await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
-                    
-                    # Item added successfully
+                    # AC 23:6 - Eşya ekleme paketi (16-bit item_id, 16-bit amount, 27 bytes padding)
                     item_pkt = PacketWriter()
-                    item_pkt.write_8(23).write_8(6).write_16(item_id).write_8(amount).write_bytes(bytes(26))
+                    item_pkt.write_8(23).write_8(6).write_16(dropped_item_id).write_16(1).write_bytes(bytes(27))
                     await session.send_packet(item_pkt)
                     
-                    # Confirm purchase
-                    buy_confirm = PacketWriter()
-                    buy_confirm.write_8(54).write_8(3).write_8(shop_id).write_8(tab_id).write_16(item_id).write_8(amount)
-                    await session.send_packet(buy_confirm)
-                    
-                    logger.info(f"[AC54] Player bought {amount}x item {item_id} for {price} gold")
-                else:
-                    logger.warning(f"[AC54] Inventory full, can't buy item {item_id}")
-            else:
-                logger.warning(f"[AC54] Not enough gold ({session.gold} < {price})")
-        
-        elif sub == 30:  # Compound / Crafting request
-            compound_id = reader.read_16()
-            logger.info(f"[AC54] Compound request: compound_id={compound_id}")
+                    # AC 53:4 - Eşya uçma animasyonu (src_x, src_y -> dst_x, dst_y)
+                    fly_pkt = PacketWriter()
+                    fly_pkt.write_8(53).write_8(4).write_16(dropped_item_id).write_8(mf['x']).write_8(mf['y']).write_8(pf['x']).write_8(pf['y'])
+                    await session.send_packet(fly_pkt)
+
+        # Canavarın ölüm animasyonu ve eşya uçma animasyonu bitsin diye delay
+        await asyncio.sleep(1.2)
+
+        # 5. AC 11:12 [01] – SAVAŞ BİTİŞ SİNYALİ
+        await session.send_packet(PacketWriter().write_8(11).write_8(12).write_8(1))
+
+        # 6. EXP ve Gold ödülleri hesaplama & güncelleme
+        exp_reward = max(10, mf['level'] * 15)
+        gold_reward = max(5, mf['level'] * 8)
+        if won:
+            session.exp += exp_reward
+            session.gold += gold_reward
+            self.save_player_to_db(session)
             
-            # Load compound recipe from Compound.dat
-            recipe = self.get_compound_recipe(compound_id)
-            
-            if recipe:
-                # Check if player has all required materials
-                required_items = recipe.get("materials", [])
-                result_item = recipe.get("result_item", 0)
-                result_amount = recipe.get("result_amount", 1)
+            # AC 8:1 - EXP güncellemesi (stat_id = 36)
+            p_exp = PacketWriter()
+            p_exp.write_8(8).write_8(1).write_8(36).write_8(1).write_64(session.exp)
+            await session.send_packet(p_exp)
+
+        # 7. AC 22:6 [battle_type=11, 0, result]
+        result = 2 if won else (1 if fled else 0)
+        p226 = PacketWriter()
+        p226.write_8(22).write_8(6)
+        p226.write_8(0x0b).write_8(0x00).write_8(result)
+        await session.send_packet(p226)
+
+        # 8. AC 22:5 [battle_type=11, 0, exp_reward, gold_reward] (Wireshark)
+        if won:
+            p_rew = PacketWriter()
+            p_rew.write_8(22).write_8(5)
+            p_rew.write_16(11)  # battle type 11
+            p_rew.write_16(min(0xFFFF, exp_reward))
+            p_rew.write_16(min(0xFFFF, gold_reward))
+            await session.send_packet(p_rew)
+
+        # 9. AC 11:0 [char_id uint32, 0x0000]
+        p110 = PacketWriter()
+        p110.write_8(11).write_8(0)
+        p110.write_32(session.char_id)
+        p110.write_16(0)
+        await session.send_packet(p110)
+
+        # 10. AC 11:1 [player_x, player_y, 0]
+        await session.send_packet(
+            PacketWriter().write_8(11).write_8(1).write_8(pf['x']).write_8(pf['y']).write_8(0)
+        )
+
+        # State temizliği
+        battle['finished'] = True
+        bid = battle['id']
+        if bid in self.active_battles:
+            del self.active_battles[bid]
+        session.in_battle     = False
+        session.pvp_battle_id = None
+
+        # Canavarın haritada görünürlüğünü güncelle
+        click_id = mf.get('click_id', 0)
+        if click_id > 0:
+            target_npc = None
+            for npc in self.map_npcs.get(session.map_id, []):
+                if npc['click_id'] == click_id:
+                    target_npc = npc
+                    break
+            if fled:
+                if target_npc:
+                    target_npc['visible'] = True
+                async def show_monster_delayed():
+                    await asyncio.sleep(0.5)
+                    pkt = PacketWriter()
+                    pkt.write_8(22).write_8(6).write_16(click_id).write_8(1)
+                    await session.send_packet(pkt)
+                asyncio.create_task(show_monster_delayed())
+            elif won:
+                if target_npc:
+                    target_npc['visible'] = False
+                pkt_hide = PacketWriter()
+                pkt_hide.write_8(22).write_8(6).write_16(click_id).write_8(0)
+                await session.send_packet(pkt_hide)
                 
-                # Verify materials in inventory
-                can_craft = True
-                for mat in required_items:
-                    mat_id = mat["item_id"]
-                    mat_amt = mat["amount"]
-                    total_owned = sum(
-                        it.get("amount", 0) 
-                        for it in session.inventory 
-                        if it.get("item_id") == mat_id
-                    )
-                    if total_owned < mat_amt:
-                        can_craft = False
-                        logger.warning(f"[AC54] Missing material {mat_id}: have {total_owned}, need {mat_amt}")
-                        break
-                
-                if can_craft and result_item > 0:
-                    # Remove materials
-                    for mat in required_items:
-                        mat_id = mat["item_id"]
-                        mat_amt = mat["amount"]
-                        remaining = mat_amt
-                        for it in session.inventory:
-                            if it.get("item_id") == mat_id and remaining > 0:
-                                owned = it.get("amount", 1)
-                                if owned <= remaining:
-                                    remaining -= owned
-                                    session.inventory.remove(it)
-                                else:
-                                    it["amount"] = owned - remaining
-                                    remaining = 0
-                    
-                    # Add result item
-                    add_item_to_inventory(session, result_item, amount=result_amount)
-                    self.save_player_to_db(session)
-                    
-                    # Send inventory update
-                    await session.send_packet(self.build_inventory_packet(session))
-                    
-                    # Compound success notification
-                    await session.send_packet(
-                        PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
-                            f"🔧 Compound success! Created {result_amount}x Item {result_item}!"
-                        )
-                    )
-                    logger.info(f"[AC54] Compound {compound_id} successful -> {result_amount}x item {result_item}")
-                else:
-                    await session.send_packet(
-                        PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
-                            "Compound failed! Missing required materials."
-                        )
-                    )
-            else:
-                logger.warning(f"[AC54] Unknown compound recipe ID: {compound_id}")
-                await session.send_packet(
-                    PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
-                        f"Compound recipe {compound_id} not found."
-                    )
-                )
+                async def respawn_monster():
+                    await asyncio.sleep(15.0)
+                    if target_npc:
+                        target_npc['visible'] = True
+                    pkt_show = PacketWriter()
+                    pkt_show.write_8(22).write_8(6).write_16(click_id).write_8(1)
+                    self.broadcast_to_map(session.map_id, pkt_show)
+                asyncio.create_task(respawn_monster())
+
+        # Check if quest battle win warp is set
+        win_warp = getattr(session, 'battle_win_warp', None)
+        if won and win_warp:
+            logger.info(f"[{session.char_name}] Quest battle won! Warp to map {win_warp['map_id']} pos=({win_warp['x']},{win_warp['y']}) pending rewards closing.")
+        elif not won and not fled:
+            # Player lost/died: revive with 10% HP/SP and warp to Map 10017
+            session.hp = max(1, int(session.max_hp * 0.10))
+            session.sp = max(1, int(session.max_sp * 0.10))
+            self.save_player_to_db(session)
+            logger.info(f"[Battle] {session.char_name} LOST vs {mf['name']}. Revived at 10% HP/SP. Warping to starter ship.")
+            await self.warp_player(session, 10017, 1042, 1075)
         else:
-            logger.info(f"[AC54] Unhandled SubCmd: {sub}")
-    
-    # Compound recipes loaded from Compound2.dat at init (65-byte XOR records)
-    _COMPOUND_RECIPES = {}
+            session.battle_win_warp = None  # clear it
+            session.pending_battle_unlock = True
+
+            # Fallback unlock task to ensure player is never permanently stuck
+            async def fallback_unlock():
+                await asyncio.sleep(2.5)
+                if getattr(session, 'pending_battle_unlock', False):
+                    session.pending_battle_unlock = False
+                    logger.info(f"[{session.char_name}] Fallback battle unlock triggered after 2.5 seconds.")
+                    await session.send_packet(PacketWriter().write_8(23).write_8(102))
+                    await session.send_packet(PacketWriter().write_8(20).write_8(8))
+            asyncio.create_task(fallback_unlock())
+
+        if won:
+            logger.info(f"[Battle] {session.char_name} WON vs {mf['name']}")
+        elif fled:
+            logger.info(f"[Battle] {session.char_name} FLED")
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Legacy compat shims
+    # ──────────────────────────────────────────────────────────────────────────
+
+    async def enter_battle(self, session, click_id, npc_id, override_sprite_id=0):
+        await self._start_pve_battle(session, click_id, npc_id, override_sprite_id)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Compound / Crafting
+    # ──────────────────────────────────────────────────────────────────────────
+
+    # ──────────────────────────────────────────────────────────────────────────
+
+    _COMPOUND_RECIPES: dict = {}
 
     def _xor_byte(self, v: int) -> int:
         return ((v ^ 0xD3) - 3) & 0xFF
@@ -3527,79 +4097,54 @@ class GameServer:
     def _load_compound_dat(self):
         """Loads compound recipes from data/Compound2.dat using 65-byte XOR-protected records."""
         import os
-        
         self._COMPOUND_RECIPES = {}
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(self.static_db_path)))
         compound_path = os.path.join(base_dir, "data", "Compound2.dat")
-        
         if not os.path.exists(compound_path):
             logger.warning(f"[Compound] Compound2.dat not found at {compound_path}")
             return
-        
         try:
             with open(compound_path, "rb") as f:
                 d = f.read()
-            
             if len(d) < 65:
-                logger.warning("[Compound] Compound2.dat too small.")
                 return
-            
             record_count = len(d) // 65
             recipes_loaded = 0
-            
             for idx in range(record_count):
                 ptr = idx * 65
                 if ptr + 65 > len(d):
                     break
-                
-                # Parse 65-byte record with XOR decryption (matching C# cBuildElement.Load)
-                result_id = self._xor_word((d[ptr + 1] << 8) + d[ptr])
-                ptr += 2
-                plan_id = self._xor_word((d[ptr + 1] << 8) + d[ptr])
-                ptr += 2
-                unknown_byte = self._xor_byte(d[ptr]); ptr += 1
-                tool_id = self._xor_word((d[ptr + 1] << 8) + d[ptr])
-                ptr += 2
-                result_amount = self._xor_byte(d[ptr]); ptr += 1
-                ptr += 3  # unknownByte0, unknownByte1, unknownByte2
-                
+                result_id = self._xor_word((d[ptr + 1] << 8) + d[ptr]); ptr += 2
+                plan_id   = self._xor_word((d[ptr + 1] << 8) + d[ptr]); ptr += 2
+                _         = self._xor_byte(d[ptr]);                      ptr += 1
+                tool_id   = self._xor_word((d[ptr + 1] << 8) + d[ptr]); ptr += 2
+                result_amount = self._xor_byte(d[ptr]);                  ptr += 1
+                ptr += 3  # unknownByte0-2
                 materials = []
                 for _ in range(5):
-                    mat_id = self._xor_word((d[ptr + 1] << 8) + d[ptr]); ptr += 2
-                    mat_amt = self._xor_byte(d[ptr]); ptr += 1
+                    mat_id  = self._xor_word((d[ptr + 1] << 8) + d[ptr]); ptr += 2
+                    mat_amt = self._xor_byte(d[ptr]);                      ptr += 1
                     if mat_id > 0 and mat_amt > 0 and mat_id < 50000:
                         materials.append({"item_id": mat_id, "amount": mat_amt})
-                
-                # Skip remaining unknown bytes (not needed for crafting)
-                # unknownByte3, buildTime(2B), unknownByte4-9(6B), unknownWord0-4(10B), unknownDWord0-4(20B)
-                
-                # Only add valid recipes with reasonable IDs
                 if result_id > 0 and result_id < 50000 and materials:
                     self._COMPOUND_RECIPES[result_id] = {
-                        "compound_id": result_id,
-                        "result_item": result_id,
+                        "compound_id":   result_id,
+                        "result_item":   result_id,
                         "result_amount": max(1, result_amount),
-                        "materials": materials,
+                        "materials":     materials,
                     }
                     recipes_loaded += 1
-            
             logger.info(f"[Compound] Loaded {recipes_loaded} compound recipes from Compound2.dat ({record_count} records).")
         except Exception as e:
             logger.error(f"[Compound] Error loading Compound2.dat: {e}", exc_info=True)
 
     def get_compound_recipe(self, compound_id: int) -> dict:
-        """Looks up a compound recipe from loaded recipes."""
         return self._COMPOUND_RECIPES.get(compound_id, None)
-    
+
     async def send_compound_list(self, session: PlayerSession):
-        """Sends the full compound recipe list to the client via AC 54 Sub 30 or Sub 89."""
+        """Sends the full compound recipe list to the client via AC 54 Sub 30."""
         if not self._COMPOUND_RECIPES:
-            logger.warning(f"[Compound] No recipes loaded, cannot send compound list.")
             return
-        
-        logger.info(f"[Compound] Sending {len(self._COMPOUND_RECIPES)} compound recipes to {session.char_name}")
-        
-        # Send each recipe as AC 54 Sub 30: compound_id, result_item, result_amt, material_count, [mat_id, mat_amt]...
         for cid, recipe in self._COMPOUND_RECIPES.items():
             pkt = PacketWriter()
             pkt.write_8(54).write_8(30)
@@ -3613,185 +4158,74 @@ class GameServer:
                 pkt.write_8(mat["amount"])
             await session.send_packet(pkt)
             await asyncio.sleep(0.001)
-        
         logger.info(f"[Compound] Finished sending compound recipes to {session.char_name}")
 
+    async def handle_action_54(self, session: PlayerSession, reader: PacketReader):
+        """Handles shop purchases, compound/crafting, and other AC 54 events."""
+        sub = reader.read_8()
+        logger.info(f"[AC54] handle_action_54 called. SubCmd={sub}, data: {reader.data.hex()}")
 
-    async def handle_battle_action(self, session: PlayerSession, reader: PacketReader):
-        """Processes battle round commands (AC 50) and routes them into the Battle Engine."""
-        sub = reader.read_8() if reader.offset < len(reader.data) else 0
-        logger.info(f"[{session.char_name}] Battle action received: AC 50 Sub {sub}, data: {reader.data.hex()}")
+        if sub == 3:  # Buy item from shop
+            shop_id = reader.read_8()
+            tab_id  = reader.read_8()
+            item_id = reader.read_16()
+            amount  = reader.read_8()
+            item_prices = {602: 50, 603: 100, 701: 200, 702: 150, 703: 250, 27001: 50, 27005: 100}
+            price = item_prices.get(item_id, 100) * amount
+            if session.gold >= price:
+                if add_item_to_inventory(session, item_id, amount=amount):
+                    session.gold -= price
+                    self.save_player_to_db(session)
+                    await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
+                    item_pkt = PacketWriter()
+                    item_pkt.write_8(23).write_8(6).write_16(item_id).write_16(amount).write_bytes(bytes(27))
+                    await session.send_packet(item_pkt)
+                    buy_confirm = PacketWriter()
+                    buy_confirm.write_8(54).write_8(3).write_8(shop_id).write_8(tab_id).write_16(item_id).write_8(amount)
+                    await session.send_packet(buy_confirm)
+            else:
+                logger.warning(f"[AC54] Not enough gold ({session.gold} < {price})")
 
-        battle_id = getattr(session, 'pvp_battle_id', None)
-        if not battle_id or battle_id not in self.active_battles:
-            logger.warning(f"[{session.char_name}] AC 50 received but not in a valid BattleInstance, ignoring.")
-            await session.send_packet(PacketWriter().write_8(20).write_8(8))
-            return
+        elif sub == 30:  # Compound / Crafting request
+            compound_id = reader.read_16()
+            recipe = self.get_compound_recipe(compound_id)
+            if recipe:
+                required_items = recipe.get("materials", [])
+                result_item    = recipe.get("result_item", 0)
+                result_amount  = recipe.get("result_amount", 1)
+                can_craft = True
+                for mat in required_items:
+                    total_owned = sum(it.get("amount", 0) for it in session.inventory if it.get("item_id") == mat["item_id"])
+                    if total_owned < mat["amount"]:
+                        can_craft = False
+                        break
+                if can_craft and result_item > 0:
+                    for mat in required_items:
+                        remaining = mat["amount"]
+                        for it in session.inventory[:]:
+                            if it.get("item_id") == mat["item_id"] and remaining > 0:
+                                owned = it.get("amount", 1)
+                                if owned <= remaining:
+                                    remaining -= owned
+                                    session.inventory.remove(it)
+                                else:
+                                    it["amount"] = owned - remaining
+                                    remaining = 0
+                    add_item_to_inventory(session, result_item, amount=result_amount)
+                    self.save_player_to_db(session)
+                    await session.send_packet(self.build_inventory_packet(session))
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Compound success! Created {result_amount}x Item {result_item}!"))
+                else:
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Compound failed! Missing required materials."))
+            else:
+                logger.warning(f"[AC54] Unknown compound recipe ID: {compound_id}")
+        else:
+            logger.info(f"[AC54] Unhandled SubCmd: {sub}")
 
-        battle = self.active_battles[battle_id]
-        import random
-
-        action_dict = None
-        if sub == 0:  # Regular Attack
-            target_grid_x, target_grid_y = 1, 2
-            if reader.remaining_bytes() >= 2:
-                target_grid_x = reader.read_8()
-                target_grid_y = reader.read_8()
-            action_dict = {"type": "attack", "skill_id": 0, "target_x": target_grid_x, "target_y": target_grid_y}
-
-        elif sub == 1:  # Skill Attack
-            skill_id = 0
-            target_grid_x, target_grid_y = 1, 2
-            if reader.remaining_bytes() >= 2:
-                reader.read_8()  # target_type
-                reader.read_8()  # target_count
-            if reader.remaining_bytes() >= 2:
-                target_grid_x = reader.read_8()
-                target_grid_y = reader.read_8()
-            if reader.remaining_bytes() >= 2:
-                skill_id = reader.read_16()
-            action_dict = {"type": "attack", "skill_id": skill_id, "target_x": target_grid_x, "target_y": target_grid_y}
-
-        elif sub == 2:  # Defend
-            action_dict = {"type": "defend"}
-
-        elif sub == 5:  # Flee
-            action_dict = {"type": "flee"}
-        
-        if action_dict:
-            action_dict["char_id"] = session.char_id
-            battle.queued_actions[session.char_id] = action_dict
-            
-            # If it's a PvE battle, we automatically queue the AI's action
-            if getattr(battle, 'is_pve', False):
-                ai_char_id = battle.defender.char_id if battle.attacker == session else battle.attacker.char_id
-                # Basic AI: Normal attack
-                battle.queued_actions[ai_char_id] = {"char_id": ai_char_id, "type": "attack", "skill_id": 0, "target_x": 4, "target_y": 2}
-                
-            # If both have acted, resolve the turn
-            if battle.is_turn_ready():
-                await self.resolve_turn(battle)
-
-    async def resolve_turn(self, battle: BattleInstance):
-        """Resolves a PvP turn synchronously for both players."""
-        import random
-        att = battle.attacker
-        def_s = battle.defender
-        
-        att_action = battle.queued_actions.get(att.char_id, {"type": "defend"})
-        def_action = battle.queued_actions.get(def_s.char_id, {"type": "defend"})
-        battle.queued_actions.clear()
-        
-        # Acknowledge both turn starts [50, 6]
-        # Notice we use write_32(0) for the Pack(0) logic just in case it expects an int
-        await att.send_packet(PacketWriter().write_8(50).write_8(6).write_8(4).write_8(2).write_32(0))
-        if not getattr(def_s, 'is_monster', False):
-            await def_s.send_packet(PacketWriter().write_8(50).write_8(6).write_8(1).write_8(2).write_32(0))
-        
-        # Resolve flee
-        if att_action["type"] == "flee":
-            if random.random() < 0.5:
-                await self.end_dynamic_battle(battle, winner=def_s, flee=True)
-                return
-        if def_action["type"] == "flee":
-            if random.random() < 0.5:
-                await self.end_dynamic_battle(battle, winner=att, flee=True)
-                return
-                
-        # To simplify, attacker always goes first
-        players = [(att, att_action), (def_s, def_action)]
-        
-        for i, (player, action) in enumerate(players):
-            opponent = def_s if player == att else att
-            opp_action = def_action if player == att else att_action
-            
-            # Determine grids based on whether player is the battle attacker (at 4,2) or defender (at 1,2)
-            src_x, src_y = (4, 2) if player == att else (1, 2)
-            dst_x, dst_y = (1, 2) if player == att else (4, 2)
-            
-            if action["type"] == "attack":
-                atk = getattr(player, 'get_atk', lambda: self.get_player_atk(player) if not getattr(player, 'is_monster', False) else self.get_monster_atk(player.level))()
-                deff = getattr(opponent, 'get_def', lambda: self.get_player_def(opponent) if not getattr(opponent, 'is_monster', False) else self.get_monster_def(opponent.level))()
-                
-                dmg = max(1, atk - deff + random.randint(-5, 5))
-                if opp_action["type"] == "defend":
-                    dmg //= 2
-                    
-                opponent.hp = max(0, opponent.hp - dmg)
-                
-                my_type = 7 if getattr(player, 'is_monster', False) else 2
-                opp_type = 7 if getattr(opponent, 'is_monster', False) else 2
-                
-                # Send animation to all actual players involved
-                for target_session in [att, def_s]:
-                    if getattr(target_session, 'is_monster', False):
-                        continue
-                        
-                    # Pack structure based on C# emulator Send_Attack
-                    # 50:1 -> 17(int) -> srcX(byte) -> srcY(byte) -> skill(ushort) -> 0(int) -> 1(int) -> dstX(byte) -> dstY(byte) -> 1(int) -> 0(int) -> 1(int) -> 25/0(int) -> dmg(int) -> 1(int)
-                    p_anim = PacketWriter().write_8(50).write_8(1)
-                    p_anim.write_32(17) # Action ID 17
-                    p_anim.write_8(src_x).write_8(src_y)
-                    p_anim.write_16(action.get("skill_id", 0))
-                    p_anim.write_32(0).write_32(1)
-                    p_anim.write_8(dst_x).write_8(dst_y)
-                    p_anim.write_32(1).write_32(0).write_32(1)
-                    p_anim.write_32(25 if dmg > 0 else 0)
-                    p_anim.write_32(dmg)
-                    p_anim.write_32(1)
-                    
-                    await target_session.send_packet(p_anim)
-                
-                # Send HP updates
-                for target in [att, def_s]:
-                    if not getattr(target, 'is_monster', False):
-                        await target.send_packet(PacketWriter().write_8(8).write_8(1).write_8(25).write_8(1).write_32(target.hp).write_32(0))
-                        
-                        # Tell player about opponent's HP
-                        other = def_s if target == att else att
-                        other_id = getattr(other, 'npc_id', other.char_id) if getattr(other, 'is_monster', False) else other.char_id
-                        await target.send_packet(PacketWriter().write_8(11).write_8(7).write_32(other_id).write_32(other.hp).write_32(other.max_hp))
-                
-                if opponent.hp <= 0:
-                    await self.end_dynamic_battle(battle, winner=player)
-                    return
-                    
-        # Send next turn menu
-        for s in [att, def_s]:
-            if not getattr(s, 'is_monster', False):
-                await s.send_packet(PacketWriter().write_8(52).write_8(1))
-
-    async def end_dynamic_battle(self, battle: BattleInstance, winner, flee: bool = False):
-        """Ends a PvP battle, cleans up state, and despawns UI."""
-        att = battle.attacker
-        def_s = battle.defender
-        
-        att.in_battle = False
-        def_s.in_battle = False
-        att.pvp_battle_id = None
-        def_s.pvp_battle_id = None
-        
-        if battle.battle_id in self.active_battles:
-            del self.active_battles[battle.battle_id]
-            
-        for s in [att, def_s]:
-            if getattr(s, 'is_monster', False):
-                continue
-                
-            # Despawn fighters
-            await s.send_packet(PacketWriter().write_8(11).write_8(1).write_8(1).write_8(2).write_8(0))
-            await s.send_packet(PacketWriter().write_8(11).write_8(1).write_8(4).write_8(2).write_8(0))
-            # End battle screen
-            await s.send_packet(PacketWriter().write_8(11).write_8(0).write_32(s.char_id).write_8(0))
-            # Restore UI
-            await s.send_packet(PacketWriter().write_8(20).write_8(8))
-            
-            msg = "You successfully fled!" if flee else ("You won the battle!" if s == winner else "You lost the battle.")
-            await s.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(msg))
 
 async def main():
     import logging
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
     server = GameServer()
     await server.run("0.0.0.0", 6414)
 
