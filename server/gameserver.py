@@ -73,6 +73,9 @@ def remove_item_at_slot(session, slot: int, amount: int = 1):
             return True
     return False
 
+def encode_item16(val):
+    return ((val ^ 0xEFC3) - 9) & 0xFFFF
+
 def add_item_to_inventory(session, item_id: int, amount: int = 1, slot: int = None):
     if slot is None:
         used_slots = {item.get('slot') for item in session.inventory if item.get('slot') is not None}
@@ -1510,7 +1513,7 @@ class GameServer:
         equips = char['equipments']
         for i in range(6):
             item_id = equips[i]['item_id'] if i < len(equips) else 0
-            writer.write_16(item_id)
+            writer.write_16(encode_item16(item_id))
         return writer.buffer
 
     async def handle_character_creation(self, session: PlayerSession, reader: PacketReader):
@@ -2960,7 +2963,7 @@ class GameServer:
                         # Spawn for player (with drop animation)
                         spawn_self = PacketWriter()
                         spawn_self.write_8(23).write_8(3)
-                        spawn_self.write_16(item_id)
+                        spawn_self.write_16(encode_item16(item_id))
                         spawn_self.write_16(session.x)
                         spawn_self.write_16(session.y)
                         spawn_self.write_32(free_idx + 1)
@@ -2970,7 +2973,7 @@ class GameServer:
                         # Broadcast to others on map
                         spawn_others = PacketWriter()
                         spawn_others.write_8(23).write_8(3)
-                        spawn_others.write_16(item_id)
+                        spawn_others.write_16(encode_item16(item_id))
                         spawn_others.write_16(session.x)
                         spawn_others.write_16(session.y)
                         spawn_others.write_32(free_idx + 1)
@@ -2992,7 +2995,7 @@ class GameServer:
                         slot_pkt = PacketWriter().write_8(23).write_8(9).write_8(pos).write_8(remaining_amt)
                         await session.send_packet(slot_pkt)
                         
-                        destroy_confirm = PacketWriter().write_8(23).write_8(26).write_16(item_id).write_8(qnt)
+                        destroy_confirm = PacketWriter().write_8(23).write_8(26).write_16(encode_item16(item_id)).write_8(qnt)
                         await session.send_packet(destroy_confirm)
                         
         elif sub == 124:  # Destroy item
@@ -3018,7 +3021,7 @@ class GameServer:
                     await session.send_packet(slot_pkt)
                     
                     # Confirm destroy: 23, 26, item_id (16-bit), qnt (8-bit)
-                    destroy_confirm = PacketWriter().write_8(23).write_8(26).write_16(item_id).write_8(qnt)
+                    destroy_confirm = PacketWriter().write_8(23).write_8(26).write_16(encode_item16(item_id)).write_8(qnt)
                     await session.send_packet(destroy_confirm)
 
                     
@@ -3046,7 +3049,7 @@ class GameServer:
                         if slot is not None:
                             # Send item add success packet to client:
                             item_pkt = PacketWriter()
-                            item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(qnt).write_16(item_id).write_bytes(bytes(25))
+                            item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(qnt).write_16(encode_item16(item_id)).write_bytes(bytes(25))
                             await session.send_packet(item_pkt)
                             success = True
                             
@@ -3058,14 +3061,14 @@ class GameServer:
                         # Send pickup confirmation to player: [23, 2, item_id(ushort), 1]
                         pickup_self = PacketWriter()
                         pickup_self.write_8(23).write_8(2)
-                        pickup_self.write_16(item_id)  # ItemID, NOT ground slot index!
+                        pickup_self.write_16(encode_item16(item_id))  # ItemID, NOT ground slot index!
                         pickup_self.write_8(1)  # plays pickup sound/adds to inventory
                         await session.send_packet(pickup_self)
                         
                         # Broadcast to others: [23, 2, item_id(ushort), 0]
                         pickup_others = PacketWriter()
                         pickup_others.write_8(23).write_8(2)
-                        pickup_others.write_16(item_id)  # ItemID, NOT ground slot index!
+                        pickup_others.write_16(encode_item16(item_id))  # ItemID, NOT ground slot index!
                         pickup_others.write_8(0)
                         self.broadcast_to_map(session.map_id, pickup_others, exclude_session=session)
                         
@@ -3301,7 +3304,7 @@ class GameServer:
                         # Send item add success packet to client:
                         # [23, 6, slot(8), item_id (uint16), ammt (8), 0, 24 bytes of zero]
                         item_pkt = PacketWriter()
-                        item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(amount).write_16(item_id).write_bytes(bytes(25))
+                        item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(amount).write_16(encode_item16(item_id)).write_bytes(bytes(25))
                         await session.send_packet(item_pkt)
                             
                         # System chat confirmation
@@ -4470,12 +4473,12 @@ class GameServer:
                     
                     # AC 23:6 - Eşya ekleme paketi (slot, item_id, amount, ...)
                     item_pkt = PacketWriter()
-                    item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(dropped_amount).write_16(dropped_item_id).write_bytes(bytes(25))
+                    item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(dropped_amount).write_16(encode_item16(dropped_item_id)).write_bytes(bytes(25))
                     await session.send_packet(item_pkt)
                     
                     # AC 53:4 - Eşya uçma animasyonu (src_x, src_y -> dst_x, dst_y)
                     fly_pkt = PacketWriter()
-                    fly_pkt.write_8(53).write_8(4).write_16(dropped_item_id).write_8(mf['x']).write_8(mf['y']).write_8(pf['x']).write_8(pf['y'])
+                    fly_pkt.write_8(53).write_8(4).write_16(encode_item16(dropped_item_id)).write_8(mf['x']).write_8(mf['y']).write_8(pf['x']).write_8(pf['y'])
                     await session.send_packet(fly_pkt)
 
         # Canavarın ölüm animasyonu ve eşya uçma animasyonu bitsin diye delay
@@ -4696,10 +4699,10 @@ class GameServer:
                     self.save_player_to_db(session)
                     await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
                     item_pkt = PacketWriter()
-                    item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(amount).write_16(item_id).write_bytes(bytes(25))
+                    item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(amount).write_16(encode_item16(item_id)).write_bytes(bytes(25))
                     await session.send_packet(item_pkt)
                     buy_confirm = PacketWriter()
-                    buy_confirm.write_8(54).write_8(3).write_8(shop_id).write_8(tab_id).write_16(item_id).write_8(amount)
+                    buy_confirm.write_8(54).write_8(3).write_8(shop_id).write_8(tab_id).write_16(encode_item16(item_id)).write_8(amount)
                     await session.send_packet(buy_confirm)
             else:
                 logger.warning(f"[AC54] Not enough gold ({session.gold} < {price})")
