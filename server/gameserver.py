@@ -1933,7 +1933,7 @@ class GameServer:
         sb.write_32(0)
         sb.write_bool(session.reborn)
         sb.write_8(session.job)
-        sb.write_8(session.points) # Potential stat
+        sb.write_8(getattr(session, 'skill_points', 0)) # Potential stat
         await session.send_packet(sb)
         
     def build_pet_list_packet(self, session: PlayerSession) -> PacketWriter:
