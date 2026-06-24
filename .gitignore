@@ -27,7 +27,10 @@ venv/
 # Specific client and debug directories
 scratch/
 cursor/
-data/
+data/*
+!data/eve.Emg
+!data/Compound2.dat
+!data/Skill.dat
 data_backup/
 pic/
 sound/
