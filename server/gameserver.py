@@ -912,10 +912,7 @@ class GameServer:
         elif action_code == 2:
             await self.handle_chat_gm(session, reader)
         elif action_code == 6:
-            if sub_code == 1:
-                await self.handle_stat_allocation(session, reader)
-            else:
-                await self.handle_movement(session, reader)
+            await self.handle_movement(session, reader)
         elif action_code == 20:
             await self.handle_interaction(session, reader)
         elif action_code == 12:
@@ -4106,8 +4103,14 @@ class GameServer:
                             mapped_npc_id = ((mf['id'] & 0xFFFF) ^ 0x5209) - 9
                             pet_id = mapped_npc_id
                             
-                        # Buggy pet ID mappings removed to prevent grape monster -> kiwi monster issue
-                        
+                        # Experimental Pet ID mappings for slimes
+                        if pet_id == 4184: # Banana Monster
+                            pet_id = 17003
+                        elif pet_id == 4185: # Grape Monster
+                            pet_id = 17001
+                        elif pet_id == 4197: # Kiwi Monster
+                            pet_id = 17002
+                            
                         # Send pet capture packet (Must be exactly 54 bytes)
                         pkt = PacketWriter()
                         pkt.write_8(15).write_8(1)
