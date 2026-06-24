@@ -912,7 +912,10 @@ class GameServer:
         elif action_code == 2:
             await self.handle_chat_gm(session, reader)
         elif action_code == 6:
-            await self.handle_movement(session, reader)
+            if sub_code == 1:
+                await self.handle_stat_allocation(session, reader)
+            else:
+                await self.handle_movement(session, reader)
         elif action_code == 20:
             await self.handle_interaction(session, reader)
         elif action_code == 12:
@@ -2243,6 +2246,37 @@ class GameServer:
             npc_id = closest_npc.get('npc_id', 0)
             logger.info(f"[Combat] Auto-aggro triggered: player {session.char_name} walked near hostile {closest_npc['name']} (ID {npc_id}) at distance {min_dist:.1f}")
             await self.enter_battle(session, closest_npc['click_id'], npc_id)
+
+    async def handle_stat_allocation(self, session: PlayerSession, reader: PacketReader):
+        """Handles stat point allocation (AC 6, Sub 1)."""
+        ac = reader.read_8()
+        sub = reader.read_8()
+        stat_type = reader.read_8()
+        
+        # User requested to spend a stat point
+        if getattr(session, 'points', 0) >= 1:
+            session.points -= 1
+            
+            if stat_type == 1:
+                session.str_val += 1
+            elif stat_type == 2:
+                session.con_val += 1
+            elif stat_type == 3:
+                session.int_val += 1
+            elif stat_type == 4:
+                session.wis_val += 1
+            elif stat_type == 5:
+                session.agi_val += 1
+            else:
+                logger.warning(f"[{session.char_name}] Unknown stat allocation type: {stat_type}")
+                session.points += 1 # refund
+                return
+                
+            self.save_player_to_db(session)
+            await self.send_stats_update(session, levelup=True)
+            logger.info(f"[{session.char_name}] Allocated 1 point to stat_type {stat_type}. Remaining points: {session.points}")
+        else:
+            logger.warning(f"[{session.char_name}] Tried to allocate stat without enough points.")
 
     async def handle_movement(self, session: PlayerSession, reader: PacketReader):
         """Processes character walking movement (AC 6)."""
