@@ -2551,15 +2551,22 @@ class GameServer:
                         return
 
                     # Check if NPC has a quest script
-                    # For small click IDs (< 100), restrict them to starter maps (10000 - 10100) to prevent map collisions
+                    # We first try to match by the unique DB ID. If not found, we fallback to the local native_click_id.
+                    # For small click IDs (< 100), we restrict them to starter maps (10000 - 10100) to prevent map collisions.
                     is_starter_map = 10000 <= session.map_id < 10100
-                    should_trigger_quest = (native_click_id in self.quest_scripts) and (native_click_id >= 100 or is_starter_map)
                     
-                    if should_trigger_quest:
-                        script = self.quest_scripts[native_click_id]
+                    quest_trigger_id = None
+                    if db_id and db_id in self.quest_scripts:
+                        quest_trigger_id = db_id
+                    elif native_click_id in self.quest_scripts:
+                        if native_click_id >= 100 or is_starter_map:
+                            quest_trigger_id = native_click_id
+                            
+                    if quest_trigger_id is not None:
+                        script = self.quest_scripts[quest_trigger_id]
                         if len(script) > 0:
-                            logger.info(f"[{session.char_name}] Starting quest script for NPC {native_click_id}")
-                            session.active_quest_id = native_click_id
+                            logger.info(f"[{session.char_name}] Starting quest script for NPC {quest_trigger_id} (clicked {native_click_id})")
+                            session.active_quest_id = quest_trigger_id
                             session.active_quest_step = 0
                             session.active_quest_dialog_counter = 1  # tracks per-step dialog sequence number
                             action = script[0]
