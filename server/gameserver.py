@@ -4234,15 +4234,18 @@ class GameServer:
                     # Normal or Skill damage calculation scaled by Grade
                     hitter_element = skill_elem if skill_id != 10001 else pf['element']
                     
-                    if is_magical:
-                        atk_stat = pf.get('matk', pf['level']*3)
-                        def_stat = mf.get('mdef', mf['level']*2)
-                    else:
-                        atk_stat = pf.get('atk', pf['level']*3)
-                        def_stat = mf.get('def', mf['level']*2)
+                    # Instead of forcing MATK for all elemental skills, use the highest of ATK or MATK
+                    # since physical classes can use elemental physical skills.
+                    best_atk = max(pf.get('atk', pf['level']*3), pf.get('matk', pf['level']*3))
+                    def_stat = mf.get('def', mf['level']*2)
                     
                     # Apply skill and grade multipliers
-                    modified_atk = int(round(atk_stat * multiplier * grade_multiplier))
+                    modified_atk = int(round(best_atk * multiplier * grade_multiplier))
+                    
+                    # Add base skill damage scaling (so skills always hit noticeably harder than normal attacks)
+                    if skill_id != 10001:
+                        modified_atk += int(15 * multiplier)
+                        
                     dmg_to_mon = calculate_atk_damage(modified_atk, def_stat, hitter_element, mf['element'])
                     
                     if action == 'defend':
