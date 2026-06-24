@@ -950,66 +950,55 @@ class GameServer:
         if sub == 1:
             target_type = reader.read_8()
             target_slot = reader.read_8()
-            max_stats = reader.read_8()
+            stat_id = reader.read_8()
+            amount = reader.read_32()
             
-            logger.info(f"[AC8] Allocating stats: target_type={target_type}, target_slot={target_slot}, max_stats={max_stats}")
+            logger.info(f"[AC8] Allocating stats: target_type={target_type}, target_slot={target_slot}, stat_id={stat_id}, amount={amount}")
             
-            total_allocated = 0
-            allocations = []
-            for _ in range(max_stats):
-                if reader.remaining_bytes() < 5:
-                    break
-                stat_id = reader.read_8()
-                amount = reader.read_32()
-                allocations.append((stat_id, amount))
-                total_allocated += amount
-                
             # Verify points
-            if target_type == 1: # Player
-                if session.points >= total_allocated:
-                    session.points -= total_allocated
-                    for stat_id, amount in allocations:
-                        if stat_id == 28: # STR
-                            session._str_val += amount
-                        elif stat_id == 29: # CON
-                            session._con_val += amount
-                        elif stat_id == 27: # INT
-                            session._int_val += amount
-                        elif stat_id == 33: # WIS
-                            session._wis_val += amount
-                        elif stat_id == 30: # AGI
-                            session._agi_val += amount
+            if target_type == 0: # Player
+                if session.points >= amount:
+                    session.points -= amount
+                    if stat_id == 28: # STR
+                        session._str_val += amount
+                    elif stat_id == 29: # CON
+                        session._con_val += amount
+                    elif stat_id == 27: # INT
+                        session._int_val += amount
+                    elif stat_id == 33: # WIS
+                        session._wis_val += amount
+                    elif stat_id == 30: # AGI
+                        session._agi_val += amount
                     
                     self.save_player_to_db(session)
                     await self.send_stats_update(session)
-                    logger.info(f"[AC8] Player allocated stats: {allocations}. Remaining points: {session.points}")
+                    logger.info(f"[AC8] Player allocated stat {stat_id} by {amount}. Remaining points: {session.points}")
                 else:
-                    logger.warning(f"[AC8] Player tried to allocate {total_allocated} points but only has {session.points}")
+                    logger.warning(f"[AC8] Player tried to allocate {amount} points but only has {session.points}")
             
-            elif target_type == 2: # Pet
+            elif target_type == 1: # Pet
                 if 1 <= target_slot <= len(session.pets):
                     pet = session.pets[target_slot - 1]
                     pet_potential = pet.get("potential", 0)
-                    if pet_potential >= total_allocated:
-                        pet["potential"] = pet_potential - total_allocated
-                        for stat_id, amount in allocations:
-                            if stat_id == 28: # STR
-                                pet["str"] = pet.get("str", 5) + amount
-                            elif stat_id == 29: # CON
-                                pet["con"] = pet.get("con", 5) + amount
-                            elif stat_id == 27: # INT
-                                pet["int"] = pet.get("int", 5) + amount
-                            elif stat_id == 33: # WIS
-                                pet["wis"] = pet.get("wis", 5) + amount
-                            elif stat_id == 30: # AGI
-                                pet["agi"] = pet.get("agi", 5) + amount
+                    if pet_potential >= amount:
+                        pet["potential"] = pet_potential - amount
+                        if stat_id == 28: # STR
+                            pet["str"] = pet.get("str", 5) + amount
+                        elif stat_id == 29: # CON
+                            pet["con"] = pet.get("con", 5) + amount
+                        elif stat_id == 27: # INT
+                            pet["int"] = pet.get("int", 5) + amount
+                        elif stat_id == 33: # WIS
+                            pet["wis"] = pet.get("wis", 5) + amount
+                        elif stat_id == 30: # AGI
+                            pet["agi"] = pet.get("agi", 5) + amount
                         
                         self.save_player_to_db(session)
                         await self.send_pet_stats(session, target_slot)
                         await self.send_pet_list(session)
-                        logger.info(f"[AC8] Pet slot {target_slot} allocated stats: {allocations}. Remaining potential: {pet['potential']}")
+                        logger.info(f"[AC8] Pet slot {target_slot} allocated stat {stat_id} by {amount}. Remaining potential: {pet['potential']}")
                     else:
-                        logger.warning(f"[AC8] Pet tried to allocate {total_allocated} points but only has {pet_potential}")
+                        logger.warning(f"[AC8] Pet tried to allocate {amount} points but only has {pet_potential}")
 
     async def send_friend_list(self, session: PlayerSession):
         """Sends the character's complete friend list (AC 14 Sub 5) to the client."""
@@ -4117,10 +4106,8 @@ class GameServer:
                             mapped_npc_id = ((mf['id'] & 0xFFFF) ^ 0x5209) - 9
                             pet_id = mapped_npc_id
                             
-                        # Buggy pet ID mappings
-                        if pet_id == 4185 or pet_id == 4197:
-                            pet_id = 17002
-
+                        # Buggy pet ID mappings removed to prevent grape monster -> kiwi monster issue
+                        
                         # Send pet capture packet (Must be exactly 54 bytes)
                         pkt = PacketWriter()
                         pkt.write_8(15).write_8(1)
