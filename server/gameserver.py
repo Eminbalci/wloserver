@@ -81,15 +81,15 @@ def add_item_to_inventory(session, item_id: int, amount: int = 1, slot: int = No
                 slot = s
                 break
     if slot is None or slot > 50:
-        return False
+        return None
     
     existing = get_item_at_slot(session, slot)
     if existing:
         if existing['item_id'] == item_id:
             existing['amount'] = existing.get('amount', 1) + amount
-            return True
+            return slot
         else:
-            return False
+            return None
             
     session.inventory.append({
         "item_id": item_id,
@@ -97,7 +97,7 @@ def add_item_to_inventory(session, item_id: int, amount: int = 1, slot: int = No
         "damage": 0,
         "slot": slot
     })
-    return True
+    return slot
 
 def get_body_stat_bonus(body: int, head: int, stat_name: str, level: int) -> int:
     bonus = 0
@@ -2889,9 +2889,8 @@ class GameServer:
                 equip_id = session.equipments[slot_idx]
                 
                 if equip_id > 0:
-                    # Try to add the item to inventory at dst
-                    success = add_item_to_inventory(session, equip_id, amount=1, slot=dst)
-                    if success:
+                    slot = add_item_to_inventory(session, equip_id, amount=1, slot=dst)
+                    if slot is not None:
                         # Clear the equipment slot
                         session.equipments[slot_idx] = 0
                         
@@ -3043,12 +3042,13 @@ class GameServer:
                         await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
                         success = True
                     else:
-                        success = add_item_to_inventory(session, item_id, amount=qnt)
-                        if success:
+                        slot = add_item_to_inventory(session, item_id, amount=qnt)
+                        if slot is not None:
                             # Send item add success packet to client:
                             item_pkt = PacketWriter()
-                            item_pkt.write_8(23).write_8(6).write_16(item_id).write_16(qnt).write_bytes(bytes(27))
+                            item_pkt.write_8(23).write_8(6).write_8(slot).write_16(item_id).write_8(qnt).write_8(0).write_bytes(bytes(24))
                             await session.send_packet(item_pkt)
+                            success = True
                             
                     if success:
                         # Clear ground slot
@@ -3294,22 +3294,21 @@ class GameServer:
                     item_id = int(words[2])
                     amount = int(words[3]) if len(words) >= 4 else 1
                     
-                    if len(session.inventory) < 50:
-                        success = add_item_to_inventory(session, item_id, amount=amount)
-                        if success:
-                            self.save_player_to_db(session)
+                    slot = add_item_to_inventory(session, item_id, amount=amount)
+                    if slot is not None:
+                        self.save_player_to_db(session)
+                        
+                        # Send item add success packet to client:
+                        # [23, 6, slot(8), item_id (uint16), ammt (8), 0, 24 bytes of zero]
+                        item_pkt = PacketWriter()
+                        item_pkt.write_8(23).write_8(6).write_8(slot).write_16(item_id).write_8(amount).write_8(0).write_bytes(bytes(24))
+                        await session.send_packet(item_pkt)
                             
-                            # Send item add success packet to client:
-                            # [23, 6, item_id (uint16), ammt (uint16), 27 bytes of zero]
-                            item_pkt = PacketWriter()
-                            item_pkt.write_8(23).write_8(6).write_16(item_id).write_16(amount).write_bytes(bytes(27))
-                            await session.send_packet(item_pkt)
-                            
-                            # System chat confirmation
-                            sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
-                                f"Item {item_id} added to inventory."
-                            )
-                            await session.send_packet(sys_msg)
+                        # System chat confirmation
+                        sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
+                            f"Item {item_id} added to inventory."
+                        )
+                        await session.send_packet(sys_msg)
                 except ValueError:
                     pass
             elif words[0] == ":level" and len(words) >= 2:
@@ -4465,12 +4464,13 @@ class GameServer:
                     break # Sadece tek bir eşya düşürme limiti (WLO standart)
 
             if dropped_item_id > 0:
-                if add_item_to_inventory(session, dropped_item_id, amount=dropped_amount):
+                slot = add_item_to_inventory(session, dropped_item_id, amount=dropped_amount)
+                if slot is not None:
                     self.save_player_to_db(session)
                     
-                    # AC 23:6 - Eşya ekleme paketi (16-bit item_id, 16-bit amount, 27 bytes padding)
+                    # AC 23:6 - Eşya ekleme paketi (slot, item_id, amount, ...)
                     item_pkt = PacketWriter()
-                    item_pkt.write_8(23).write_8(6).write_16(dropped_item_id).write_16(dropped_amount).write_bytes(bytes(27))
+                    item_pkt.write_8(23).write_8(6).write_8(slot).write_16(dropped_item_id).write_8(dropped_amount).write_8(0).write_bytes(bytes(24))
                     await session.send_packet(item_pkt)
                     
                     # AC 53:4 - Eşya uçma animasyonu (src_x, src_y -> dst_x, dst_y)
