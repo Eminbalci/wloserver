@@ -4105,9 +4105,9 @@ class GameServer:
                             
                         # Experimental Pet ID mappings for slimes
                         if pet_id == 4184: # Banana Monster
-                            pet_id = 17003
+                            pet_id = 17005
                         elif pet_id == 4185: # Grape Monster
-                            pet_id = 17001
+                            pet_id = 17004
                         elif pet_id == 4197: # Kiwi Monster
                             pet_id = 17002
                             
