@@ -1,2 +1,5 @@
 #!/bin/bash
-python -m server.main
+echo "Installing required packages..."
+pip install -r requirements.txt
+echo "Starting server..."
+python3 -m server.main

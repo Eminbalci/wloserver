@@ -1,3 +1,6 @@
 @echo off
+echo Installing required packages...
+pip install -r requirements.txt
+echo Starting server...
 python -m server.main
 pause
