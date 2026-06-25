@@ -3046,7 +3046,7 @@ class GameServer:
                         if slot is not None:
                             # Send item add success packet to client:
                             item_pkt = PacketWriter()
-                            item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(item_id).write_8(qnt).write_8(0).write_bytes(bytes(24))
+                            item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(qnt).write_16(item_id).write_bytes(bytes(25))
                             await session.send_packet(item_pkt)
                             success = True
                             
@@ -3301,7 +3301,7 @@ class GameServer:
                         # Send item add success packet to client:
                         # [23, 6, slot(8), item_id (uint16), ammt (8), 0, 24 bytes of zero]
                         item_pkt = PacketWriter()
-                        item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(item_id).write_8(amount).write_8(0).write_bytes(bytes(24))
+                        item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(amount).write_16(item_id).write_bytes(bytes(25))
                         await session.send_packet(item_pkt)
                             
                         # System chat confirmation
@@ -4459,7 +4459,7 @@ class GameServer:
             for rule in drop_rules:
                 chance = rule.get("chance", 0.0)
                 if random.random() < chance:
-                    dropped_item_id = 10002 # FORCE ITEM 10002 FOR TESTING
+                    dropped_item_id = 32945 # FORCE GRAPE (32945) FOR TESTING
                     dropped_amount = rule.get("amount", 1)
                     break # Sadece tek bir eşya düşürme limiti (WLO standart)
 
@@ -4470,7 +4470,7 @@ class GameServer:
                     
                     # AC 23:6 - Eşya ekleme paketi (slot, item_id, amount, ...)
                     item_pkt = PacketWriter()
-                    item_pkt.write_8(23).write_8(6).write_8(1).write_8(slot).write_16(dropped_item_id).write_8(dropped_amount).write_8(0).write_bytes(bytes(24))
+                    item_pkt.write_8(23).write_8(6).write_8(1).write_8(slot).write_16(dropped_amount).write_16(dropped_item_id).write_bytes(bytes(25))
                     await session.send_packet(item_pkt)
                     
                     # AC 53:4 - Eşya uçma animasyonu (src_x, src_y -> dst_x, dst_y)
@@ -4697,7 +4697,7 @@ class GameServer:
                     self.save_player_to_db(session)
                     await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
                     item_pkt = PacketWriter()
-                    item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(item_id).write_8(amount).write_8(0).write_bytes(bytes(24))
+                    item_pkt.write_8(23).write_8(6).write_8(0).write_8(slot).write_16(amount).write_16(item_id).write_bytes(bytes(25))
                     await session.send_packet(item_pkt)
                     buy_confirm = PacketWriter()
                     buy_confirm.write_8(54).write_8(3).write_8(shop_id).write_8(tab_id).write_16(item_id).write_8(amount)
