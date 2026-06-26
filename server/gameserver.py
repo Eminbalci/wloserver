@@ -782,18 +782,19 @@ class GameServer:
             existing_ids.add(stunt_id)
             new_skills_added = True
             
-        for sk in self.all_skills_db:
-            sk_id = sk['id']
-            # Only add if it belongs to player's element and is not already learned
-            # Earth=1, Water=2, Fire=3, Wind=4
-            if sk['element'] == session.element and sk_id not in existing_ids:
-                session.skills.append({"skill_id": sk_id, "grade": 1, "exp": 0})
-                existing_ids.add(sk_id)
-                new_skills_added = True
+        # Commented out: Stop automatically unlocking all skills of the element
+        # for sk in self.all_skills_db:
+        #     sk_id = sk['id']
+        #     # Only add if it belongs to player's element and is not already learned
+        #     # Earth=1, Water=2, Fire=3, Wind=4
+        #     if sk['element'] == session.element and sk_id not in existing_ids:
+        #         session.skills.append({"skill_id": sk_id, "grade": 1, "exp": 0})
+        #         existing_ids.add(sk_id)
+        #         new_skills_added = True
                 
         if new_skills_added:
             self.save_player_to_db(session)
-            logger.info(f"[SKILL] Added {len(session.skills)} skills to {session.char_name} (element={session.element})")
+            logger.info(f"[SKILL] Added starter skills to {session.char_name} (element={session.element})")
 
     def save_player_to_db(self, session: PlayerSession):
         """Saves session state to database."""
@@ -2440,8 +2441,10 @@ class GameServer:
         pkt_62.write_8(6).write_8(2).write_8(1)
         await session.send_packet(pkt_62)
 
-        # ── 2. AC 11:250 – SADECE oyuncu (role=1, ftype=2) ─────────────────
-        bg_id = 0x0850 # Match PCAP bg_id 2128
+        bg_id = getattr(session, 'battle_bg_id', session.map_id)
+        if hasattr(session, 'battle_bg_id'):
+            del session.battle_bg_id
+        
         p250 = PacketWriter()
         p250.write_8(11).write_8(250)
         p250.write_16(bg_id)

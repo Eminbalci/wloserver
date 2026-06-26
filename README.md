@@ -40,3 +40,9 @@ You can type these commands in the game chat to modify your character:
 - `:skill <skill_id> [grade]` - Add or level up a skill.
 - `:clear` - Clear all items from your inventory.
 - `:propshop` - Open the property shop.
+
+## Recent Fixes
+- Fixed the Troll quest battle (NPC 17281). Adjusted the background to default, set the correct battle sprite ID using XOR encryption logic (25461 -> 4468), and updated the win map destination to Map 11035.
+- Addressed skill logic initialization. Disabled default unlock logic to implement stat-based skill mechanics.
+- Fixed a bug where given pets via Web Admin lost their level after a battle due to missing EXP initialization. Given pets now receive their correct cumulative EXP.
+- Added elemental skill usage for monsters in PvE battles. Monsters now have a 30% chance to cast elemental skills instead of basic attacks.

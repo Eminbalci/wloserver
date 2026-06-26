@@ -20,7 +20,7 @@ async def handle(server, session, reader):
             await session.send_packet(fail_pkt)
             return
         
-        logger.info(f"[Auth] Username '{username}' (version {client_version}) attempting login...")
+        logger.info(f"[Auth] Username '{username}' attempting login...")
         
         # Check database credentials
         user_data = server.db.verify_user(username, password)

@@ -122,9 +122,17 @@ class BattleManager:
             living = [o for o in opponents if not o.is_dead]
             if living:
                 tgt = random.choice(living)
+                skill_id = 0
+                if random.random() < 0.3:  # 30% chance to use skill
+                    element = getattr(f, 'element', 0)
+                    if element == 1: skill_id = random.choice([15085, 30113])
+                    elif element == 2: skill_id = random.choice([15091, 30079])
+                    elif element == 3: skill_id = random.choice([11016, 30112])
+                    elif element == 4: skill_id = random.choice([11007, 30111])
+
                 f.queued_action = {
                     "type":     "attack",
-                    "skill_id": 0,
+                    "skill_id": skill_id,
                     "target_x": tgt.x,
                     "target_y": tgt.y,
                 }

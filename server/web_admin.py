@@ -2937,7 +2937,7 @@ class WebAdminServer:
                     pet_data = {
                         "pet_id": pet_id,
                         "level": lvl,
-                        "exp": 0,
+                        "exp": self.game_server.get_cumulative_exp_for_level(lvl, False),
                         "amity": 100,
                         "reborn": 0,
                         "potential": 0,
@@ -2947,7 +2947,8 @@ class WebAdminServer:
                         "wis": base_wis,
                         "agi": base_agi,
                         "hp": max_hp,
-                        "sp": max_sp
+                        "sp": max_sp,
+                        "skills": []
                     }
                     session.pets.append(pet_data)
                     self.game_server.save_player_to_db(session)
@@ -3073,6 +3074,7 @@ class WebAdminServer:
             con = pet['con']; wis = pet['wis']
             pet['hp'] = int(round(((new_level ** 0.35) * con * 2) + new_level + (con * 2) + 180))
             pet['sp'] = int(round(((new_level ** 0.3) * wis * 3.2) + new_level + (wis * 2) + 94))
+            pet['exp'] = self.game_server.get_cumulative_exp_for_level(new_level, False)
             self.game_server.save_player_to_db(session)
             await self.game_server.send_pet_list(session)
             logger.info(f"[WebAdmin] Set pet slot {slot} level={new_level} for {name}")
