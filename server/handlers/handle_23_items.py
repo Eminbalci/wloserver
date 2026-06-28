@@ -668,5 +668,79 @@ async def handle(server, session, reader):
             # Send Success: Opcode 15, sub 23, status 2 (Vehicle repaired)
             await session.send_packet(PacketWriter().write_8(15).write_8(23).write_8(2))
             
+    elif sub == 14:  # Compound / Alchemy Request
+        # Payload: [23, 14, count, slot1, slot2, ...]
+        count = reader.read_8()
+        slots = []
+        for _ in range(count):
+            slots.append(reader.read_8())
+            
+        logger.info(f"[{session.char_name}] Requesting Compound with slots: {slots}")
+        
+        # Verify items exist in these slots
+        valid_items = []
+        for s in slots:
+            itm = get_item_at_slot(session, s)
+            if itm:
+                valid_items.append((s, itm['item_id']))
+                
+        if len(valid_items) == count and count >= 2:
+            import random
+            
+            # 1. Deduct items (AC 23 Sub 9)
+            for s, item_id in valid_items:
+                remove_item_at_slot(session, s, 1)
+                deduct_pkt = PacketWriter().write_8(23).write_8(9).write_8(s).write_8(1)
+                await session.send_packet(deduct_pkt)
+                
+            # 2. Generate outcome item (Random or fixed for now)
+            # In a real setup, calculate based on rank and alchemy formulas.
+            # PCAP uses 106660 (which is an item ID). We will use a random generic item.
+            outcome_item_id = 106660  # e.g. Black Clay or generic alchemy outcome
+            
+            # Add to inventory
+            new_slot = add_item_to_inventory(session, outcome_item_id, 1)
+            
+            if new_slot is not None:
+                server.save_player_to_db(session)
+                
+                # 3. Send AC 23 Sub 8 (Add Compound Result)
+                # Payload: 17 08 slot(1 byte) item_id(4 bytes) + padding(28 bytes)
+                res_pkt = PacketWriter().write_8(23).write_8(8)
+                res_pkt.write_8(new_slot).write_32(outcome_item_id)
+                res_pkt.write_bytes(bytes(28))
+                await session.send_packet(res_pkt)
+                
+                # 4. Send AC 23 Sub 13 (Compound Success Window)
+                # Payload: 17 0D item_id(4 bytes) slot(1 byte)
+                anim_pkt = PacketWriter().write_8(23).write_8(13)
+                anim_pkt.write_32(outcome_item_id).write_8(new_slot)
+                await session.send_packet(anim_pkt)
+                
+                logger.info(f"[{session.char_name}] Compounding successful: {outcome_item_id} added at slot {new_slot}")
+            else:
+                # Inventory full during compounding? Usually materials are consumed first, so there should be space.
+                logger.warning(f"[{session.char_name}] Compounding failed due to full inventory after deduction.")
+        else:
+            logger.warning(f"[{session.char_name}] Compounding failed: Missing items in slots.")
+
+    elif sub == 15:  # Use Tent
+        item_id = reader.read_32()
+        logger.info(f"[{session.char_name}] Requesting to open tent (Item ID: {item_id})")
+        
+        # Tent spawn broadcast: AC 65 Sub 1
+        # Format: [65, 1, char_id(4), X(2), Y(2), unk(2), skin(4), unk(4)]
+        tent_pkt = PacketWriter().write_8(65).write_8(1)
+        tent_pkt.write_32(session.char_id)
+        tent_pkt.write_16(session.x)
+        tent_pkt.write_16(session.y)
+        tent_pkt.write_16(0)     # Padding / Unknown
+        tent_pkt.write_32(1115)  # Default Tent Skin ID
+        tent_pkt.write_32(0)     # Padding / Unknown
+        
+        # Broadcast the tent appearance to everyone on the map including the owner
+        server.broadcast_to_map(session.map_id, tent_pkt)
+        logger.info(f"[{session.char_name}] Spawned Tent at {session.x}, {session.y}")
+
     else:
         logger.info(f"Unhandled AC 23 Sub-Code: {sub}, payload: {reader.data.hex()}")

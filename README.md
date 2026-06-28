@@ -187,3 +187,15 @@ You can type these commands in the game chat to modify your character:
 - Sunucu güncellendi. Simya (handle_23_items.py sub 14) birleştirme işleminde oyuncunun Junior Alchemy (ID 15998) yeteneğine sahip olması durumunda elde edilen eşya rankına pozitif bonus verilmesi sağlandı.
 
 - Sunucu güncellendi. Eşya işlemleri (Wear sub 11, Drop sub 3, Destroy sub 124, Compound sub 14) esnasında kilitli eşya doğrulaması (Item locked, can\'t use) entegre edildi.
+
+- Harita taşıt kısıtlamaları (Transports not allowed) istemci tarafında sabit kodlu (hardcoded) olduğu için, bunu aşmak amacıyla sunucu tarafında :ride ve :unride GM komutları eklendi. Bu komutlar taşıta binme işlemini istemcinin kontrolünü atlayarak doğrudan gerçekleştirir.
+
+- Pet binme (Pet Ride - AC 15 Sub 11) ve Pet inme (Pet Rest - AC 15 Sub 12) paketlerinin sunucu yanıtları, PCAP analizlerine uygun olarak (AC 15 Sub 16 ve AC 15 Sub 17 formatında) güncellendi.
+
+- Şans Çekilişi (Lucky Draw - AC 104 Sub 1) sistemi, gönderilen PCAP analizine uygun olarak handle_104_minigame.py içerisine eklendi. Çekiliş sonucu eşyalar 32-bit (ID) formatında envantere eklenerek istemciye iletilir.
+
+- Çadır Sistemi Eklendi: handle_23_items.py (Çadır açma - AC 23 Sub 15), handle_62_tent.py (Çadıra girme ve mobilya yerleştirme - AC 62 Sub 61, Sub 3), handle_65_action.py (Çadır işlemleri - AC 65) implementasyonları yapıldı.
+
+- Sunucu güncellendi. Çadır içi üretim (crafting) mantığı handle_64_crafting.py dosyasına entegre edildi. Paketteki hedef tarif id'si, materyal slot ve adet sayıları okunarak doğru eşyanın verilmesi, doğru slotlardaki materyallerin envanterden silinmesi ve üretim süresi zamanlayıcı paketlerinin doğru gönderilmesi (AC 64 Sub 1, 10 ve 2) sağlandı. Ayrıca Compound2.dat içerisindeki üretim tariflerini çözen extract_recipes.py aracı eklenerek recipes.json dosyası oluşturuldu.
+
+- Sunucu güncellendi. Nesne Market (Item Mall) paket dinleyicisi `handle_34_itemmall.py` oluşturuldu. AC 34 dinlenerek istemciye AC 54 (Kategori onay paketi) ve AC 35 (Cüzdan bakiye paketi) gönderilmesi sağlandı.

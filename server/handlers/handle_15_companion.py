@@ -126,14 +126,15 @@ async def handle(server, session, reader):
                     p["riding"] = (idx == slot - 1)
                     p["in_battle"] = False
                 
-                # Send updated local spawn to owner (so they see themselves riding)
-                await session.send_packet(server.build_local_char_spawn(session))
-                # Broadcast remote spawn to other players on map (so they see us riding)
-                server.broadcast_to_map(session.map_id, server.build_remote_char_spawn(session), exclude_session=session)
+                # Send ride confirmation/broadcast: AC 15 Sub 16
+                # Format: [15, 16, slot(1), char_id(4), pet_id(4), 26 zeros]
+                ride_pkt = PacketWriter().write_8(15).write_8(16).write_8(slot)
+                ride_pkt.write_32(session.char_id).write_32(pet_id)
+                ride_pkt.write_bytes(b'\x00' * 26)
                 
-                # Broadcast appearance refresh
-                refresh = PacketWriter().write_8(5).write_8(8).write_32(session.char_id).write_8(0)
-                server.broadcast_to_map(session.map_id, refresh)
+                # Send to player and broadcast to map
+                await session.send_packet(ride_pkt)
+                server.broadcast_to_map(session.map_id, ride_pkt, exclude_session=session)
                 
                 # Save changes
                 try:
@@ -151,18 +152,13 @@ async def handle(server, session, reader):
             if pet.get("pet_id") == pet_id:
                 pet["riding"] = False
                 
-                # Send updated local spawn to owner (so they see themselves off the mount)
-                await session.send_packet(server.build_local_char_spawn(session))
-                # Broadcast remote spawn to other players (so they see us off the mount)
-                server.broadcast_to_map(session.map_id, server.build_remote_char_spawn(session), exclude_session=session)
+                # Send confirmation: AC 15 Sub 17
+                # Format: [15, 17, char_id(4)]
+                confirm = PacketWriter().write_8(15).write_8(17).write_32(session.char_id)
                 
-                # Send confirmation: AC 15 Sub 17 with pet entity ID (char_id + 25)
-                confirm = PacketWriter().write_8(15).write_8(17).write_32(session.char_id + 25)
+                # Send to player and broadcast to map
                 await session.send_packet(confirm)
-                
-                # Broadcast appearance refresh
-                refresh = PacketWriter().write_8(5).write_8(8).write_32(session.char_id).write_8(0)
-                server.broadcast_to_map(session.map_id, refresh)
+                server.broadcast_to_map(session.map_id, confirm, exclude_session=session)
                 
                 # Save changes
                 try:

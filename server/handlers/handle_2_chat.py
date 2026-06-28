@@ -120,7 +120,7 @@ async def handle(server, session, reader):
                         server.save_player_to_db(session)
                         
                         item_pkt = PacketWriter()
-                        item_pkt.write_8(23).write_8(6).write_16(item_id).write_8(amount).write_bytes(bytes(26))
+                        item_pkt.write_8(23).write_8(6).write_32(item_id).write_8(amount).write_bytes(bytes(26))
                         await session.send_packet(item_pkt)
                             
                         # System chat confirmation
