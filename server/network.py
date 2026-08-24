@@ -56,6 +56,9 @@ class PacketReader:
     def remaining_bytes(self) -> int:
         return max(0, len(self.data) - self.offset)
 
+    def remaining(self) -> int:
+        return self.remaining_bytes()
+
 
 class PacketWriter:
     """Helper to build game packets in the correct binary format."""

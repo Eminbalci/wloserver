@@ -16,8 +16,8 @@ async def handle(server, session, reader):
         
         # Find target player session
         target = None
-        for act in server.active_sessions:
-            if act.char_name == target_name:
+        for act in server.sessions.values():
+            if getattr(act, 'char_name', '') == target_name:
                 target = act
                 break
                 
@@ -46,8 +46,8 @@ async def handle(server, session, reader):
         else:
             # Find target player by CharID
             target = None
-            for act in server.active_sessions:
-                if act.char_id == target_char_id:
+            for act in server.sessions.values():
+                if getattr(act, 'char_id', 0) == target_char_id:
                     target = act
                     break
                     
@@ -68,8 +68,8 @@ async def handle(server, session, reader):
         
         # Find requester
         requester = None
-        for act in server.active_sessions:
-            if act.char_id == requester_char_id:
+        for act in server.sessions.values():
+            if getattr(act, 'char_id', 0) == requester_char_id:
                 requester = act
                 break
                 

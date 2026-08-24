@@ -30,6 +30,11 @@ async def handle(server, session, reader):
             logger.warning(f"[{session.char_name}] Action {sub} blocked: Remote control active.")
             await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't perform during remote control"))
             return
+        if getattr(session, 'bathing', False):
+            logger.warning(f"[{session.char_name}] Action {sub} blocked: Player is currently bathing.")
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't use in bath"))
+            return
+
     
     if sub == 54:
         # Client sends this as acknowledgment after receiving the login/warp complete signal (5, 4), or to stop fishing
@@ -44,6 +49,10 @@ async def handle(server, session, reader):
             session.in_map = True
             
     elif sub == 53:  # Start fishing request (23, 53)
+        if getattr(session, 'is_stall_active', False):
+            logger.warning(f"[{session.char_name}] Fishing blocked: Player has an active stall.")
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Cancel Stall to fish"))
+            return
         logger.info(f"[{session.char_name}] Start fishing request received (23, 53)")
         session.is_fishing = True
         # Echo success response for fishing activation: [23, 53, 1]
@@ -117,7 +126,7 @@ async def handle(server, session, reader):
             props = server.item_properties.get(str(item_id))
             if props and session.level < props.get('rank', 1):
                 logger.warning(f"[{session.char_name}] Level too low to equip {item_id}: level={session.level}, required={props.get('rank')}")
-                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Level is not enough"))
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("LV is low to equip"))
                 return
 
             slot_idx = get_equip_slot(item_id)
@@ -191,6 +200,11 @@ async def handle(server, session, reader):
                     server.broadcast_to_map(session.map_id, refresh)
                     
     elif sub == 3:  # Drop item on ground
+        if getattr(session, 'bathing', False):
+            logger.warning(f"[{session.char_name}] Drop blocked: Player is currently bathing.")
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Don't litter In Hot Springs!"))
+            return
+            
         pos = reader.read_8()
         qnt = reader.read_8()
         if reader.offset < len(reader.data):
@@ -584,9 +598,23 @@ async def handle(server, session, reader):
             logger.warning(f"[{session.char_name}] Compounding failed because inventory is full.")
             
     elif sub == 65:  # Street Stall Open/Activate Request (0x17, 0x41)
+        if getattr(session, 'riding_vehicle', False):
+            logger.warning(f"[{session.char_name}] Stall blocked: Player is riding a vehicle.")
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't use when mounted"))
+            return
+        if getattr(session, 'is_fishing', False):
+            logger.warning(f"[{session.char_name}] Stall blocked: Player is fishing.")
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Fishing, can't act"))
+            return
+        session.is_stall_active = True
         logger.info(f"[{session.char_name}] Open Street Stall requested")
         # Echo success response for stall activation
         await session.send_packet(PacketWriter().write_8(23).write_8(65).write_8(1))
+        
+    elif sub == 66:  # Close Street Stall Request
+        session.is_stall_active = False
+        logger.info(f"[{session.char_name}] Street Stall closed")
+        await session.send_packet(PacketWriter().write_8(23).write_8(66).write_8(1))
         
     elif sub == 99:  # Open NPC Shop Request (0x17, 99)
         npc_id = reader.read_16() if reader.remaining_bytes() >= 2 else 0
@@ -595,6 +623,14 @@ async def handle(server, session, reader):
         await session.send_packet(PacketWriter().write_8(23).write_8(99).write_16(npc_id).write_8(1))
         
     elif sub == 51:  # Board / Ride Vehicle
+        if getattr(session, 'is_stall_active', False):
+            logger.warning(f"[{session.char_name}] Board vehicle blocked: Active stall.")
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't mount with Stall"))
+            return
+        if getattr(session, 'bathing', False):
+            logger.warning(f"[{session.char_name}] Board vehicle blocked: Bathing.")
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't mount in bath"))
+            return
         vehicle_type = reader.read_8() if reader.remaining_bytes() > 0 else 1
         session.riding_vehicle = True
         session.riding_vehicle_type = vehicle_type
@@ -725,22 +761,11 @@ async def handle(server, session, reader):
             logger.warning(f"[{session.char_name}] Compounding failed: Missing items in slots.")
 
     elif sub == 15:  # Use Tent
-        item_id = reader.read_32()
+        item_id = reader.read_32() if reader.remaining_bytes() >= 4 else 38001
         logger.info(f"[{session.char_name}] Requesting to open tent (Item ID: {item_id})")
-        
-        # Tent spawn broadcast: AC 65 Sub 1
-        # Format: [65, 1, char_id(4), X(2), Y(2), unk(2), skin(4), unk(4)]
-        tent_pkt = PacketWriter().write_8(65).write_8(1)
-        tent_pkt.write_32(session.char_id)
-        tent_pkt.write_16(session.x)
-        tent_pkt.write_16(session.y)
-        tent_pkt.write_16(0)     # Padding / Unknown
-        tent_pkt.write_32(1115)  # Default Tent Skin ID
-        tent_pkt.write_32(0)     # Padding / Unknown
-        
-        # Broadcast the tent appearance to everyone on the map including the owner
-        server.broadcast_to_map(session.map_id, tent_pkt)
-        logger.info(f"[{session.char_name}] Spawned Tent at {session.x}, {session.y}")
+        from server.tent import GLOBAL_TENT_MANAGER
+        tent = GLOBAL_TENT_MANAGER.get_or_create_tent(session.char_id)
+        GLOBAL_TENT_MANAGER.pitch_tent_on_map(server, session, tent.tent_type)
 
     else:
         logger.info(f"Unhandled AC 23 Sub-Code: {sub}, payload: {reader.data.hex()}")

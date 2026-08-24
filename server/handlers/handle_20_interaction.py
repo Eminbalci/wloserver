@@ -7,6 +7,66 @@ logger = logging.getLogger("WLO_Server")
 
 ACTION_CODES = [20]
 
+
+import re
+
+def is_wild_monster(npc_template_id: int, name: str, map_id: int = 0) -> bool:
+    """
+    Accurately identifies whether an NPC is a wild hostile mob or a peaceful NPC/townsperson/prop.
+    Ported from authentic WLO C# QuestNpc.IsWildMonster logic:
+    - 10000-12999: Story characters, Companions, Sailors (Never wild monsters)
+    - 13000-13999: Shops (Props, Weapon, Armor)
+    - 14000-14999: Human Villagers, Townspeople, Passengers, Guards, Elders (e.g. Ashley 14013)
+    - 15000-16999: Story / Quest Actors
+    - 17000-17999: Authentic wild roaming monsters (e.g. Jellyfish, Spiders, Wolves)
+    - 19000-24999: Props, Gathering nodes, Chests, Furniture
+    - 25000+: Story cutscene actors
+    """
+    if not npc_template_id:
+        return False
+
+    name_lower = (name or "").lower().strip()
+
+    # 1. Peaceful / Human / Service NPC keywords
+    peaceful_keywords = [
+        "shop", "store", "market", "keep", "storage", "bank", "vault", "atm", "exchanger",
+        "doctor", "witch", "clinic", "hotel", "inn", "guidepost", "signpost", "statue",
+        "villager", "citizen", "resident", "grandma", "grandmother", "grandfather",
+        "elder", "mayor", "chief", "guard", "soldier", "knight", "merchant",
+        "vendor", "trader", "peddler", "innkeeper", "waitress", "nurse", "priest",
+        "monk", "clerk", "sailor", "captain", "chef", "cook", "maid", "blacksmith",
+        "carpenter", "hunter", "miner", "guide", "girl", "boy", "kid", "child",
+        "man", "woman", "lady", "sir", "passenger", "traveler", "tourist", "guest",
+        "friend", "robinson", "ashley", "daniel", "iris", "vanessa", "breillat",
+        "jessica", "konno", "maria", "karin", "sid", "more", "kurogane", "nina",
+        "betty", "rocco", "niss", "elin", "cliff", "sam", "shizune", "clive", "xaolan",
+        "chest", "box", "crate", "barrel", "pot", "wood", "stone", "ore", "tree", "mine"
+    ]
+    for k in peaceful_keywords:
+        if len(k) <= 3:
+            if re.search(r'\b' + re.escape(k) + r'\b', name_lower):
+                return False
+        else:
+            if k in name_lower:
+                return False
+
+    # 2. Template ID Ranges in WLO:
+    if npc_template_id < 17000 or npc_template_id >= 18000:
+        return False
+
+    # 3. Kelan Village Pigs or domestic animals in 17000-17999 range
+    if npc_template_id == 17400 or "pig" in name_lower:
+        return False
+
+    # 4. In peaceful town / interior / cabin maps, no roaming hostile monsters
+    if map_id in [10000, 10010, 60001] or (10001 <= map_id <= 10036) or (12000 <= map_id <= 12030) or (14000 <= map_id <= 14030):
+        monster_names = ["spider", "wolf", "troll", "gelly", "jelly", "wasp", "snake", "boar", "shark", "dinosaur"]
+        if not any(m in name_lower for m in monster_names):
+            return False
+
+    return True
+
+
 async def handle(server, session, reader):
     """Processes portals, chest, and dialog clicks (AC 20)."""
     sub = reader.read_8()
@@ -89,392 +149,250 @@ async def handle(server, session, reader):
                 await session.send_packet(PacketWriter().write_8(20).write_8(8))  # Release client lock
                 return
 
-            # --- DOOR / PORTAL TRIGGER CHECK ---
-            linked_portals = npc.get('linked_portals', [])
-            if linked_portals:
-                portal_id = linked_portals[0]
-                logger.info(f"[{session.char_name}] NPC {native_click_id} is a door - triggering portal {portal_id} on map {session.map_id}")
-                dst_map, dst_x, dst_y = server.lookup_portal(session.map_id, portal_id)
-                if dst_map:
-                    logger.info(f"[DOOR] {session.char_name} used door NPC {native_click_id} (portal {portal_id}) -> map {dst_map} ({dst_x},{dst_y})")
-                    await server.warp_player(session, dst_map, dst_x, dst_y, portal_id)
-                else:
-                    logger.warning(f"[DOOR] Door NPC {native_click_id} linked portal {portal_id} has no destination on map {session.map_id}!")
-                    await session.send_packet(PacketWriter().write_8(20).write_8(8))
+            npc_template_id = npc.get('npc_id', 0)
+            
+            # Resolve canonical authentic NPC name from eve.Emg, Npc.dat, or SceneDataManager
+            name = (npc.get('name') or "").strip('\x00').strip()
+            if not name or name.lower() == "npc" or name.startswith("unknown"):
+                from server.dat_loaders import GLOBAL_NPC_DAT
+                name = GLOBAL_NPC_DAT.get_npc_name(npc_template_id)
+                if not name or name.startswith("NPC #"):
+                    if 14000 <= npc_template_id < 15000:
+                        name = "Villager"
+                    elif npc_template_id in (13005, 13006, 13007):
+                        name = "Shopkeeper"
+                    elif npc_template_id == 14151:
+                        name = "Doctor"
+                    elif npc_template_id == 14134:
+                        name = "Props Keeper"
+                    elif npc_template_id == 14181:
+                        name = "Banker"
+                    elif npc_template_id == 17400:
+                        name = "Pig"
+            
+            logger.info(f"[NPC Click] Clicked NPC '{name}' (ID: {click_id}, template: {npc_template_id})")
+
+            # --- 0. WILD MONSTER CLICK (PvE Combat Trigger) ---
+            if is_wild_monster(npc_template_id, name, session.map_id):
+                logger.info(f"[{session.char_name}] Clicked wild monster NPC {npc_template_id} ({name}) -> entering battle!")
+                await server.enter_battle(session, native_click_id, npc_template_id)
                 return
-            
-            npc_id = npc['npc_id']
-            
-            # Dynamic NPC ID mapping resolver
-            db_id = None
-            row = None
-            try:
-                conn = sqlite3.connect(server.static_db_path)
-                conn.row_factory = sqlite3.Row
-                
-                overrides = {
-                    (10017, 9): 25787,
-                    (10017, 10): 25789,
-                    (10017, 3): 25786,
-                    (10017, 11): 25786,
-                }
-                if (session.map_id, native_click_id) in overrides:
-                    db_id = overrides[(session.map_id, native_click_id)]
-                    row = conn.execute("SELECT * FROM npc_data WHERE id = ?", (db_id,)).fetchone()
-                
-                if not row:
-                    # Pre-decode client-side special template ID mappings
-                    client_mappings = {
-                        0x908e: 0x5209,
-                        0x9092: 0x9090,
-                        0x9093: 0x9091,
-                        0x9094: 0x9095,
-                        0x9096: 0x9097
-                    }
-                    mapped_npc_id = client_mappings.get(npc_id & 0xFFFF, npc_id)
-                    dec_no_offset = (mapped_npc_id & 0xFFFF) ^ 0x5209
-                    dec_with_offset = dec_no_offset - 9
-                    candidates = [
-                        dec_no_offset,
-                        dec_with_offset,
-                        dec_no_offset + 27000,
-                        dec_with_offset + 27000,
-                        dec_no_offset + 10000,
-                        dec_with_offset + 10000,
-                        npc_id * 2,
-                        npc_id + 16000,
-                        npc_id
-                    ]
-                    for cand_id in candidates:
-                        r = conn.execute("SELECT * FROM npc_data WHERE id = ?", (cand_id,)).fetchone()
-                        if r:
-                            db_id = cand_id
-                            row = r
-                            break
-                            
-                if not row:
-                    for tid in [npc_id - 1, npc_id]:
-                        r = conn.execute("SELECT * FROM npc_data WHERE map_tid = ? LIMIT 1", (tid,)).fetchone()
-                        if r:
-                            db_id = r['id']
-                            row = r
-                            break
-                
-                if not row:
-                    db_id = npc_id * 2
-                    row = conn.execute("SELECT * FROM npc_data WHERE id = ?", (db_id,)).fetchone()
-                    
-                conn.close()
-            except Exception as e:
-                logger.error(f"[NPC Click] Error querying npc_data: {e}")
-            
-            logger.info(f"[NPC Click] Clicked NPC '{npc['name']}' (ID: {click_id}, template: {npc_id}, db_id: {db_id})")
-            
-            if row:
-                name = (row['name'] or "").strip('\x00').strip()
-                npc_template_id = npc_id
-                talk_id = 1
-                logger.info(f"[NPC Click] Query success: name='{name}', npc_template={npc_template_id}, talk_id={talk_id}")
-            else:
-                name = "NPC"
-                npc_template_id = npc_id
-                talk_id = 1
-                logger.info(f"[NPC Click] Query failed. Using defaults.")
-                
-            # ── QUEST BATTLES ──
-            quest_info = server.quest_manager.get_quest_battle(npc_template_id)
-            if quest_info:
-                logger.info(f"[{session.char_name}] Starting quest battle with NPC {npc_template_id}!")
-                session.quest_battle_id = npc_template_id
-                session.battle_win_warp = {
-                    "map_id": quest_info["win_map_id"],
-                    "x": quest_info["win_x"],
-                    "y": quest_info["win_y"]
-                }
-                session.battle_bg_id = quest_info["bg_id"]
-                battle_sprite = quest_info["battle_sprite_id"]
-                
-                await server.enter_battle(session, native_click_id, npc_template_id, battle_sprite)
-                return    
-                
-            # Check if the NPC is a shopkeeper or merchant
-            is_shopkeeper = any(x in name.lower() for x in ["shopkeeper", "merchant", "clerk", "taverner", "bartender", "pet keeper"])
-            if is_shopkeeper or native_click_id == 23:
-                if "props" in name.lower() or native_click_id == 23:
-                    dialog_hex = "140100000001060317000000000000050001"
-                    dialog_bytes = bytes.fromhex(dialog_hex)[2:]
-                    pkt = PacketWriter().write_8(20).write_8(1).write_bytes(dialog_bytes)
-                    await session.send_packet(pkt)
-                    return
-                    
-                shop_id = 34 if "weapon" in name.lower() else 31
-                
-                for s_id in [shop_id, 2, native_click_id]:
-                    shop_pkt = PacketWriter()
-                    shop_pkt.write_8(54).write_8(89).write_8(s_id).write_8(2)
-                    
-                    shop_pkt.write_16(602).write_8(1)
-                    shop_pkt.write_16(603).write_8(1)
-                    
-                    shop_pkt.write_16(701).write_8(2)
-                    shop_pkt.write_16(702).write_8(2)
-                    shop_pkt.write_16(703).write_8(2)
-                    
-                    await session.send_packet(shop_pkt)
-                    
-                    open_shop = PacketWriter()
-                    open_shop.write_8(54).write_8(1).write_8(s_id).write_8(native_click_id)
-                    await session.send_packet(open_shop)
-                
-                await session.send_packet(PacketWriter().write_8(20).write_8(8))
-            else:
-                # Check if the NPC is a combat/monster NPC
-                dec_no_offset = (npc_template_id & 0xFFFF) ^ 0x5209
-                decoded_id = dec_no_offset - 9
-                is_monster = (
-                    str(npc_template_id) in server.drop_tables or
-                    (db_id is not None and str(db_id) in server.drop_tables) or
-                    str(decoded_id) in server.drop_tables or
-                    str(decoded_id + 27000) in server.drop_tables or
-                    str(decoded_id + 10000) in server.drop_tables or
-                    any(x in name.lower() for x in ["monster", "spider", "wolf", "troll", "grape", "crab", "gelly", "wasp", "snake", "boar", "brother", "sister", "lord", "dinosaur", "stegosaurus", "shark"]) or
-                    (17000 <= npc_template_id <= 18000)
+
+            # --- 1. EVE EVENT INTERPRETER (Authentic eve.Emg native event tree) ---
+            from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
+            if await GLOBAL_EVE_INTERPRETER.try_execute(server, session, native_click_id):
+                return
+
+            # --- 1.5 EXPLICIT DOOR / PORTAL TRIGGER CHECK ---
+            if "door" in name.lower() or "door" in (npc.get('name') or "").lower():
+                linked_portals = npc.get('linked_portals', [])
+                if linked_portals:
+                    portal_id = linked_portals[0]
+                    dst_map, dst_x, dst_y = server.lookup_portal(session.map_id, portal_id, px=npc_x, py=npc_y)
+                    if dst_map:
+                        logger.info(f"[DOOR] {session.char_name} used door NPC {native_click_id} (portal {portal_id}) -> map {dst_map} ({dst_x},{dst_y})")
+                        await server.warp_player(session, dst_map, dst_x, dst_y, portal_id)
+                        return
+
+            # --- 2. MASTER QUEST ENGINE (1,050 Authentic Quests from Mark.dat) ---
+            from server.quests import GLOBAL_QUEST_ENGINE
+            quest_handled, quest_dialogue = await GLOBAL_QUEST_ENGINE.try_handle_npc_quest(server, session, name, npc_template_id)
+            if quest_handled and quest_dialogue:
+                logger.info(f"[{session.char_name}] Master Quest handled for NPC '{name}' (TID: {npc_template_id}): {quest_dialogue}")
+                talk_id = 51168
+                await server.send_dialogue(session, native_click_id, talk_id, step=1, portrait_type=3)
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(quest_dialogue))
+                return
+
+            # --- 3. NPC SERVICES & INTERACTION ---
+            # ATM / Bank NPC Interaction
+            if "bank" in name.lower() or "atm" in name.lower() or npc_template_id in (14181, 14157):
+                dialogue_text = (
+                    f"Welcome to WLO Bank!\n"
+                    f"Your Inventory Gold: {getattr(session, 'gold', 0):,} gold.\n"
+                    f"Your Bank Balance: {getattr(session, 'bank_gold', 0):,} gold."
                 )
-                if is_monster:
-                    logger.info(f"[{session.char_name}] Clicked monster NPC {npc_template_id} ({name}) -> entering battle!")
-                    await server.enter_battle(session, native_click_id, npc_template_id)
-                    return
+                await server.send_dialogue(session, native_click_id, 51168, step=1, portrait_type=3)
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(dialogue_text))
+                return
 
-                # ── CUSTOM QUEST INTERACTORS ──
-                # Grandma Quest (Ill Grandma)
-                if "grandma" in name.lower():
-                    if not hasattr(session, 'quests') or session.quests is None:
-                        session.quests = {}
-                    state = session.quests.get('grandma', 0)
-                    
-                    if state == 0:
-                        dialogue_text = "Ah... Çok hastayım. Eğer Bick'in evinden bana Kara İlaç (Black Medicine) getirebilirsen çok sevinirim..."
-                        session.quests['grandma'] = 1
-                        server.save_player_to_db(session)
-                    elif state == 1:
-                        # Check if player has Black Medicine (30259)
-                        has_medicine = False
-                        med_item = None
-                        for item in session.inventory:
-                            if item.get('item_id') == 30259 and item.get('amount', 0) > 0:
-                                has_medicine = True
-                                med_item = item
-                                break
-                        
-                        if has_medicine:
-                            # Remove medicine
-                            med_item['amount'] = med_item.get('amount', 1) - 1
-                            if med_item['amount'] <= 0:
-                                session.inventory.remove(med_item)
-                            
-                            # Add rewards: 500 Gold, 200 Exp, White Wool (30264)
-                            session.gold += 500
-                            session.exp += 200
-                            
-                            # Send gold update
-                            await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
-                            
-                            # Add White Wool (30264)
-                            from server.gameserver import add_item_to_inventory
-                            add_item_to_inventory(session, 30264, amount=1)
-                            
-                            # Send inventory update
-                            await session.send_packet(server.build_inventory_packet(session))
-                            
-                            dialogue_text = "Çok teşekkürler! Bu Kara İlaç tam ihtiyacım olan şeydi. Kendimi çok daha iyi hissediyorum. Lütfen bu ödülü kabul et! (500 Altın, 200 Tecrübe ve Yün kazandın)"
-                            session.quests['grandma'] = 2
-                            server.save_player_to_db(session)
-                        else:
-                            dialogue_text = "Lütfen Bick'in evindeki Kara İlaç'ı (Black Medicine) bulup bana getir... Çok halsizim..."
-                    else:
-                        dialogue_text = "Tekrar teşekkürler evladım, sayende çok iyiyim!"
-                        
-                    # Show dialogue and unlock
-                    pkt = PacketWriter().write_8(52).write_8(1).write_16(1).write_string(dialogue_text)
-                    await session.send_packet(pkt)
-                    await session.send_packet(PacketWriter().write_8(20).write_8(8))
-                    return
+            # Clinic / Doctor NPC Interaction
+            if "doctor" in name.lower() or "clinic" in name.lower() or npc_template_id == 14151:
+                max_hp = getattr(session, 'max_hp', 200)
+                max_sp = getattr(session, 'max_sp', 100)
+                session.hp = max_hp
+                session.sp = max_sp
+                # Send HP / SP full recovery
+                await session.send_packet(PacketWriter().write_8(8).write_8(1).write_16(0x0119).write_32(max_hp).write_32(0))
+                await session.send_packet(PacketWriter().write_8(8).write_8(1).write_16(0x011a).write_32(max_sp).write_32(0))
+                dialogue_text = "Welcome to the Clinic! Your HP and SP have been fully restored."
+                logger.info(f"[{session.char_name}] Restored HP/SP at Doctor (Clinic).")
+                await server.send_dialogue(session, native_click_id, 51155, step=1, portrait_type=3)
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(dialogue_text))
+                return
 
-                # Mary Lou Quest (Saç Bandı)
-                elif "mary lou" in name.lower():
-                    if not hasattr(session, 'quests') or session.quests is None:
-                        session.quests = {}
-                    state = session.quests.get('mary', 0)
-                    
-                    if state == 0:
-                        dialogue_text = "Merhaba! En sevdiğim Saç Bandımı (Headband) ormanda kaybettim. Onu bulup bana getirebilir misin?"
-                        session.quests['mary'] = 1
-                        server.save_player_to_db(session)
-                    elif state == 1:
-                        # Check if player has Headband (22061)
-                        has_band = False
-                        band_item = None
-                        for item in session.inventory:
-                            if item.get('item_id') == 22061 and item.get('amount', 0) > 0:
-                                has_band = True
-                                band_item = item
-                                break
-                        
-                        if has_band:
-                            # Remove headband
-                            band_item['amount'] = band_item.get('amount', 1) - 1
-                            if band_item['amount'] <= 0:
-                                session.inventory.remove(band_item)
-                            
-                            # Add rewards: 200 Gold, 100 Exp, White Rabbit Fur (46015)
-                            session.gold += 200
-                            session.exp += 100
-                            
-                            # Send gold update
-                            await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
-                            
-                            # Add White Rabbit Fur
-                            from server.gameserver import add_item_to_inventory
-                            add_item_to_inventory(session, 46015, amount=1)
-                            
-                            # Send inventory update
-                            await session.send_packet(server.build_inventory_packet(session))
-                            
-                            dialogue_text = "Saç bandımı bulmuşsun! Çok teşekkür ederim, artık saçlarımı toplayabilirim. Al bakalım bu senin ödülün! (200 Altın, 100 Tecrübe ve Tavşan Postu kazandın)"
-                            session.quests['mary'] = 2
-                            server.save_player_to_db(session)
-                        else:
-                            dialogue_text = "Lütfen Saç Bandımı bulursan bana getir. Kuzey adasındaki ormanda kaybetmiş olmalıyım..."
-                    else:
-                        dialogue_text = "Saç bandımı geri getirdiğin için tekrar teşekkürler!"
-                        
-                    pkt = PacketWriter().write_8(52).write_8(1).write_16(1).write_string(dialogue_text)
-                    await session.send_packet(pkt)
-                    await session.send_packet(PacketWriter().write_8(20).write_8(8))
-                    return
+            # Pet Hotel / Pet Keeper
+            if "pet hotel" in name.lower() or "pet keep" in name.lower() or npc_template_id in (14182, 14152):
+                dialogue_text = "Welcome to the Pet Hotel! Your companions are in good hands."
+                await server.send_dialogue(session, native_click_id, 51168, step=1, portrait_type=3)
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(dialogue_text))
+                return
 
-                # Niss Quest (Save Niss)
-                elif "niss" in name.lower():
-                    if not hasattr(session, 'quests') or session.quests is None:
-                        session.quests = {}
-                    state = session.quests.get('niss', 0)
-                    
-                    if state == 0:
-                        dialogue_text = "İmdat! Bu kafese canavarlar tarafından kilitlendim... Lütfen beni kurtar!"
-                        pkt = PacketWriter().write_8(52).write_8(1).write_16(1).write_string(dialogue_text)
-                        await session.send_packet(pkt)
-                        await session.send_packet(PacketWriter().write_8(20).write_8(8))
-                        
-                        # Trigger Niss quest battle vs Wolf (Level 10)
-                        session.quest_battle_id = 11066
-                        session.battle_win_warp = {
-                            "map_id": session.map_id,
-                            "x": session.x,
-                            "y": session.y
-                        }
-                        session.battle_bg_id = 4
-                        # Enter battle: click ID, npc template ID, battle sprite (11066)
-                        await server.enter_battle(session, native_click_id, npc_template_id, 11066)
-                        return
-                    elif state == 1:
-                        # Give pet reward: Niss (ID 11066)
-                        # Check if player already has Niss
-                        has_niss = any(p.get('pet_id') == 11066 for p in session.pets)
-                        if not has_niss:
-                            # Add pet to companion list
-                            lvl = 1
-                            base_con = 5
-                            base_wis = 5
-                            base_str = 5
-                            base_agi = 5
-                            base_int = 5
-                            max_hp = 180 + base_con * 2 + 1
-                            max_sp = 94 + base_wis * 2 + 1
-                            
-                            pet_data = {
-                                "pet_id": 11066,
-                                "level": lvl,
-                                "exp": 0,
-                                "amity": 100,
-                                "reborn": 0,
-                                "potential": 0,
-                                "str": base_str,
-                                "con": base_con,
-                                "int": base_int,
-                                "wis": base_wis,
-                                "agi": base_agi,
-                                "hp": max_hp,
-                                "sp": max_sp
-                            }
-                            session.pets.append(pet_data)
-                            server.save_player_to_db(session)
-                            
-                            # Companion dynamics addition packet 15, 1
-                            pkt = PacketWriter().write_8(15).write_8(1)
-                            pkt.write_32(session.char_id).write_32(11066).write_8(lvl).write_32(0)
-                            pkt.write_8(1).write_32(0)
-                            pkt.write_8(1).write_32(0)
-                            pkt.write_8(1).write_32(0)
-                            pkt.write_8(1).write_16(0).write_16(0).write_8(0)
-                            await session.send_packet(pkt)
-                            
-                            # Refresh pet list UI
-                            await server.send_pet_list(session)
-                            
-                            dialogue_text = "Beni kurtardığın için teşekkür ederim! Yolculuğunda sana eşlik etmek istiyorum. (Niss grubuna katıldı!)"
-                            session.quests['niss'] = 2
-                            server.save_player_to_db(session)
-                        else:
-                            dialogue_text = "Zaten benimle birliktesin!"
-                            session.quests['niss'] = 2
-                            server.save_player_to_db(session)
-                            
-                        pkt = PacketWriter().write_8(52).write_8(1).write_16(1).write_string(dialogue_text)
-                        await session.send_packet(pkt)
-                        await session.send_packet(PacketWriter().write_8(20).write_8(8))
-                        return
-                    else:
-                        dialogue_text = "Hazırım, gidelim!"
-                        pkt = PacketWriter().write_8(52).write_8(1).write_16(1).write_string(dialogue_text)
-                        await session.send_packet(pkt)
-                        await session.send_packet(PacketWriter().write_8(20).write_8(8))
-                        return
+            # Specific character / passenger / story dialogues
+            name_lower = (name or "").lower()
+            talk_id = 51168
+            if npc_template_id == 14013 or "ashley" in name_lower or "mary lou" in name_lower:
+                talk_id = 39378 if session.map_id == 12000 else 42605
+                dialogue_text = "Hello! I'm Ashley. Are you enjoying this wonderful voyage? The sea breeze is so refreshing today!"
+            elif npc_template_id == 14512 or "casino" in name_lower or "astrologia" in name_lower:
+                talk_id = 41232
+                dialogue_text = "Welcome to the Casino! Enjoy your games and entertainment."
+            elif npc_template_id == 12032 or "robinson" in name_lower:
+                talk_id = 41916
+                dialogue_text = "This is a deserted island. How did you end up here?"
+            elif "captain" in name_lower:
+                talk_id = 41824
+                dialogue_text = "Welcome aboard the Princess Cruise! We are sailing steadily towards our destination."
+            elif "sailor" in name_lower:
+                talk_id = 39263
+                dialogue_text = "Everything is running smoothly on deck! Let me know if you need directions around the ship."
+            elif "passenger" in name_lower or session.map_id == 12000:
+                talk_id = 39378
+                dialogue_text = "Hello there! Welcome to Welling Village!" if session.map_id == 12000 else "Isn't this luxury ship amazing? I love looking out at the endless blue horizon."
+            elif "villager" in name_lower or "citizen" in name_lower:
+                talk_id = 39378 if session.map_id == 12000 else 51168
+                dialogue_text = "Welcome to our village! Please make yourself at home and enjoy your stay."
+            else:
+                talk_id = 51168
+                dialogue_text = f"Hello, adventurer! I am {name}. Welcome to our land! Let me know if you need any assistance."
 
-                # Check if NPC has a quest script
-                is_starter_map = 10000 <= session.map_id < 10100
-                
-                quest_trigger_id = None
-                if db_id and db_id in server.quest_scripts:
-                    quest_trigger_id = db_id
-                elif native_click_id in server.quest_scripts:
-                    if native_click_id >= 100 or is_starter_map:
-                        quest_trigger_id = native_click_id
-                        
-                if quest_trigger_id is not None:
-                    script = server.quest_scripts[quest_trigger_id]
-                    if len(script) > 0:
-                        logger.info(f"[{session.char_name}] Starting quest script for NPC {quest_trigger_id} (clicked {native_click_id})")
-                        session.active_quest_id = quest_trigger_id
-                        session.active_quest_step = 0
-                        session.active_quest_dialog_counter = 1
-                        action = script[0]
-                        if action["type"] == "dialog":
-                            portrait = 3 if action.get('is_quest') else 7
-                            await server._send_quest_dialogue(session, action["hex"], native_click_id, step=1, portrait_type=portrait)
-                        return
-
-                # Default fallback dialogue
-                dialogue_text = "Hello, traveller! Beautiful day, isn't it? Let me know if you need anything."
-                pkt = PacketWriter()
-                pkt.write_8(52).write_8(1).write_16(1).write_string(dialogue_text)
-                logger.info(f"[NPC Click] Sending dialogue (AC 52 Sub 1): talk_id=1, text='{dialogue_text}'")
-                await session.send_packet(pkt)
-                
-                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+            logger.info(f"[NPC Click] Sending authentic dialogue window (AC 20 Sub 1, TalkID: {talk_id}): text='{dialogue_text}'")
+            await server.send_dialogue(session, native_click_id, talk_id, step=1, portrait_type=3)
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(dialogue_text))
                 
     elif sub == 6:  # Continue interaction
         logger.info(f"[{session.char_name}] Continue interaction (AC 20 Sub 6)")
         
+        # 0. Storm Cutscene Completion -> Warp to Shipwreck Beach (Map 10035)
+        if getattr(session, 'playing_storm_cutscene', False):
+            session.playing_storm_cutscene = False
+            session.pending_beach_cutscene = True
+            session.on_interaction_complete = None
+            logger.info(f"[{session.char_name}] Storm Cutscene completed (AC 20:6) -> Teleporting to Beach (Map 10035)")
+            await session.send_packet(PacketWriter().write_8(20).write_8(7))  # Warp Out
+            await server.warp_player(session, 10035, 1038, 2235)
+            return
+
+        # 1. Beach Cutscene State Machine (Matching authentic PCAP packets [046]-[066])
+        if getattr(session, 'beach_cutscene_active', False):
+            step = getattr(session, 'beach_cutscene_step', 1)
+            logger.info(f"[{session.char_name}] Beach Cutscene advancing step {step} -> {step + 1}")
+            
+            if step == 1:
+                # Step 2: Robinson approaches player (AC 22:12 [2, 11, 0, 5], PCAP [047]-[048])
+                session.beach_cutscene_step = 2
+                approach_pkt = (
+                    PacketWriter()
+                    .write_8(22)
+                    .write_8(12)
+                    .write_8(2)
+                    .write_8(11)
+                    .write_8(0)
+                    .write_8(5)
+                )
+                await session.send_packet(approach_pkt)
+                server.broadcast_to_map(session.map_id, approach_pkt, exclude_session=session)
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                return
+
+            elif step == 2:
+                # Step 3: Robinson cutscene dialogue (TalkID 12008) + SFX (PCAP [050]-[052])
+                session.beach_cutscene_step = 3
+                robinson_dialog = (
+                    PacketWriter()
+                    .write_8(20)
+                    .write_8(1)
+                    .write_8(0).write_8(0).write_8(0)
+                    .write_8(1)  # step 1
+                    .write_8(5)  # type 5 cinematic
+                    .write_32(1) # speaker NPC 1
+                    .write_8(0xE8).write_8(0x2E).write_8(0x00) # TalkID 12008 (0x2EE8)
+                    .write_32(0)
+                )
+                await session.send_packet(robinson_dialog)
+                # SFX AC 35:12 matching PCAP
+                await session.send_packet(PacketWriter().write_8(35).write_8(12).write_8(0xDA).write_8(0x80).write_8(3).write_8(0).write_8(0))
+                await session.send_packet(PacketWriter().write_8(35).write_8(12).write_8(0x77).write_8(0x8E).write_8(3).write_8(0).write_8(0))
+                return
+
+            elif step == 3:
+                # Step 4: Add Quest 12040 (AC 24:1 [8, 0x2F, 1], PCAP [054]-[055])
+                session.beach_cutscene_step = 4
+                await session.send_packet(PacketWriter().write_8(24).write_8(1).write_8(8).write_8(0x2F).write_8(1))
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                return
+
+            elif step == 4:
+                # Step 5: Sync tick (AC 20:10, PCAP [057])
+                session.beach_cutscene_step = 5
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                return
+
+            elif step == 5:
+                # Step 6: Set Quest Flag 97 (AC 24:5 [0x61, 0, 1], PCAP [059]-[060])
+                session.beach_cutscene_step = 6
+                await session.send_packet(PacketWriter().write_8(24).write_8(5).write_8(0x61).write_8(0).write_8(1))
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                return
+
+            elif step == 6:
+                # Step 7: Robinson walks back (AC 22:12 [1, 1, 0, 6], PCAP [062]-[063])
+                session.beach_cutscene_step = 7
+                walk_back_pkt = (
+                    PacketWriter()
+                    .write_8(22)
+                    .write_8(12)
+                    .write_8(1)
+                    .write_8(1)
+                    .write_8(0)
+                    .write_8(6)
+                )
+                await session.send_packet(walk_back_pkt)
+                server.broadcast_to_map(session.map_id, walk_back_pkt, exclude_session=session)
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                return
+
+            elif step >= 7:
+                # Step 8: Complete Cutscene -> Unlock Cinema mode & Player movement (PCAP [065]-[066])
+                session.beach_cutscene_active = False
+                session.beach_cutscene_step = 0
+                session.emote = 0
+                from server.eve_event_interpreter import set_session_quest_state
+                set_session_quest_state(session, 12040, 1)
+                server.save_player_to_db(session)
+                
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))  # Unlock UI / Cinema
+                await session.send_packet(PacketWriter().write_8(5).write_8(4))   # Unlock Player Movement / Stand up
+                logger.info(f"[{session.char_name}] Beach Arrival Cutscene completed authentically. Controls restored.")
+                return
+
+        # 2. Dialogue Queue Advancement (Multi-step dialogue playback)
+        queue = getattr(session, 'dialogue_queue', None)
+        if queue and len(queue) > 0:
+            next_step = queue.pop(0)
+            from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
+            await GLOBAL_EVE_INTERPRETER._dispatch_step(server, session, next_step)
+            return
+            
+        # 3. Check Defer Scene Transition Warp
+        complete_warp = getattr(session, 'on_interaction_complete', None)
+        if complete_warp:
+            session.on_interaction_complete = None
+            if complete_warp.get("pending_beach"):
+                session.pending_beach_cutscene = True
+            await server.warp_player(session, complete_warp["map_id"], complete_warp["x"], complete_warp["y"])
+            return
+
         # Check post-battle quest warp
         win_warp = getattr(session, 'battle_win_warp', None)
         if win_warp:
@@ -543,10 +461,17 @@ async def handle(server, session, reader):
             return
 
         await session.send_packet(PacketWriter().write_8(20).write_8(8))
+        await session.send_packet(PacketWriter().write_8(5).write_8(4))
         
     elif sub == 9 or sub == 2:  # Select dialogue option (sub=9 legacy, sub=2 client-accurate)
         option_id = reader.read_8()
         logger.info(f"[{session.char_name}] Selected dialogue option {option_id} (Hex: {hex(option_id)}) (sub={sub})")
+
+        # 0. Native EveEventInterpreter Choice Branch Resolution
+        if getattr(session, 'pending_dialogue_choice', None):
+            from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
+            if await GLOBAL_EVE_INTERPRETER.handle_choice_selection(server, session, option_id):
+                return
         
         # Marriage Wedding Dress Check (Option 14: hold hands / oath)
         if option_id == 14:

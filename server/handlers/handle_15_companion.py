@@ -185,6 +185,41 @@ async def handle(server, session, reader):
             except Exception as db_err:
                 logger.error(f"[Pet Rename] Error saving to DB: {db_err}")
 
+    elif sub == 15:  # Pet Reborn Request
+        slot = reader.read_8()
+        logger.info(f"[{session.char_name}] Pet Reborn request for slot {slot}")
+        if 1 <= slot <= len(session.pets):
+            pet = session.pets[slot - 1]
+            if pet.get("level", 1) < 70:
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Pet must be at least Level 70 to reborn."))
+                return
+            if pet.get("equipments") and len(pet.get("equipments", [])) > 0:
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Remove Pet equip first"))
+                return
+            if pet.get("reborn", 0) != 0:
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Pet is already reborn."))
+                return
+                
+            pet["reborn"] = 1
+            pet["level"] = 1
+            pet["exp"] = 0
+            pet["str"] = pet.get("str", 5) + 10
+            pet["con"] = pet.get("con", 5) + 10
+            pet["int"] = pet.get("int", 5) + 10
+            pet["wis"] = pet.get("wis", 5) + 10
+            pet["agi"] = pet.get("agi", 5) + 10
+            pet["hp"] = 180 + pet["con"] * 2 + 1
+            pet["sp"] = 94 + pet["wis"] * 2 + 1
+            
+            try:
+                server.save_player_to_db(session)
+            except Exception as db_err:
+                logger.error(f"[Pet Reborn] Error saving to DB: {db_err}")
+                
+            await server.send_pet_list(session)
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"{pet.get('name', 'Pet')} has successfully reborn!"))
+
     elif sub in [16, 17]:
         logger.info(f"[{session.char_name}] Companion ride action received: sub={sub}")
+
 

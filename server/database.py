@@ -110,6 +110,186 @@ class DatabaseManager:
                 conn.execute("ALTER TABLE characters ADD COLUMN chat_channels_mask INTEGER DEFAULT 31")
             except sqlite3.OperationalError:
                 pass
+            try:
+                conn.execute("ALTER TABLE characters ADD COLUMN im_points INTEGER DEFAULT 5000")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE characters ADD COLUMN im_bonus_points INTEGER DEFAULT 1000")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE characters ADD COLUMN im_tokens INTEGER DEFAULT 50")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                conn.execute("ALTER TABLE characters ADD COLUMN bank_gold INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
+
+            # Initialize Tent tables
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chartent (
+                    charID INTEGER PRIMARY KEY,
+                    locked INTEGER DEFAULT 0,
+                    enlarged INTEGER DEFAULT 0,
+                    tenttype INTEGER DEFAULT 1115,
+                    floor1Color INTEGER DEFAULT 39062,
+                    floor1wallpaper INTEGER DEFAULT 39064,
+                    floor2Color INTEGER DEFAULT 0,
+                    floor2wallpaperr INTEGER DEFAULT 0
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS chartent_items (
+                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    charID INTEGER NOT NULL,
+                    itemID INTEGER NOT NULL,
+                    posX INTEGER NOT NULL,
+                    posY INTEGER NOT NULL,
+                    floor INTEGER DEFAULT 0,
+                    rotate INTEGER DEFAULT 0
+                )
+            """)
+
+            # Initialize Quest tables
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS charquest (
+                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    charID INTEGER NOT NULL,
+                    quest_started INTEGER NOT NULL,
+                    quest_pos INTEGER NOT NULL,
+                    UNIQUE(charID, quest_started)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS game_quests (
+                    quest_id INTEGER PRIMARY KEY,
+                    name VARCHAR(100) NOT NULL,
+                    npc_name_pattern VARCHAR(100),
+                    npc_template_id INT DEFAULT 0,
+                    map_id INT DEFAULT 0,
+                    type INT DEFAULT 0,
+                    description TEXT,
+                    intro_dialogue TEXT,
+                    in_progress_dialogue TEXT,
+                    complete_dialogue TEXT,
+                    already_completed_dialogue TEXT,
+                    battle_monster_id INT DEFAULT 0,
+                    battle_monster_name VARCHAR(100),
+                    reward_gold INT DEFAULT 0,
+                    reward_exp INT DEFAULT 0,
+                    reward_companion_id INT DEFAULT 0,
+                    reward_companion_name VARCHAR(100),
+                    reward_items TEXT,
+                    required_items TEXT,
+                    prerequisite_quests TEXT,
+                    steps_json TEXT
+                )
+            """)
+
+            # Initialize Mail, Guild, and Marriage tables
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS charmail (
+                    mail_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    sender_id INTEGER NOT NULL,
+                    sender_name VARCHAR(50) NOT NULL,
+                    receiver_id INTEGER NOT NULL,
+                    subject VARCHAR(100) NOT NULL,
+                    content TEXT,
+                    attached_gold INTEGER DEFAULT 0,
+                    attached_item_id INTEGER DEFAULT 0,
+                    attached_item_count INTEGER DEFAULT 0,
+                    sent_date REAL,
+                    is_read INTEGER DEFAULT 0,
+                    is_claimed INTEGER DEFAULT 0
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS guilds (
+                    guild_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_name VARCHAR(50) NOT NULL UNIQUE,
+                    leader_id INTEGER NOT NULL,
+                    leader_name VARCHAR(50) NOT NULL,
+                    icon INTEGER DEFAULT 3402,
+                    rules TEXT DEFAULT '',
+                    created_at REAL
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS guild_members (
+                    char_id INTEGER PRIMARY KEY,
+                    guild_id INTEGER NOT NULL,
+                    char_name VARCHAR(50) NOT NULL,
+                    level INTEGER DEFAULT 1,
+                    job INTEGER DEFAULT 0,
+                    element INTEGER DEFAULT 0,
+                    rank INTEGER DEFAULT 0
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS guild_storage (
+                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER NOT NULL,
+                    item_id INTEGER NOT NULL,
+                    count INTEGER NOT NULL
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS charmarriage (
+                    husband_id INTEGER PRIMARY KEY,
+                    husband_name VARCHAR(50) NOT NULL,
+                    wife_id INTEGER NOT NULL UNIQUE,
+                    wife_name VARCHAR(50) NOT NULL,
+                    marriage_date REAL
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS charchests (
+                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    char_id INTEGER NOT NULL,
+                    map_id INTEGER NOT NULL,
+                    chest_id INTEGER NOT NULL,
+                    opened_at REAL,
+                    UNIQUE(char_id, map_id, chest_id)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS char_titles (
+                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    char_id INTEGER NOT NULL,
+                    title_id INTEGER NOT NULL,
+                    unlocked_at REAL,
+                    UNIQUE(char_id, title_id)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS char_security (
+                    char_id INTEGER PRIMARY KEY,
+                    pin_hash VARCHAR(64) NOT NULL,
+                    created_at REAL
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS char_instances (
+                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                    char_id INTEGER NOT NULL,
+                    instance_id INTEGER NOT NULL,
+                    completed_at REAL,
+                    UNIQUE(char_id, instance_id)
+                )
+            """)
+
             conn.commit()
 
     def register_user(self, username: str, password: str) -> tuple:
@@ -307,6 +487,10 @@ class DatabaseManager:
                 char_dict['skill_points'] = char_dict.get('skill_points', 0)
                 char_dict['pets'] = json.loads(char_dict.get('pets', '[]') or '[]')
                 char_dict['chat_channels_mask'] = char_dict.get('chat_channels_mask', 31)
+                char_dict['im_points'] = char_dict.get('im_points', 5000)
+                char_dict['im_bonus_points'] = char_dict.get('im_bonus_points', 1000)
+                char_dict['im_tokens'] = char_dict.get('im_tokens', 50)
+                char_dict['bank_gold'] = char_dict.get('bank_gold', 0)
                 return char_dict
         return None
  
@@ -322,7 +506,8 @@ class DatabaseManager:
                     skills = ?, quests = ?,
                     str = ?, con = ?, int = ?, wis = ?, agi = ?, exp = ?,
                     pets = ?, potential = ?, points = ?, skill_points = ?,
-                    chat_channels_mask = ?
+                    chat_channels_mask = ?,
+                    im_points = ?, im_bonus_points = ?, im_tokens = ?, bank_gold = ?
                 WHERE id = ?
             """, (
                 data.get('level', 1), data.get('element', 0), data.get('hp', 100), data.get('max_hp', 100),
@@ -339,6 +524,10 @@ class DatabaseManager:
                 data.get('points', 0),
                 data.get('skill_points', 0),
                 data.get('chat_channels_mask', 31),
+                data.get('im_points', 5000),
+                data.get('im_bonus_points', 1000),
+                data.get('im_tokens', 50),
+                data.get('bank_gold', 0),
                 char_id
             ))
             conn.commit()

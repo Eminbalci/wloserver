@@ -225,6 +225,11 @@ class PlayerSession:
         self.potential = 0  # Character Potential (0-12)
         self.points = 0     # Distributable stat points (Attribute Points, Puan)
         self.pets = []  # List of pets: {"pet_id": id, "level": lvl, "exp": exp, ...}
+        self.im_points = 5000
+        self.im_bonus_points = 1000
+        self.im_tokens = 50
+        self.bank_gold = 0
+        self.is_stall_active = False
 
         # Vehicle state
         self.riding_vehicle = False
@@ -256,8 +261,13 @@ class PlayerSession:
         self.active_quest_step = 0
         self.active_quest_dialog_counter = 1  # WLO dialog step counter (byte[3] in AC 20 Sub 1)
         
+        # Bathing state
+        self.bathing = False
+        self.bath_task = None
+        
         # Send lock to avoid parallel write corruption
         self.send_lock = asyncio.Lock()
+
 
     def get_stat_bonus(self, stat_name: str) -> int:
         add = get_body_stat_bonus(self.body, self.head, stat_name, self.level)
@@ -374,6 +384,11 @@ class PlayerSession:
 
 class GameServer:
     """Unified WLO Private Server on Port 6414."""
+
+    @property
+    def sessions(self) -> dict:
+        """Exposes active sessions as a dict for compatibility with handlers/web admin."""
+        return {getattr(s, 'char_id', id(s)): s for s in self.active_sessions}
     
     def __init__(self, db_path: str = "wlo_server.db", static_db_path: str = "server/ServerDataBase.db"):
         self.db = DatabaseManager(db_path)
@@ -415,6 +430,16 @@ class GameServer:
         self._load_item_mix()
         self._load_item_properties()
         self._load_skill_dat()
+        
+        # Initialize Master Quest Engine and PreEvents Interpreter
+        import os
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(self.static_db_path)))
+        eve_path = os.path.join(base_dir, "data", "eve.Emg")
+        from server.quests import GLOBAL_QUEST_ENGINE
+        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+        GLOBAL_QUEST_ENGINE.initialize(base_dir)
+        GLOBAL_PREEVENT_INTERPRETER.load_preevents(eve_path)
+
         self.SERVER_VERSION = SERVER_VERSION
         self.SUBSERVER_CONFIG = SUBSERVER_CONFIG
         self._load_handlers()
@@ -595,12 +620,21 @@ class GameServer:
                     
                     cur_ptr += 8
                     
+                    from server.dat_loaders import GLOBAL_NPC_DAT
+                    cleaned_name = (name or "").strip("\x00").strip()
+                    if not cleaned_name or cleaned_name.lower() in ("npc", "none", ""):
+                        canonical_name = GLOBAL_NPC_DAT.get_npc_name(npcId)
+                    else:
+                        canonical_name = cleaned_name
+
                     npcs.append({
                         'click_id': clickId,
-                        'name': name,
+                        'name': canonical_name,
                         'npc_id': npcId,
                         'x': x,
                         'y': y,
+                        'spawn_x': x,
+                        'spawn_y': y,
                         'rotation': rotation,
                         'walk_behavior': walk_behavior,
                         'walksteps': walksteps,
@@ -613,64 +647,79 @@ class GameServer:
                     
                 self.map_npcs[mapID] = npcs
             logger.info(f"[NPC] Loaded {npc_count} NPCs across {len(self.map_npcs)} maps from eve.Emg.")
+            
+            # Load Eve Event trees
+            from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
+            GLOBAL_EVE_INTERPRETER.load(eve_path)
         except Exception as e:
             logger.error(f"[NPC] Error loading NPCs from eve.Emg: {e}", exc_info=True)
 
+    @staticmethod
+    def is_village_or_town_map(map_id: int) -> bool:
+        """Returns True if the map is a village, town, interior or residential zone."""
+        if map_id in (10000, 10010, 60001):
+            return True
+        if 10001 <= map_id <= 10036:  # Starter Ship, Cabins, Beach, Kelan Village
+            return True
+        if 12000 <= map_id <= 12030:  # Welling Village
+            return True
+        if 14000 <= map_id <= 14030:  # Holy Village
+            return True
+        if 16000 <= map_id <= 16030:  # Kyoto
+            return True
+        if 18000 <= map_id <= 18030:  # Chang'an
+            return True
+        return False
+
+    @staticmethod
+    def is_static_or_prop_npc(npc: dict, map_id: int) -> bool:
+        """Determines whether an NPC entity is a static prop, chest, node, or unmoving entity."""
+        tid = npc.get("npc_id", 0)
+        click_id = npc.get("click_id", 0)
+        name = (npc.get("name") or "").lower().strip()
+
+        if click_id == 0 or tid == 0:
+            return True
+        if npc.get("x", 0) > 4000 or npc.get("y", 0) > 4000 or (npc.get("x", 0) == 0 and npc.get("y", 0) == 0):
+            return True
+
+        # Prop / chest / gathering node / furniture template ID ranges
+        if (12000 <= tid <= 12999) or (16000 <= tid <= 16999) or (19000 <= tid <= 35000):
+            return True
+
+        # Domestic farm animals in pens
+        if tid == 17400:
+            return True
+
+        # Name indicators for props / chests / doors / service spots
+        prop_keywords = (
+            "chest", "crate", "box", "door", "tree", "ore", "mine", "wood", "flower",
+            "grass", "statue", "signpost", "guidepost", "hotel", "inn", "storage",
+            "bank", "clinic", "shop", "exchanger", "pot", "barrel", "urn", "rock"
+        )
+        if any(k in name for k in prop_keywords):
+            return True
+
+        # Click IDs 6, 7 on starter ship/beach maps
+        if map_id in (10017, 10035) and click_id in (6, 7):
+            return True
+
+        return False
+
     async def npc_walk_loop(self):
-        """Background loop that executes NPC walks and broadcasts movement packets to clients."""
-        import time
-        import random
-        
-        logger.info("[NPC] Starting NPC walk loop task.")
+        """
+        Background loop for dynamically spawned world entities.
+        Native eve.Emg map NPCs are simulated client-side natively.
+        Spurious server AC 22:2 movement broadcasts reset NPC sprite animations and cause blinking.
+        """
+        logger.info("[NPC] NPC background manager active (native eve.Emg client animation preservation enabled).")
         while True:
             try:
-                now = time.time()
-                for map_id, npcs in self.map_npcs.items():
-                    # Only walk NPCs on maps that have active players!
-                    if map_id not in self.map_players or not self.map_players[map_id]:
-                        continue
-                        
-                    for npc in npcs:
-                        if npc['next_walk_time'] > now:
-                            continue
-                            
-                        # Scripted path walking (behavior 5)
-                        if npc['walk_behavior'] == 5 and npc['walksteps']:
-                            step = npc['walksteps'][npc['cur_step'] % len(npc['walksteps'])]
-                            
-                            pkt = PacketWriter()
-                            pkt.write_8(22).write_8(2)
-                            pkt.write_16(npc['click_id'])
-                            pkt.write_16(step['x'])
-                            pkt.write_16(step['y'])
-                            pkt.write_8(3) # speed
-                            
-                            self.broadcast_to_map(map_id, pkt)
-                            
-                            npc['cur_step'] = (npc['cur_step'] + 1) % len(npc['walksteps'])
-                            npc['next_walk_time'] = now + max(1.0, float(step.get('delay', 0)) / 1000.0)
-                            
-                        # Random walking (behavior 4)
-                        elif npc['walk_behavior'] == 4:
-                            dx = random.randint(-120, 120)
-                            dy = random.randint(-120, 120)
-                            target_x = npc['x'] + dx
-                            target_y = npc['y'] + dy
-                            
-                            pkt = PacketWriter()
-                            pkt.write_8(22).write_8(2)
-                            pkt.write_16(npc['click_id'])
-                            pkt.write_16(target_x)
-                            pkt.write_16(target_y)
-                            pkt.write_8(3) # speed
-                            
-                            self.broadcast_to_map(map_id, pkt)
-                            
-                            npc['next_walk_time'] = now + random.uniform(4.0, 9.0)
+                await asyncio.sleep(10.0)
+            except asyncio.CancelledError:
+                break
             except Exception as e:
-                logger.error(f"[NPC] Error in NPC walk loop: {e}", exc_info=True)
-                
-            await asyncio.sleep(0.5)
+                logger.error(f"[NPC] Error in NPC loop: {e}", exc_info=True)
 
     async def run(self, host: str = "0.0.0.0", port: int = 6414):
         """Starts the asynchronous TCP server."""
@@ -841,8 +890,19 @@ class GameServer:
             'points': session.points,
             'skill_points': getattr(session, 'skill_points', 0),
             'chat_channels_mask': getattr(session, 'chat_channels_mask', 31),
+            'im_points': getattr(session, 'im_points', 5000),
+            'im_bonus_points': getattr(session, 'im_bonus_points', 1000),
+            'im_tokens': getattr(session, 'im_tokens', 50),
+            'bank_gold': getattr(session, 'bank_gold', 0),
         }
         self.db.save_character(session.char_id, data)
+        try:
+            from server.tent import GLOBAL_TENT_MANAGER
+            tent = GLOBAL_TENT_MANAGER.get_or_create_tent(session.char_id)
+            if tent and tent.is_dirty:
+                GLOBAL_TENT_MANAGER.save_tent_to_db(tent)
+        except Exception:
+            pass
 
     async def give_exp(self, session: PlayerSession, amount: int):
         """Gives EXP to player, handles level-ups and grants 3 potential points per level gained."""
@@ -1136,6 +1196,10 @@ class GameServer:
         session.potential = char.get('potential', 0)
         session.pets = char.get('pets', [])
         session.chat_channels_mask = char.get('chat_channels_mask', 31)
+        session.im_points = char.get('im_points', 5000)
+        session.im_bonus_points = char.get('im_bonus_points', 1000)
+        session.im_tokens = char.get('im_tokens', 50)
+        session.bank_gold = char.get('bank_gold', 0)
         
         # Migration: if points is 0 but potential > 0, migrate potential to points
         if session.points == 0 and session.potential > 0:
@@ -1373,6 +1437,13 @@ class GameServer:
         await session.send_packet(PacketWriter().write_8(53).write_8(10).write_bytes(bytes([32, 164, 36, 2, 37, 240, 38, 41, 58, 48, 83, 15])))
         await session.send_packet(PacketWriter().write_8(26).write_8(7).write_bytes(bytes([1, 2, 2, 128, 3, 2, 4, 128, 8, 66, 9, 96, 10, 8, 11, 10, 13, 1])))
 
+        # Synchronize all active/completed quest flags and per-player NPC visibility
+        from server.quests import GLOBAL_QUEST_ENGINE
+        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+        await GLOBAL_QUEST_ENGINE.send_all_quest_flags(session)
+        await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(self, session, session.map_id)
+        await GLOBAL_PREEVENT_INTERPRETER.replay_actor_visibility(self, session, session.map_id)
+
         # System prompt message
         prompt = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
             "Welcome to the WLO Python Private Server! Enjoy your adventure!"
@@ -1402,6 +1473,59 @@ class GameServer:
         await self.send_pet_list(session)
         
         logger.info(f"[{session.char_name}] Login complete.")
+
+    def start_bath_healing(self, session):
+        """Starts asynchronous hot spring healing for bathing player."""
+        if session.bath_task and not session.bath_task.done():
+            return
+            
+        async def heal_loop():
+            elapsed = 0
+            try:
+                sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Entering the Hot Spring. Restoring HP/SP...")
+                await session.send_packet(sys_msg)
+                
+                while session.bathing and elapsed < 300:
+                    await asyncio.sleep(10)
+                    elapsed += 10
+                    
+                    # Heals 10%
+                    hp_gain = max(1, int(session.max_hp * 0.1))
+                    sp_gain = max(1, int(session.max_sp * 0.1))
+                    session.hp = min(session.max_hp, session.hp + hp_gain)
+                    session.sp = min(session.max_sp, session.sp + sp_gain)
+                    
+                    # Sync stats to client
+                    await self.send_stats_update(session, levelup=False)
+                    
+                    # Send periodic status
+                    status_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Hot Spring Pack time: {elapsed}s")
+                    await session.send_packet(status_msg)
+                    
+                if elapsed >= 300:
+                    session.bathing = False
+                    status_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Hot Spring time at max!")
+                    await session.send_packet(status_msg)
+                else:
+                    status_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Hot Spring ended")
+                    await session.send_packet(status_msg)
+            except asyncio.CancelledError:
+                status_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Hot Spring ended")
+                await session.send_packet(status_msg)
+            except Exception as e:
+                logger.error(f"[Bath Heal] Error: {e}", exc_info=True)
+            finally:
+                session.bathing = False
+                
+        session.bathing = True
+        session.bath_task = asyncio.create_task(heal_loop())
+
+    def stop_bath_healing(self, session):
+        """Stops hot spring healing for bathing player."""
+        session.bathing = False
+        if session.bath_task:
+            session.bath_task.cancel()
+            session.bath_task = None
 
     def get_max_exp_for_level(self, level: int, reborn: bool = False) -> int:
         """Returns the max EXP to advance from current level to next level."""
@@ -1444,36 +1568,53 @@ class GameServer:
         """Calculate player physical attack."""
         lvl = session.level
         if session.element == 3:  # Fire
-            return int(round(lvl * 2.0 + session.str_val * 2.0))
-        return int(round(lvl * 1.4 + session.str_val * 2.0))
+            val = int(round(lvl * 2.0 + session.str_val * 2.0))
+        else:
+            val = int(round(lvl * 1.4 + session.str_val * 2.0))
+        if getattr(session, 'job', 0) == 1:  # Warrior
+            val = int(val * 1.1)
+        return val
 
     def get_player_def(self, session: PlayerSession) -> int:
         """Calculate player physical defense."""
         lvl = session.level
         if session.element == 1:  # Earth
-            return int(round(lvl * 3.0 + session.con_val * 2.0))
-        return int(round(lvl * 2.0 + session.con_val * 2.0))
+            val = int(round(lvl * 3.0 + session.con_val * 2.0))
+        else:
+            val = int(round(lvl * 2.0 + session.con_val * 2.0))
+        if getattr(session, 'job', 0) == 2:  # Guardian
+            val = int(val * 1.1)
+        return val
 
     def get_player_spd(self, session: PlayerSession) -> int:
         """Calculate player speed."""
         lvl = session.level
         if session.element == 4:  # Wind
-            return int(round(lvl * 2.1 + session.agi_val * 2.2))
-        return int(round(lvl * 1.6 + session.agi_val * 2.2))
+            val = int(round(lvl * 2.1 + session.agi_val * 2.2))
+        else:
+            val = int(round(lvl * 1.6 + session.agi_val * 2.2))
+        if getattr(session, 'job', 0) in [3, 6]:  # Knight (3) or Thief (6)
+            val = int(val * 1.1)
+        return val
 
     def get_player_matk(self, session: PlayerSession) -> int:
         """Calculate player magic attack."""
         lvl = session.level
         if session.element == 3:  # Fire
-            return int(round(lvl * 1.6 + session.int_val * 2.0))
-        return int(round(lvl * 1.4 + session.int_val * 2.0))
+            val = int(round(lvl * 1.6 + session.int_val * 2.0))
+        else:
+            val = int(round(lvl * 1.4 + session.int_val * 2.0))
+        if getattr(session, 'job', 0) == 4:  # Mage
+            val = int(val * 1.1)
+        return val
 
     def get_player_mdef(self, session: PlayerSession) -> int:
         """Calculate player magic defense."""
         lvl = session.level
-        if session.element == 3:  # Fire
-            return int(round(lvl * 2.0 + session.wis_val * 2.0))
-        return int(round(lvl * 2.0 + session.wis_val * 2.0))
+        val = int(round(lvl * 2.0 + session.wis_val * 2.0))
+        if getattr(session, 'job', 0) == 5:  # Priest
+            val = int(val * 1.1)
+        return val
     def build_stats_update_packets(self, session: PlayerSession, levelup: bool = True) -> list[PacketWriter]:
         """Builds character stats update packets (Send8_1) matching C# emulator perfectly."""
         session.update_max_hp_sp()
@@ -1946,6 +2087,11 @@ class GameServer:
         pkt = PacketWriter().write_8(20).write_8(1).write_bytes(payload)
         await session.send_packet(pkt)
 
+    async def send_dialogue(self, session: PlayerSession, click_id: int, talk_id: int, step: int = 1, portrait_type: int = 3):
+        """Sends an authentic in-game dialogue packet (AC 20 Sub 1) using a TalkID from Talk.dat."""
+        dialog_hex = f"{talk_id & 0xFF:02x}{(talk_id >> 8) & 0xFF:02x}{(talk_id >> 16) & 0xFF:02x}"
+        await self._send_quest_dialogue(session, dialog_hex, click_id, step=step, portrait_type=portrait_type)
+
     async def _send_quest_spawn(self, session: PlayerSession, spawn_hex: str):
         # 03 fd spawn packet
         pkt = PacketWriter().write_bytes(bytes.fromhex(spawn_hex))
@@ -1959,8 +2105,18 @@ class GameServer:
         # Save to database
         if not hasattr(session, 'quests') or session.quests is None:
             session.quests = {}
-        session.quests[str(quest_id)] = state
-        self.db.save_player(session)
+        if isinstance(session.quests, dict):
+            session.quests[str(quest_id)] = state
+        elif isinstance(session.quests, list):
+            found = False
+            for q in session.quests:
+                if isinstance(q, dict) and str(q.get("quest_id", q.get("id", ""))) == str(quest_id):
+                    q["state"] = state
+                    found = True
+                    break
+            if not found:
+                session.quests.append({"quest_id": quest_id, "state": state})
+        self.save_player_to_db(session)
 
     def _is_visible_portal(self, name: str, dest_mapID: int) -> bool:
         if dest_mapID == 58001:
@@ -2083,6 +2239,11 @@ class GameServer:
         # Send ground items to player on warping to new map
         await self.send_ground_items(session)
         
+        # Synchronize per-player NPC visibility and replay actors
+        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+        await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(self, session, dst_map)
+        await GLOBAL_PREEVENT_INTERPRETER.replay_actor_visibility(self, session, dst_map)
+
         # Save to database
         self.save_player_to_db(session)
         

@@ -1,0 +1,27 @@
+[
+    {
+        "quest_id": 1001,
+        "name": "Beginner's Journey",
+        "req_level": 1,
+        "npc_id": 10000,
+        "description": "Speak to Breillat in Kelan Village to start your adventure.",
+        "objectives": [
+            {
+                "type": "talk_npc",
+                "target_id": 10000,
+                "amount": 1,
+                "description": "Talk to Breillat"
+            }
+        ],
+        "rewards": {
+            "exp": 100,
+            "gold": 500,
+            "items": [
+                {
+                    "item_id": 10004,
+                    "amount": 5
+                }
+            ]
+        }
+    }
+]

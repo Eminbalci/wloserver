@@ -1,0 +1,14 @@
+{
+    "10017": [
+        {
+            "id": "npc_10017_1",
+            "npc_id": 10000,
+            "name": "Breillat",
+            "x": 1000,
+            "y": 1000,
+            "direction": 0,
+            "script_id": 1,
+            "dialogue_id": 44196
+        }
+    ]
+}

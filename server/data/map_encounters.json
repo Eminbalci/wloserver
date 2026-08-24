@@ -1,0 +1,21 @@
+{
+    "10017": {
+        "encounter_rate": 15,
+        "monsters": [
+            {
+                "monster_id": 11001,
+                "name": "Tabby Cat",
+                "min_lvl": 1,
+                "max_lvl": 5,
+                "weight": 50
+            },
+            {
+                "monster_id": 11003,
+                "name": "Shiba inu",
+                "min_lvl": 2,
+                "max_lvl": 6,
+                "weight": 50
+            }
+        ]
+    }
+}

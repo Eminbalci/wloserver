@@ -1,83 +1,98 @@
+"""
+Wonderland Online Tent Interior & Furniture Action Handler (AC 62)
+Ported from C# Src/Network/ActionCodes/AC62.cs
+"""
+
 import logging
 from server.network import PacketWriter
+from server.tent import GLOBAL_TENT_MANAGER
 
 logger = logging.getLogger("WLO_Server")
 
 ACTION_CODES = [62]
 
+
 async def handle(server, session, reader):
     """Handles Tent interior and furniture actions (AC 62)."""
     sub = reader.read_8()
-    
-    if sub == 61:  # Enter Tent Request
-        # Payload: [62, 61, 01 00 00 00, 'BGM0011']
-        unk = reader.read_32()
-        bgm = reader.read_string_n()
-        logger.info(f"[{session.char_name}] Requesting to enter tent (BGM: {bgm})")
-        
-        # Warp player to tent interior. 
-        # Typically, map 12000 is the tent interior map.
-        session.map_id = 12000
-        session.x = 400
-        session.y = 400
-        
-        # In a real setup, we would warp the player properly. 
-        # For now, we manually send the tent interior data.
-        
-        # Server responds with:
-        # 1. AC 35 Sub 12 (Unknown) - skip for now or send generic
-        # 2. AC 12 Sub 163 (Warp to interior)
-        # 3. AC 62 Sub 7
-        # 4. AC 62 Sub 4 (Furniture data)
-        # 5. AC 62 Sub 59 (BGM update)
-        
-        warp_pkt = PacketWriter().write_8(12).write_8(163)
-        warp_pkt.write_32(session.char_id)
-        warp_pkt.write_16(12000) # Map ID
-        warp_pkt.write_16(session.x)
-        warp_pkt.write_16(session.y)
-        warp_pkt.write_32(0) # Padding
-        await session.send_packet(warp_pkt)
-        
-        # Tent properties
-        await session.send_packet(PacketWriter().write_8(62).write_8(7).write_16(0))
-        
-        # Furniture data [62, 4]
-        # Format: [62, 4, char_id(4), count(2), ...furniture items]
-        furn_pkt = PacketWriter().write_8(62).write_8(4)
-        furn_pkt.write_32(session.char_id)
-        furn_pkt.write_16(0) # 0 furniture for now
-        await session.send_packet(furn_pkt)
-        
-        # BGM Update
-        bgm_pkt = PacketWriter().write_8(62).write_8(59)
-        bgm_pkt.write_16(257) # Unknown flags
-        bgm_pkt.write_32(0)
-        bgm_pkt.write_string_n("BGM0011")
-        await session.send_packet(bgm_pkt)
-        
-        # Save state
-        server.save_player_to_db(session)
-        logger.info(f"[{session.char_name}] Entered tent interior.")
+    logger.info(f"[{session.char_name}] AC62 Tent Handler. Sub={sub}, payload={reader.data.hex()}")
 
-    elif sub == 3:  # Move Furniture
-        # Payload: [62, 3, furn_id(2), x(4), y(4), dir(4), unk(1)]
-        # Echo back to confirm movement
-        furn_id = reader.read_16()
+    tent = GLOBAL_TENT_MANAGER.get_or_create_tent(session.char_id)
+
+    if sub == 61:  # Enter Tent Request
+        unk = reader.read_32() if reader.remaining_bytes() >= 4 else 0
+        bgm = reader.read_string_n() if reader.remaining_bytes() > 0 else "BGM0011"
+        logger.info(f"[{session.char_name}] Entering tent interior (BGM: {bgm})")
+        await GLOBAL_TENT_MANAGER.open_tent(server, session, bgm)
+
+    elif sub == 1:  # Place Furniture Item into Tent
+        # Format: Bag(1) + Slot(1) + X(4) + Y(4) + Floor(4)
+        if reader.remaining_bytes() < 14:
+            logger.warning(f"[{session.char_name}] Ignored short AC62:1 packet (remaining: {reader.remaining_bytes()})")
+            return
+
+        bag_index = reader.read_8()
+        slot_index = reader.read_8()
         x = reader.read_32()
         y = reader.read_32()
-        direction = reader.read_32()
-        unk = reader.read_8()
-        
-        logger.info(f"[{session.char_name}] Moving furniture {furn_id} to {x},{y} dir {direction}")
-        
-        resp = PacketWriter().write_8(62).write_8(3)
-        resp.write_16(furn_id)
-        resp.write_32(x)
-        resp.write_32(y)
-        resp.write_32(direction)
-        resp.write_8(unk)
-        await session.send_packet(resp)
+        floor = reader.read_32()
+
+        logger.info(f"[{session.char_name}] Place Furniture: Bag={bag_index} Slot={slot_index} Pos=({x}, {y}) Floor={floor}")
+
+        from server.gameserver import remove_item_at_slot, get_item_at_slot
+        target_item = get_item_at_slot(session, slot_index)
+        place_item_id = target_item.get("item_id", 38027) if target_item else 38027
+
+        if target_item:
+            remove_item_at_slot(session, slot_index, 1)
+
+        tent.place_item(place_item_id, x, y, floor, rotation=0)
+        GLOBAL_TENT_MANAGER.save_tent_to_db(tent)
+
+        # 1. Send Confirmation [62, 1, 1]
+        confirm_pkt = PacketWriter().write_8(62).write_8(1).write_8(1)
+        await session.send_packet(confirm_pkt)
+
+        # 2. Resend all tent items
+        await tent.send_tent_items_to_player(session)
+
+        # 3. Update inventory UI
+        await session.send_packet(server.build_inventory_packet(session))
+
+    elif sub == 3:  # Move / Rotate Furniture
+        # Format: Index(2) + X(4) + Y(4) + Floor/Dir(4) + Rotation(1)
+        if reader.remaining_bytes() < 14:
+            return
+
+        index = reader.read_16()
+        x = reader.read_32()
+        y = reader.read_32()
+        floor_dir = reader.read_32()
+        rotation = reader.read_8() if reader.remaining_bytes() > 0 else 0
+
+        logger.info(f"[{session.char_name}] Move Furniture: Index={index} to ({x}, {y}) Floor={floor_dir} Rot={rotation}")
+
+        tent.move_item(index, x, y, floor_dir, rotation)
+        GLOBAL_TENT_MANAGER.save_tent_to_db(tent)
+
+        # Echo confirmation
+        echo_pkt = PacketWriter().write_8(62).write_8(3)
+        echo_pkt.write_16(index).write_32(x).write_32(y).write_32(floor_dir).write_8(rotation)
+        await session.send_packet(echo_pkt)
+
+        # Resend items to ensure alignment
+        await tent.send_tent_items_to_player(session)
+
+    elif sub == 4:  # Special Item Add / Decor
+        await session.send_packet(PacketWriter().write_8(62).write_8(4).write_32(session.char_id).write_16(len(tent.items)))
+
+    elif sub in (7, 14, 15):  # Floor / Wallpaper Styling
+        color_val = reader.read_16() if reader.remaining_bytes() >= 2 else 0
+        if sub == 14: tent.floor1_color = color_val
+        elif sub == 15: tent.floor1_wallpaper = color_val
+        GLOBAL_TENT_MANAGER.save_tent_to_db(tent)
+        await session.send_packet(PacketWriter().write_8(62).write_8(sub).write_16(color_val))
 
     else:
         logger.info(f"Unhandled AC 62 Sub-Code: {sub}, payload: {reader.data.hex()}")
+        await session.send_packet(PacketWriter().write_8(20).write_8(8))

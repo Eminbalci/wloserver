@@ -16,6 +16,17 @@ async def handle(server, session, reader):
         session.x = x
         session.y = y
         
+        # Cancel active stall/fishing states on movement
+        if getattr(session, 'is_stall_active', False):
+            session.is_stall_active = False
+            logger.info(f"[{session.char_name}] Cancelled active stall due to movement.")
+            await session.send_packet(PacketWriter().write_8(23).write_8(66).write_8(1))
+            
+        if getattr(session, 'is_fishing', False):
+            session.is_fishing = False
+            logger.info(f"[{session.char_name}] Stopped fishing due to movement.")
+            await session.send_packet(PacketWriter().write_8(23).write_8(54).write_8(0))
+        
         # Save to database on movement
         server.save_player_to_db(session)
         

@@ -31,6 +31,8 @@ async def handle(server, session, reader):
                 buy_confirm = PacketWriter()
                 buy_confirm.write_8(54).write_8(3).write_8(shop_id).write_8(tab_id).write_16(item_id).write_8(amount)
                 await session.send_packet(buy_confirm)
+            else:
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Sorry, inventory is full!"))
         else:
             logger.warning(f"[AC54] Not enough gold ({session.gold} < {price})")
 

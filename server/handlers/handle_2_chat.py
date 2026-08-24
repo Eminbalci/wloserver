@@ -26,11 +26,9 @@ async def handle(server, session, reader):
             return
 
         if words[0].startswith(":"):
-            if not is_gm:
-                sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
-                    "You do not have GM privileges to use commands."
-                )
-                await session.send_packet(sys_msg)
+            from server.gm_commands import GLOBAL_GM_COMMANDS
+            handled = await GLOBAL_GM_COMMANDS.process_command(server, session, msg)
+            if handled:
                 return
 
             if words[0] == ":warp" and len(words) >= 4:
@@ -193,6 +191,47 @@ async def handle(server, session, reader):
                     await session.send_packet(sys_msg)
                 except ValueError:
                     pass
+            elif words[0] in [":dep", ":deposit"] and len(words) >= 2:
+                try:
+                    amount = int(words[1])
+                    if amount <= 0:
+                        raise ValueError
+                    if session.gold < amount:
+                        sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Not enough gold in inventory.")
+                        await session.send_packet(sys_msg)
+                    elif getattr(session, 'bank_gold', 0) + amount > 400000000:
+                        sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("ATM deposit limit 400M")
+                        await session.send_packet(sys_msg)
+                    else:
+                        session.gold -= amount
+                        session.bank_gold = getattr(session, 'bank_gold', 0) + amount
+                        await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
+                        server.save_player_to_db(session)
+                        sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
+                            f"Successfully deposited {amount} gold. Bank Balance: {session.bank_gold} gold."
+                        )
+                        await session.send_packet(sys_msg)
+                except ValueError:
+                    pass
+            elif words[0] in [":with", ":withdraw"] and len(words) >= 2:
+                try:
+                    amount = int(words[1])
+                    if amount <= 0:
+                        raise ValueError
+                    if getattr(session, 'bank_gold', 0) < amount:
+                        sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Not enough gold in bank.")
+                        await session.send_packet(sys_msg)
+                    else:
+                        session.gold += amount
+                        session.bank_gold = getattr(session, 'bank_gold', 0) - amount
+                        await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
+                        server.save_player_to_db(session)
+                        sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
+                            f"Successfully withdrew {amount} gold. Bank Balance: {session.bank_gold} gold."
+                        )
+                        await session.send_packet(sys_msg)
+                except ValueError:
+                    pass
             elif words[0] == ":heal":
                 session.hp = session.max_hp
                 session.sp = session.max_sp
@@ -338,6 +377,105 @@ async def handle(server, session, reader):
                 refresh = PacketWriter().write_8(5).write_8(8).write_32(session.char_id).write_8(0)
                 server.broadcast_to_map(session.map_id, refresh)
                 await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Unboarded vehicle"))
+                
+            elif words[0] == ":bath":
+                if getattr(session, 'bathing', False):
+                    server.stop_bath_healing(session)
+                else:
+                    server.start_bath_healing(session)
+                    
+            elif words[0] == ":marry" and len(words) >= 2:
+                partner_name = words[1].strip()
+                partner = None
+                for sess in server.sessions.values():
+                    if getattr(sess, 'char_name', '').lower() == partner_name.lower():
+                        partner = sess
+                        break
+                if not partner:
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Partner not found."))
+                    return
+                if session.level < 30:
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Requires LV30 to marry"))
+                    return
+                if partner.level < 30:
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Partner must be LV30"))
+                    return
+                p1_female = session.body in (2, 4)
+                p2_female = partner.body in (2, 4)
+                if p1_female == p2_female:
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't marry same gender"))
+                    return
+                bride = session if p1_female else partner
+                has_wedding_dress = False
+                for equip in bride.equipments:
+                    if equip > 0:
+                        item_name = server.items.get(str(equip), "").lower()
+                        if "wedding" in item_name or "dress" in item_name:
+                            has_wedding_dress = True
+                            break
+                if not has_wedding_dress:
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Bride needs to dress up"))
+                    return
+                if not isinstance(session.quests, dict): session.quests = {}
+                if not isinstance(partner.quests, dict): partner.quests = {}
+                session.quests["partner"] = partner.char_name
+                partner.quests["partner"] = session.char_name
+                server.save_player_to_db(session)
+                server.save_player_to_db(partner)
+                broadcast_pkt = PacketWriter().write_8(2).write_8(2).write_32(0).write_string_n(
+                    f"[System]: Marriage matched in heaven for the lifetime. Congratulations to {session.char_name} and {partner.char_name}!"
+                )
+                for s_act in server.active_sessions:
+                    await s_act.send_packet(broadcast_pkt)
+                    
+            elif words[0] == ":petreborn" and len(words) >= 2:
+                try:
+                    slot = int(words[1])
+                    if 1 <= slot <= len(session.pets):
+                        pet = session.pets[slot - 1]
+                        if pet.get("level", 1) < 70:
+                            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Pet must be at least Level 70 to reborn."))
+                            return
+                        if pet.get("equipments") and len(pet.get("equipments", [])) > 0:
+                            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Remove all pet equips to reborn"))
+                            return
+                        if pet.get("reborn", 0) != 0:
+                            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Pet is already reborn."))
+                            return
+                        pet["reborn"] = 1
+                        pet["level"] = 1
+                        pet["exp"] = 0
+                        pet["str"] = pet.get("str", 5) + 10
+                        pet["con"] = pet.get("con", 5) + 10
+                        pet["int"] = pet.get("int", 5) + 10
+                        pet["wis"] = pet.get("wis", 5) + 10
+                        pet["agi"] = pet.get("agi", 5) + 10
+                        pet["hp"] = 180 + pet["con"] * 2 + 1
+                        pet["sp"] = 94 + pet["wis"] * 2 + 1
+                        server.save_player_to_db(session)
+                        await server.send_pet_list(session)
+                        await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"{pet.get('name', 'Pet')} has successfully reborn!"))
+                except ValueError:
+                    pass
+                    
+            elif words[0] == ":allycheck":
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("No guild allies"))
+                
+            elif words[0] == ":spectate":
+                allow_spec = getattr(session, "allow_spectating", True)
+                session.allow_spectating = not allow_spec
+                status = "enabled" if session.allow_spectating else "disabled"
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Spectating is now {status}."))
+                
+            elif words[0] == ":coupon":
+                coupons = getattr(session, "coupons", 0)
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"You have {coupons} event coupons."))
+                
+            elif words[0] == ":remote":
+                is_rc = getattr(session, "is_remote_control", False)
+                session.is_remote_control = not is_rc
+                status = "active" if session.is_remote_control else "inactive"
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Remote control auto-battler is now {status}."))
         else:
             # Regular chat: broadcast to map
             chat_pkt = PacketWriter()
