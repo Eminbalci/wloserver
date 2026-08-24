@@ -1,8 +1,9 @@
 # Wonderland Online Server
 
-This repository contains a custom python-based server implementation for Wonderland Online. 
+This repository contains a custom python-based server implementation for Wonderland Online.
 
 ## Structure
+
 - `start.bat` / `start.sh` - Launch scripts for the server
 - `server/main.py` - Entry point
 - `server/gameserver.py` - Core game server logic
@@ -43,8 +44,8 @@ This repository contains a custom python-based server implementation for Wonderl
 - `server/dynamic_data_manager.py` - Central dynamic configuration manager (drops, crafting, alchemy, chests, gathering, instances)
 - `server/eve_loader.py` - Authentic binary parser for 1,119 maps in `data/eve.Emg` (NPCs, portals, chests, mining, bytecode events)
 - `docs/` - Technical Documentation:
-  - [Cutscenes & Scene Transition Protocol](docs/cutscene_and_scene_transitions.md)
-- [Character Deletion Protocol & GUI](docs/character_deletion_system.md)
+  - [Cutscenes &amp; Scene Transition Protocol](docs/cutscene_and_scene_transitions.md)
+- [Character Deletion Protocol &amp; GUI](docs/character_deletion_system.md)
   - [dialogue_queue_and_talk_resolver.md](file:///docs/dialogue_queue_and_talk_resolver.md) - Multi-Step Dialogue Queue, 17,494-entry Talk.dat Resolver, and Action Code 32 Emotes
   - [administrator_gui_suite.md](file:///docs/administrator_gui_suite.md) - Modern Desktop Administrator Control Suite (13 Tabs, GM Tools, 4-Column Browser, Character Data Editor)
   - [dynamic_data_and_eve_engine.md](file:///docs/dynamic_data_and_eve_engine.md) - Dynamic SQLite data architecture, live hot-reloads, and `eve.Emg` binary map parser
@@ -53,41 +54,41 @@ This repository contains a custom python-based server implementation for Wonderl
   - [extended_game_systems.md](file:///docs/extended_game_systems.md) - Extended systems technical specifications (Battle, Trade, Stall, Mail, Guild, Marriage, Vehicles, Rebirth, Pet Amity, Mini-Games)
   - [quest_system_architecture.md](file:///docs/quest_system_architecture.md) - Master Quest engine, Mark.dat parsing, PreEvents, and AC 24 protocol
   - [tent_and_furniture_systems.md](file:///docs/tent_and_furniture_systems.md) - Instanced tent map entries, furniture placement/movement (AC 62), world pitching (AC 65), and crafting (AC 64)
-  - [database_management.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/database_management.md) - SQLite DB schemas and data access methods
-  - [network_protocol.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/network_protocol.md) - Custom packet framing, XOR decryption, and helpers
-  - [game_systems.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/game_systems.md) - Battle engine, GM commands, distance rules, and tent mechanics
-  - [web_services.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/web_services.md) - Web Admin panel & Web registration details
-  - [character_management.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/character_management.md) - Character creation stats verify and deletion cleanups
-  - [team_and_party_systems.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/team_and_party_systems.md) - Team invites, accepts and member management
-  - [mini_games_and_mall.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/mini_games_and_mall.md) - Item Mall point validations and Lucky Draw spins
-  - [tent_and_furniture_systems.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/tent_and_furniture_systems.md) - Tent interior map entries and furniture moves
-  - [friends_and_mailbox_systems.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/friends_and_mailbox_systems.md) - Friend list pairings and invitation handshakes
-  - [crafting_and_production_systems.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/crafting_and_production_systems.md) - Manufacturing recipe checks and async timers
-  - [authentication_and_login.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/authentication_and_login.md) - Login authentication check, slot lists, and redirects
-  - [npc_store_transactions.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/npc_store_transactions.md) - Store purchases, selling prices, and gold updates
-  - [item_compounding_system.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/item_compounding_system.md) - Alchemy compound recipes and material verification
-  - [player_settings_and_handshake.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/player_settings_and_handshake.md) - Connection handshake versions and client option settings
-  - [pet_battle_state_management.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/pet_battle_state_management.md) - Companion battle/rest toggling and spawn broadcasts
-  - [binary_dat_decryption.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/binary_dat_decryption.md) - XOR dat keys, recipes parsing, and database decryption
-  - [winsock_asynchronous_io.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/winsock_asynchronous_io.md) - Client socket connections, FIONBIO Filer toggles, and async selectors
+  - [database_management.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/database_management.md>) - SQLite DB schemas and data access methods
+  - [network_protocol.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/network_protocol.md>) - Custom packet framing, XOR decryption, and helpers
+  - [game_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/game_systems.md>) - Battle engine, GM commands, distance rules, and tent mechanics
+  - [web_services.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/web_services.md>) - Web Admin panel & Web registration details
+  - [character_management.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/character_management.md>) - Character creation stats verify and deletion cleanups
+  - [team_and_party_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/team_and_party_systems.md>) - Team invites, accepts and member management
+  - [mini_games_and_mall.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/mini_games_and_mall.md>) - Item Mall point validations and Lucky Draw spins
+  - [tent_and_furniture_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/tent_and_furniture_systems.md>) - Tent interior map entries and furniture moves
+  - [friends_and_mailbox_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/friends_and_mailbox_systems.md>) - Friend list pairings and invitation handshakes
+  - [crafting_and_production_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/crafting_and_production_systems.md>) - Manufacturing recipe checks and async timers
+  - [authentication_and_login.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/authentication_and_login.md>) - Login authentication check, slot lists, and redirects
+  - [npc_store_transactions.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/npc_store_transactions.md>) - Store purchases, selling prices, and gold updates
+  - [item_compounding_system.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/item_compounding_system.md>) - Alchemy compound recipes and material verification
+  - [player_settings_and_handshake.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/player_settings_and_handshake.md>) - Connection handshake versions and client option settings
+  - [pet_battle_state_management.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/pet_battle_state_management.md>) - Companion battle/rest toggling and spawn broadcasts
+  - [binary_dat_decryption.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/binary_dat_decryption.md>) - XOR dat keys, recipes parsing, and database decryption
+  - [winsock_asynchronous_io.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/winsock_asynchronous_io.md>) - Client socket connections, FIONBIO Filer toggles, and async selectors
 - `decompiled docs/` - Client-side Decompiled Code Documentation:
-  - [client_advanced_systems.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_advanced_systems.md) - Instances, PVP ranks, mini-games, treasure, titles, voyage, and chaos crystals
-  - [client_combat_inventory_economy.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_combat_inventory_economy.md) - Item mall, crafting, inventory, equipment, NPC, teleport, combat classes, recycle, and auto-walk
-  - [client_mini_games_and_systems.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_mini_games_and_systems.md) - Gacha machine, Gobang board game, gacha/slots, HP recovery, Security Lock, and audio parsing
-  - [client_trade_battle_map_server.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_trade_battle_map_server.md) - Trade, battle, map/minimap, weather, server/channel, login, GM tools, chat channels, anti-cheat, and repair
-  - [client_game_systems_extended.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_game_systems_extended.md) - Stall, marriage, guild, mount, forge, bank, fishing, hot spring, tent, mail, and events
-  - [client_launch_and_external_links.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_launch_and_external_links.md) - Patcher launch validations, ShellExecute redirects, and billing URLs
-  - [client_multimedia_and_render_engine.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_multimedia_and_render_engine.md) - DirectDraw surfaces, DirectSound wrappers, and wave audio lists
-  - [client_events_and_ui_handling.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_events_and_ui_handling.md) - Lucky draw animations, gear equip event handlers, and holiday systems
-  - [client_save_and_chat_system.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_save_and_chat_system.md) - Save file XOR loading and chat channel item requirements
-  - [network_packet.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/network_packet.md) - Socket management and packet distribution
-  - [login_server.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/login_server.md) - Authentication & channel parsing
-  - [movement_map.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/movement_map.md) - Grid coordinates, map decryption and range validation
-  - [combat_battle.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/combat_battle.md) - PVE encounter steps and PVP PK duels
-  - [quest_journal.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/quest_journal.md) - Quest UI panels, conversation forms and sub-opcodes
-  - [pet_companion.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/pet_companion.md) - Summon states, Amity lock and rest/combat/stall modes
-  - [trade_shop.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/trade_shop.md) - Secure trade, stall limits, simya compounding and material IDs
-  - [item_mall.md](file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/item_mall.md) - Client shop UI and point/balance validations
+  - [client_advanced_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_advanced_systems.md>) - Instances, PVP ranks, mini-games, treasure, titles, voyage, and chaos crystals
+  - [client_combat_inventory_economy.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_combat_inventory_economy.md>) - Item mall, crafting, inventory, equipment, NPC, teleport, combat classes, recycle, and auto-walk
+  - [client_mini_games_and_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_mini_games_and_systems.md>) - Gacha machine, Gobang board game, gacha/slots, HP recovery, Security Lock, and audio parsing
+  - [client_trade_battle_map_server.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_trade_battle_map_server.md>) - Trade, battle, map/minimap, weather, server/channel, login, GM tools, chat channels, anti-cheat, and repair
+  - [client_game_systems_extended.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_game_systems_extended.md>) - Stall, marriage, guild, mount, forge, bank, fishing, hot spring, tent, mail, and events
+  - [client_launch_and_external_links.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_launch_and_external_links.md>) - Patcher launch validations, ShellExecute redirects, and billing URLs
+  - [client_multimedia_and_render_engine.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_multimedia_and_render_engine.md>) - DirectDraw surfaces, DirectSound wrappers, and wave audio lists
+  - [client_events_and_ui_handling.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_events_and_ui_handling.md>) - Lucky draw animations, gear equip event handlers, and holiday systems
+  - [client_save_and_chat_system.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/client_save_and_chat_system.md>) - Save file XOR loading and chat channel item requirements
+  - [network_packet.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/network_packet.md>) - Socket management and packet distribution
+  - [login_server.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/login_server.md>) - Authentication & channel parsing
+  - [movement_map.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/movement_map.md>) - Grid coordinates, map decryption and range validation
+  - [combat_battle.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/combat_battle.md>) - PVE encounter steps and PVP PK duels
+  - [quest_journal.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/quest_journal.md>) - Quest UI panels, conversation forms and sub-opcodes
+  - [pet_companion.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/pet_companion.md>) - Summon states, Amity lock and rest/combat/stall modes
+  - [trade_shop.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/trade_shop.md>) - Secure trade, stall limits, simya compounding and material IDs
+  - [item_mall.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/decompiled%20docs/item_mall.md>) - Client shop UI and point/balance validations
 
 ## Setup & Installation
 
@@ -104,10 +105,13 @@ The server includes all necessary baseline `data/` files (`eve.Emg`, `Compound2.
    - On Linux/Mac: `./start.sh` or run `python3 -m server.main`
 
 ## Database
+
 The server uses SQLite databases (`wlo_server.db` / `server/ServerDataBase.db`) to store player data, accounts, and static game state.
 
 ## Admin Commands
+
 You can type these commands in the game chat to modify your character:
+
 - `:warp <map_id> <x> <y>` - Teleport to a specific map and coordinates.
 - `:item add <item_id> [amount]` - Add an item to your inventory.
 - `:level <level>` - Set your character's level.
@@ -118,3 +122,5 @@ You can type these commands in the game chat to modify your character:
 - `:skill <skill_id> [grade]` - Add or level up a skill.
 - `:clear` - Clear all items from your inventory.
 - `:propshop` - Open the property shop.
+
+#Game version rhode island install : [drive.google.com/file/d/18z5H1w5G9GujMJywRHL-uOac4fFyOTSY](https://drive.google.com/file/d/18z5H1w5G9GujMJywRHL-uOac4fFyOTSY)
