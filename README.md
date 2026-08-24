@@ -42,10 +42,15 @@ This repository contains a custom python-based server implementation for Wonderl
 - `server/death_system.py` - Combat defeat EXP loss, ghost state aura, and sacred altar respawns
 - `server/events_system.py` - Scheduled server events, Double EXP 2.0x multiplier, and festival notices
 - `server/dynamic_data_manager.py` - Central dynamic configuration manager (drops, crafting, alchemy, chests, gathering, instances)
+- `server/npc_manager.py` - Authentic NPC & world entity manager, C# QuestNpc parity, scripted waypoint pacing, and blinking prevention
 - `server/eve_loader.py` - Authentic binary parser for 1,119 maps in `data/eve.Emg` (NPCs, portals, chests, mining, bytecode events)
 - `docs/` - Technical Documentation:
-  - [Cutscenes &amp; Scene Transition Protocol](docs/cutscene_and_scene_transitions.md)
-- [Character Deletion Protocol &amp; GUI](docs/character_deletion_system.md)
+  - [NPC Blinking Prevention & AI Waypoint Architecture](docs/npc_blinking_and_ai_system.md)
+  - [MOTD & Server Branding System](docs/motd_system.md)
+  - [Robinson Beach Rescue Cutscene Protocol](docs/robinson_beach_cutscene.md)
+  - [Mini-Games & Item Mall Protocol](docs/mini_games_and_mall.md)
+  - [Cutscenes & Scene Transition Protocol](docs/cutscene_and_scene_transitions.md)
+  - [Character Deletion Protocol & GUI](docs/character_deletion_system.md)
   - [dialogue_queue_and_talk_resolver.md](file:///docs/dialogue_queue_and_talk_resolver.md) - Multi-Step Dialogue Queue, 17,494-entry Talk.dat Resolver, and Action Code 32 Emotes
   - [administrator_gui_suite.md](file:///docs/administrator_gui_suite.md) - Modern Desktop Administrator Control Suite (13 Tabs, GM Tools, 4-Column Browser, Character Data Editor)
   - [dynamic_data_and_eve_engine.md](file:///docs/dynamic_data_and_eve_engine.md) - Dynamic SQLite data architecture, live hot-reloads, and `eve.Emg` binary map parser
@@ -59,9 +64,7 @@ This repository contains a custom python-based server implementation for Wonderl
   - [game_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/game_systems.md>) - Battle engine, GM commands, distance rules, and tent mechanics
   - [web_services.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/web_services.md>) - Web Admin panel & Web registration details
   - [character_management.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/character_management.md>) - Character creation stats verify and deletion cleanups
-  - [team_and_party_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/team_and_party_systems.md>) - Team invites, accepts and member management
-  - [mini_games_and_mall.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/mini_games_and_mall.md>) - Item Mall point validations and Lucky Draw spins
-  - [tent_and_furniture_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/tent_and_furniture_systems.md>) - Tent interior map entries and furniture moves
+  - [mini_games_and_mall.md](file:///docs/mini_games_and_mall.md) - Item Mall network protocols (AC 0/13/21/23/34/75/226, TCP 6416), Server Branding (Mamiletta / GUI edit), and Lucky Draw mechanics
   - [friends_and_mailbox_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/friends_and_mailbox_systems.md>) - Friend list pairings and invitation handshakes
   - [crafting_and_production_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/crafting_and_production_systems.md>) - Manufacturing recipe checks and async timers
   - [authentication_and_login.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/authentication_and_login.md>) - Login authentication check, slot lists, and redirects

@@ -866,10 +866,10 @@ class QuestEngine:
         if quest.reward.companion_pet_id > 0:
             await self.send_companion_reward(server, session, quest.reward.companion_pet_id, quest.reward.companion_name or "Companion")
 
-        # 5. NPC Despawn for this player (AC 22:1 state 1)
+        # 5. NPC Despawn for this player (AC 22:10 state 0xFF, 0xFF)
         if quest.despawn_npc_click_ids:
             for click_id in quest.despawn_npc_click_ids:
-                despawn_pkt = PacketWriter().write_8(22).write_8(1).write_8(click_id).write_8(0).write_8(1)
+                despawn_pkt = PacketWriter().write_8(22).write_8(10).write_16(click_id).write_8(0xFF).write_8(0xFF)
                 await session.send_packet(despawn_pkt)
 
         logger.info(f"[QuestEngine] Granted rewards for Quest '{quest.title}' to {session.char_name} (Gold: +{quest.reward.gold}, EXP: +{quest.reward.exp})")

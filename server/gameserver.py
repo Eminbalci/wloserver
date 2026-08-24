@@ -7,6 +7,7 @@ import traceback
 import math
 import sys
 import random
+import time
 from server.quest_manager import QuestManager
 from datetime import datetime
 
@@ -440,9 +441,52 @@ class GameServer:
         GLOBAL_QUEST_ENGINE.initialize(base_dir)
         GLOBAL_PREEVENT_INTERPRETER.load_preevents(eve_path)
 
-        self.SERVER_VERSION = SERVER_VERSION
+        self.SERVER_VERSION = self.db.get_config("server_name", SERVER_VERSION)
         self.SUBSERVER_CONFIG = SUBSERVER_CONFIG
         self._load_handlers()
+
+    def get_server_name(self) -> str:
+        """Returns current server branding / name."""
+        return self.SERVER_VERSION
+
+    def set_server_name(self, name: str):
+        """Sets server branding / name and persists to database."""
+        name = name.strip() if name else "Mamiletta"
+        self.SERVER_VERSION = name
+        self.db.set_config("server_name", name)
+        logger.info(f"[Server] Server Name / Branding updated to: '{name}'")
+
+    def get_motd(self) -> str:
+        """Returns current MOTD / welcome message from DB or default."""
+        return self.db.get_config("welcome_message", "Welcome to the Wonderland Online Private Server! Enjoy your adventure!")
+
+    def set_motd(self, msg: str):
+        """Sets MOTD / welcome message and persists to DB."""
+        msg = msg.strip() if msg else "Welcome to the Wonderland Online Private Server! Enjoy your adventure!"
+        self.db.set_config("welcome_message", msg)
+        logger.info(f"[Server] MOTD / Welcome message updated to: '{msg}'")
+
+    async def dispatch_login_motd(self, session: 'PlayerSession'):
+        """Dispatches login MOTD (Message of the Day) matching C# WorldServer.DispatchLoginMotd."""
+        try:
+            if not session:
+                return
+            motd_raw = self.get_motd()
+            lines = [l.strip() for l in (motd_raw or "").replace("\r\n", "\n").split("\n") if l.strip()]
+            if not lines:
+                lines = ["Welcome to the Wonderland Online Private Server! Enjoy your adventure!"]
+
+            # 1. Send Popup Notice for the first line (AC 23 Sub 57)
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(lines[0]))
+
+            # 2. Send System / GM chat message (type 4 = Red/Orange GM text) for each line (AC 2)
+            for line in lines:
+                chat_pkt = PacketWriter().write_8(2).write_8(4).write_32(0).write_string_n(line)
+                await session.send_packet(chat_pkt)
+
+            logger.info(f"[{getattr(session, 'char_name', 'Player')}] Dispatched {len(lines)} MOTD line(s)")
+        except Exception as e:
+            logger.error(f"[Server] Error dispatching MOTD: {e}")
 
     def _load_skill_dat(self):
         """Loads actual skill multipliers from data/Skill.dat using server/skills.json mapping."""
@@ -545,108 +589,11 @@ class GameServer:
                     self.map_portals_count[mapID] = 0
                     self.map_portals[mapID] = []
 
-                npc_offset = offsets[0]
-                
-                npc_ptr = m['dataptr'] + npc_offset
-                if npc_ptr + 2 > len(d):
-                    continue
-                    
-                elen = struct.unpack_from("<H", d, npc_ptr)[0]
-                if elen == 0:
-                    continue
-                    
-                cur_ptr = npc_ptr + 2
-                npcs = []
-                for _ in range(elen):
-                    if cur_ptr + 50 > len(d):
-                        break
-                        
-                    clickId = struct.unpack_from("<H", d, cur_ptr)[0]
-                    name_len = d[cur_ptr+2]
-                    name_bytes = d[cur_ptr+3 : cur_ptr+3+name_len]
-                    name = name_bytes.decode('cp950', errors='ignore')
-                    
-                    cur_ptr += 22
-                    
-                    unknownbyte1 = d[cur_ptr]
-                    cur_ptr += 1
-                    
-                    x = struct.unpack_from("<I", d, cur_ptr)[0]
-                    cur_ptr += 4
-                    y = struct.unpack_from("<I", d, cur_ptr)[0]
-                    cur_ptr += 4
-                    
-                    # Events (store them)
-                    blen = d[cur_ptr]
-                    events = list(d[cur_ptr+1:cur_ptr+1+blen])
-                    cur_ptr += 1 + blen
-                    
-                    # unknownbytearray2 = linked portal IDs (door triggers)
-                    blen = d[cur_ptr]
-                    linked_portals = list(d[cur_ptr+1:cur_ptr+1+blen])
-                    cur_ptr += 1 + blen
-                    
-                    unknownbyte2 = d[cur_ptr]
-                    cur_ptr += 1
-                    
-                    npcId = struct.unpack_from("<I", d, cur_ptr)[0]
-                    cur_ptr += 4
-                    
-                    rotation = d[cur_ptr]
-                    cur_ptr += 1
-                    
-                    walk_behavior = d[cur_ptr]
-                    cur_ptr += 1
-                    
-                    unknownbyte5 = d[cur_ptr]
-                    cur_ptr += 1
-                    
-                    # walksteps
-                    blen = d[cur_ptr]
-                    cur_ptr += 1
-                    walksteps = []
-                    for _ in range(blen):
-                        wx = struct.unpack_from("<I", d, cur_ptr)[0]
-                        wy = struct.unpack_from("<I", d, cur_ptr+4)[0]
-                        delay = struct.unpack_from("<I", d, cur_ptr+8)[0]
-                        walksteps.append({'x': wx, 'y': wy, 'delay': delay})
-                        cur_ptr += 12
-                        
-                    # skip unknown bytes and walkpatterns and unknown words
-                    cur_ptr += 13
-                    
-                    blen = d[cur_ptr]
-                    cur_ptr += 1 + blen * 92
-                    
-                    cur_ptr += 8
-                    
-                    from server.dat_loaders import GLOBAL_NPC_DAT
-                    cleaned_name = (name or "").strip("\x00").strip()
-                    if not cleaned_name or cleaned_name.lower() in ("npc", "none", ""):
-                        canonical_name = GLOBAL_NPC_DAT.get_npc_name(npcId)
-                    else:
-                        canonical_name = cleaned_name
-
-                    npcs.append({
-                        'click_id': clickId,
-                        'name': canonical_name,
-                        'npc_id': npcId,
-                        'x': x,
-                        'y': y,
-                        'spawn_x': x,
-                        'spawn_y': y,
-                        'rotation': rotation,
-                        'walk_behavior': walk_behavior,
-                        'walksteps': walksteps,
-                        'events': events,
-                        'linked_portals': linked_portals,  # portal IDs this NPC triggers (doors)
-                        'cur_step': 0,
-                        'next_walk_time': 0.0
-                    })
-                    npc_count += 1
-                    
-                self.map_npcs[mapID] = npcs
-            logger.info(f"[NPC] Loaded {npc_count} NPCs across {len(self.map_npcs)} maps from eve.Emg.")
+            # Load authentic NPCs with strict C# spawn filtering and QuestNpc definitions
+            from server.npc_manager import GLOBAL_NPC_MANAGER
+            total_loaded = GLOBAL_NPC_MANAGER.load_npcs_from_eve(eve_path)
+            self.map_npcs = GLOBAL_NPC_MANAGER.map_npcs
+            self.npc_manager = GLOBAL_NPC_MANAGER
             
             # Load Eve Event trees
             from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
@@ -708,14 +655,22 @@ class GameServer:
 
     async def npc_walk_loop(self):
         """
-        Background loop for dynamically spawned world entities.
-        Native eve.Emg map NPCs are simulated client-side natively.
-        Spurious server AC 22:2 movement broadcasts reset NPC sprite animations and cause blinking.
+        Background loop for NPC AI, scripted waypoint movement, and wild roaming.
+        Ported 1:1 from C# Map.cs lines 320-330 and QuestNpc.cs.
         """
-        logger.info("[NPC] NPC background manager active (native eve.Emg client animation preservation enabled).")
+        logger.info("[NPC] Authentic NPC background AI & waypoint manager active.")
         while True:
             try:
-                await asyncio.sleep(10.0)
+                await asyncio.sleep(1.0)
+                now = time.time()
+                active_maps = set(self.map_players.keys())
+                if active_maps and hasattr(self, 'npc_manager'):
+                    self.npc_manager.update(
+                        now=now,
+                        active_map_ids=active_maps,
+                        map_players=self.map_players,
+                        broadcast_fn=self.broadcast_to_map
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -723,6 +678,7 @@ class GameServer:
 
     async def run(self, host: str = "0.0.0.0", port: int = 6414):
         """Starts the asynchronous TCP server."""
+        self.loop = asyncio.get_running_loop()
         server = await asyncio.start_server(self.handle_connection, host, port)
         logger.info(f"WLO Private Server successfully started on {host}:{port}")
         
@@ -1463,6 +1419,11 @@ class GameServer:
         
         await session.send_packet(PacketWriter().write_8(5).write_8(4))
         
+        # Dispatch Item Mall Catalog & Point Balance to initialize client mall matrix
+        from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
+        await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
+        await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
+        
         # Send ground items to the player who just joined the map
         await self.send_ground_items(session)
         
@@ -2014,12 +1975,12 @@ class GameServer:
                 await session.send_packet(PacketWriter().write_8(10).write_8(3).write_32(r.char_id).write_8(255))
                 await session.send_packet(PacketWriter().write_8(23).write_8(76).write_32(r.char_id))
                 
-        # Send visibility states of hidden map NPCs
+        # Send visibility states of hidden map NPCs (AC 22:10 matching C#)
         npcs = self.map_npcs.get(session.map_id, [])
         for npc in npcs:
-            if npc.get('visible', True) is False:
+            if npc.get('visible', True) is False or getattr(npc, 'visible', True) is False:
                 pkt_hide = PacketWriter()
-                pkt_hide.write_8(22).write_8(6).write_16(npc['click_id']).write_8(0)
+                pkt_hide.write_8(22).write_8(10).write_16(npc['click_id']).write_8(0xFF).write_8(0xFF)
                 await session.send_packet(pkt_hide)
 
         # 3. Map load complete trigger
@@ -3881,23 +3842,20 @@ class GameServer:
                     target_npc['visible'] = True
                 async def show_monster_delayed():
                     await asyncio.sleep(0.5)
-                    pkt = PacketWriter()
-                    pkt.write_8(22).write_8(6).write_16(click_id).write_8(1)
+                    pkt = PacketWriter().write_8(22).write_8(10).write_16(click_id).write_8(0).write_8(0)
                     await session.send_packet(pkt)
                 asyncio.create_task(show_monster_delayed())
             elif won:
                 if target_npc:
                     target_npc['visible'] = False
-                pkt_hide = PacketWriter()
-                pkt_hide.write_8(22).write_8(6).write_16(click_id).write_8(0)
+                pkt_hide = PacketWriter().write_8(22).write_8(10).write_16(click_id).write_8(0xFF).write_8(0xFF)
                 await session.send_packet(pkt_hide)
                 
                 async def respawn_monster():
                     await asyncio.sleep(15.0)
                     if target_npc:
                         target_npc['visible'] = True
-                    pkt_show = PacketWriter()
-                    pkt_show.write_8(22).write_8(6).write_16(click_id).write_8(1)
+                    pkt_show = PacketWriter().write_8(22).write_8(10).write_16(click_id).write_8(0).write_8(0)
                     self.broadcast_to_map(session.map_id, pkt_show)
                 asyncio.create_task(respawn_monster())
 

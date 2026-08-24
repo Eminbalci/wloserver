@@ -88,35 +88,81 @@ class TestItemMallSystem(unittest.TestCase):
         self.assertEqual(len(session.inventory), 0)
 
     def test_handle_75_itemmall(self):
-        """Verifies handler for AC 75 Sub 1 (catalog) and Sub 2 (purchase)."""
+        """Verifies handler for AC 75 Sub 1 (catalog), Sub 4 (category switch), Sub 5 (buy)."""
         session = MockSession(im_points=500)
         item = self.mgr.get_catalog()[0]
 
-        # In GameServer, opcode 75 is consumed before passing reader to handler.
-        # Sub 1 = [1]
+        # Sub 1 = [1] -> sends AC 75:1 and AC 75:3
         reader1 = PacketReader(bytes([1]))
         asyncio.run(handle_75_itemmall.handle(self.server, session, reader1))
         self.assertGreater(len(session.sent_packets), 0)
 
-        # Sub 2 = [2, ItemID_lo, ItemID_hi, quantity]
-        req_pkt = PacketWriter().write_8(2).write_16(item.item_id).write_8(1).buffer
-        reader2 = PacketReader(req_pkt)
-        asyncio.run(handle_75_itemmall.handle(self.server, session, reader2))
+        # Sub 4 with 1 byte = Category switch [4, cat_id=2] -> AC 57:1 ACK + AC 75:1
+        session.sent_packets.clear()
+        reader_cat = PacketReader(bytes([4, 2]))
+        asyncio.run(handle_75_itemmall.handle(self.server, session, reader_cat))
+        self.assertGreater(len(session.sent_packets), 0)
+        ack_p = xor_crypt(session.sent_packets[0][4:])
+        self.assertEqual(ack_p[0], 57)
+        self.assertEqual(ack_p[1], 1)
+
+        # Sub 5 with item_id and quantity -> [5, ItemID_lo, ItemID_hi, quantity]
+        session.sent_packets.clear()
+        req_pkt = PacketWriter().write_8(5).write_16(item.item_id).write_8(1).buffer
+        reader5 = PacketReader(req_pkt)
+        asyncio.run(handle_75_itemmall.handle(self.server, session, reader5))
         self.assertTrue(any(i.get('item_id') == item.item_id for i in session.inventory))
+        # Find buy response packet [75, 5]
+        found_buy_resp = any(xor_crypt(p[4:])[0] == 75 and xor_crypt(p[4:])[1] == 5 for p in session.sent_packets)
+        self.assertTrue(found_buy_resp)
 
     def test_handle_34_itemmall(self):
-        """Verifies handler for AC 34 Sub 1 (open in-game mall)."""
+        """Verifies handler for AC 34 Sub 1 Mode 0 (points query & catalog) and Mode 1 (cart checkout)."""
         session = MockSession(im_points=500)
-        reader = PacketReader(bytes([1]))
-        asyncio.run(handle_34_itemmall.handle(self.server, session, reader))
-        # Expects: AC 54:201, AC 35:4, AC 35:11
+        # Sub 1 Mode 0 = [1, 0]
+        reader0 = PacketReader(bytes([1, 0]))
+        asyncio.run(handle_34_itemmall.handle(self.server, session, reader0))
+        # Expects: AC 34:1, AC 75:1, AC 75:3
         self.assertEqual(len(session.sent_packets), 3)
         decrypted_p1 = xor_crypt(session.sent_packets[0][4:])
         decrypted_p2 = xor_crypt(session.sent_packets[1][4:])
         decrypted_p3 = xor_crypt(session.sent_packets[2][4:])
-        self.assertEqual(decrypted_p1[0], 54)
-        self.assertEqual(decrypted_p2[0], 35)
-        self.assertEqual(decrypted_p3[0], 35)
+        self.assertEqual(decrypted_p1[0], 34)
+        self.assertEqual(decrypted_p2[0], 75)
+        self.assertEqual(decrypted_p3[0], 75)
+
+    def test_handle_13_itemmall_query(self):
+        """Verifies AC 13 Sub 238 UI Item Mall click query confirmation."""
+        from server.handlers import handle_13_action
+        session = MockSession(char_id=42, im_points=800)
+        reader = PacketReader(bytes([238]))
+        asyncio.run(handle_13_action.handle(self.server, session, reader))
+        self.assertGreater(len(session.sent_packets), 0)
+        decrypted_p1 = xor_crypt(session.sent_packets[0][4:])
+        self.assertEqual(decrypted_p1[0], 13)
+        self.assertEqual(decrypted_p1[1], 42)
+
+    def test_handle_21_native_mall_window(self):
+        """Verifies AC 21 Sub 1 native mall GUI window dispatch."""
+        from server.handlers import handle_21_action
+        session = MockSession(im_points=800)
+        reader = PacketReader(bytes([1]))
+        asyncio.run(handle_21_action.handle(self.server, session, reader))
+        self.assertGreater(len(session.sent_packets), 0)
+        decrypted_p1 = xor_crypt(session.sent_packets[0][4:])
+        self.assertEqual(decrypted_p1[0], 75)
+        self.assertEqual(decrypted_p1[1], 3)
+        decrypted_p2 = xor_crypt(session.sent_packets[1][4:])
+        self.assertEqual(decrypted_p2[0], 21)
+        self.assertEqual(decrypted_p2[1], 1)
+
+    def test_server_branding_live_update(self):
+        """Verifies server name / branding can be modified and read live."""
+        from server.gameserver import GameServer
+        server = GameServer(db_path=":memory:", static_db_path="server/ServerDataBase.db")
+        self.assertEqual(server.get_server_name(), "Mamiletta")
+        server.set_server_name("Wonderland 2.0")
+        self.assertEqual(server.get_server_name(), "Wonderland 2.0")
 
 
 if __name__ == "__main__":

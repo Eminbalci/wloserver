@@ -97,41 +97,44 @@ class TestStormAndBeachCutscene(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(session.dialogue_queue[0]["talk_id"], 30125)
         self.assertEqual(session.dialogue_queue[1]["type"], "storm_cutscene")
 
-        # Step 2: Client advances dialogue (AC 20 Sub 6) -> Step 2 Dialogue (TalkID 30125) + Pre-arm (AC 186:12)
+        # Step 2: Client advances dialogue (AC 20 Sub 6) -> Step 2 Dialogue (TalkID 30125)
         session.sent_packets.clear()
         reader_sub6 = PacketReader(b"\x06")
         await handle_20.handle(server, session, reader_sub6)
 
-        self.assertEqual(len(session.sent_packets), 3)  # AC 20:1 + AC 23:57 + AC 186:12 pre-arm
+        self.assertEqual(len(session.sent_packets), 2)  # AC 20:1 + AC 23:57
         self.assertEqual(len(session.dialogue_queue), 1)
         self.assertEqual(session.dialogue_queue[0]["type"], "storm_cutscene")
-        self.assertEqual(session.sent_packets[2][0], 186)
-        self.assertEqual(session.sent_packets[2][1], 12)
 
-        # Step 3: Client acknowledges pre-arm readiness (AC 186 Sub 9)
-        session.sent_packets.clear()
-        reader_186_9 = PacketReader(b"\x09\x01\x00")
-        await handle_186.handle(server, session, reader_186_9)
-        self.assertTrue(getattr(session, "cutscene_ready", False))
-
-        # Step 4: Client advances again (AC 20 Sub 6) -> Dispatches Storm Movie (AC 186:9 & AC 20:1 Step 3 + SFX)
+        # Step 3: Client advances dialogue (AC 20 Sub 6) -> Dispatches Storm Movie (AC 186:12 & AC 20:1 Step 3 + SFX)
         session.sent_packets.clear()
         reader_sub6 = PacketReader(b"\x06")
         await handle_20.handle(server, session, reader_sub6)
 
         self.assertTrue(getattr(session, "playing_storm_cutscene", False))
         self.assertEqual(session.sent_packets[0][0], 186)
-        self.assertEqual(session.sent_packets[0][1], 9)
+        self.assertEqual(session.sent_packets[0][1], 12)
         self.assertEqual(session.sent_packets[1][0], 20)
         self.assertEqual(session.sent_packets[1][1], 1)
 
+        # Step 4: Client acknowledges cutscene readiness (AC 186 Sub 9) -> Server replies with Playback ACK
+        session.sent_packets.clear()
+        reader_186_9 = PacketReader(b"\x09\x01\x00")
+        await handle_186.handle(server, session, reader_186_9)
+        self.assertTrue(getattr(session, "cutscene_ready", False))
+        self.assertEqual(len(session.sent_packets), 1)
+        self.assertEqual(session.sent_packets[0][0], 186)
+        self.assertEqual(session.sent_packets[0][1], 9)
+
         # Step 5: Cutscene movie finishes on client -> Client sends AC 20 Sub 6
+        session.storm_cutscene_start_time = 0  # Simulate cutscene duration elapsed
         session.sent_packets.clear()
         reader_sub6 = PacketReader(b"\x06")
         await handle_20.handle(server, session, reader_sub6)
 
         # Should send AC 20:7 Warp Out, and teleport to Beach (Map 10035 pos 1038, 2235)
         self.assertFalse(getattr(session, "playing_storm_cutscene", False))
+        self.assertTrue(getattr(session, "pending_beach_cutscene", False))
         self.assertTrue(getattr(session, "pending_beach_cutscene", False))
         self.assertEqual(session.sent_packets[0][0], 20)
         self.assertEqual(session.sent_packets[0][1], 7)  # AC 20:7
@@ -144,61 +147,30 @@ class TestStormAndBeachCutscene(unittest.IsolatedAsyncioTestCase):
         reader_12_1 = PacketReader(b"\x01")
         await handle_12.handle(server, session, reader_12_1)
 
-        # Should initialize Beach Cutscene: Pose 9 + AC 5:30 (immobilize) + AC 22:11 (Camera Pan) + AC 6:2 (Cinema Lock)
+        # Should initialize Beach Cutscene: Pose 9 + AC 5:30 (immobilize) + beach_cutscene_active
         self.assertEqual(session.emote, 9)
         self.assertTrue(getattr(session, "beach_cutscene_active", False))
-        self.assertEqual(getattr(session, "beach_cutscene_step", 0), 1)
         has_emote_9 = any(p[0] == 32 and p[1] == 2 and p[-1] == 9 for p in session.sent_packets)
         self.assertTrue(has_emote_9)
         has_immob = any(p[0] == 5 and p[1] == 30 for p in session.sent_packets)
         self.assertTrue(has_immob)
 
-        # Step 7: Client AC 20:6 -> Step 2: Robinson approaches player (AC 22:12 [2, 11, 0, 5])
+        # Step 7: While timeline is active, client AC 20:6 is absorbed
         session.sent_packets.clear()
         await handle_20.handle(server, session, PacketReader(b"\x06"))
-        self.assertEqual(session.beach_cutscene_step, 2)
-        has_approach = any(p[0] == 22 and p[1] == 12 for p in session.sent_packets)
-        self.assertTrue(has_approach)
+        self.assertEqual(len(session.sent_packets), 0)
 
-        # Step 8: Client AC 20:6 -> Step 3: Robinson cutscene speech (TalkID 12008) + SFX
+        # Step 8: When timeline finishes and dialogue ends -> Robinson standing + Player standing + Quest 12040 marked
+        session.beach_cutscene_active = False
+        session.dialogue_queue = []
         session.sent_packets.clear()
         await handle_20.handle(server, session, PacketReader(b"\x06"))
-        self.assertEqual(session.beach_cutscene_step, 3)
-        has_dialog = any(p[0] == 20 and p[1] == 1 for p in session.sent_packets)
-        self.assertTrue(has_dialog)
 
-        # Step 9: Client AC 20:6 -> Step 4: Add Quest 12040 (AC 24:1)
-        session.sent_packets.clear()
-        await handle_20.handle(server, session, PacketReader(b"\x06"))
-        self.assertEqual(session.beach_cutscene_step, 4)
-        has_quest = any(p[0] == 24 and p[1] == 1 for p in session.sent_packets)
-        self.assertTrue(has_quest)
-
-        # Step 10: Client AC 20:6 -> Step 5: Sync tick (AC 20:10)
-        session.sent_packets.clear()
-        await handle_20.handle(server, session, PacketReader(b"\x06"))
-        self.assertEqual(session.beach_cutscene_step, 5)
-
-        # Step 11: Client AC 20:6 -> Step 6: Set Quest Flag 97 (AC 24:5)
-        session.sent_packets.clear()
-        await handle_20.handle(server, session, PacketReader(b"\x06"))
-        self.assertEqual(session.beach_cutscene_step, 6)
-        has_flag = any(p[0] == 24 and p[1] == 5 for p in session.sent_packets)
-        self.assertTrue(has_flag)
-
-        # Step 12: Client AC 20:6 -> Step 7: Robinson walks back (AC 22:12 [1, 1, 0, 6])
-        session.sent_packets.clear()
-        await handle_20.handle(server, session, PacketReader(b"\x06"))
-        self.assertEqual(session.beach_cutscene_step, 7)
-        has_walk_back = any(p[0] == 22 and p[1] == 12 for p in session.sent_packets)
-        self.assertTrue(has_walk_back)
-
-        # Step 13: Client AC 20:6 -> Step 8: Complete cutscene (Unlock UI AC 20:8 + stand up AC 5:4)
-        session.sent_packets.clear()
-        await handle_20.handle(server, session, PacketReader(b"\x06"))
-        self.assertFalse(session.beach_cutscene_active)
+        self.assertFalse(getattr(session, "beach_cutscene_active", False))
         self.assertEqual(session.emote, 0)
         self.assertEqual(get_session_quest_state(session, 12040), 1)
+        has_robinson_stand = any(p[0] == 22 and p[1] == 12 for p in session.sent_packets)
+        self.assertTrue(has_robinson_stand)
         has_unlock_ui = any(p[0] == 20 and p[1] == 8 for p in session.sent_packets)
         self.assertTrue(has_unlock_ui)
         has_unlock_ctrl = any(p[0] == 5 and p[1] == 4 for p in session.sent_packets)

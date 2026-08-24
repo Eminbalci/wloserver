@@ -815,23 +815,61 @@ class ModernServerGUI:
 
         ctk.CTkLabel(left, text="Server Management", font=ctk.CTkFont(size=14, weight="bold"), text_color="#58A6FF").pack(anchor="w", padx=15, pady=(15, 10))
 
-        ctk.CTkLabel(left, text="Server Name:", font=ctk.CTkFont(size=12), text_color="#8B949E").pack(anchor="w", padx=15)
-        self.ent_srv_name = ctk.CTkEntry(left, placeholder_text="Server Name", fg_color="#161B22", height=32)
-        self.ent_srv_name.insert(0, "Wonderland Online Community")
-        self.ent_srv_name.pack(fill="x", padx=15, pady=(2, 10))
+        ctk.CTkLabel(left, text="Server Name / Brand:", font=ctk.CTkFont(size=12), text_color="#8B949E").pack(anchor="w", padx=15)
+        cur_srv_name = "Mamiletta"
+        if self.game_server and hasattr(self.game_server, "get_server_name"):
+            cur_srv_name = self.game_server.get_server_name()
+        else:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                row = conn.execute("SELECT value FROM server_config WHERE key = 'server_name'").fetchone()
+                if row and row[0]:
+                    cur_srv_name = row[0]
+                conn.close()
+            except Exception:
+                pass
+
+        self.ent_srv_name = ctk.CTkEntry(left, placeholder_text="Server Name (Mamiletta)", fg_color="#161B22", height=32)
+        self.ent_srv_name.insert(0, cur_srv_name)
+        self.ent_srv_name.pack(fill="x", padx=15, pady=(2, 6))
+
+        ctk.CTkButton(left, text="💾 Save Server Name (Brand)", font=ctk.CTkFont(size=12, weight="bold"), fg_color="#238636", hover_color="#2EA043", height=30, corner_radius=8, command=self.action_update_server_name).pack(fill="x", padx=15, pady=(0, 10))
+
+        ctk.CTkLabel(left, text="Global MOTD / Welcome Message:", font=ctk.CTkFont(size=12, weight="bold"), text_color="#58A6FF").pack(anchor="w", padx=15, pady=(2, 2))
+        cur_motd = "Welcome to Wonderland Online Private Server!\nEnjoy your adventure!"
+        if self.game_server and hasattr(self.game_server, "get_motd"):
+            cur_motd = self.game_server.get_motd()
+        else:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                row = conn.execute("SELECT value FROM server_config WHERE key = 'welcome_message'").fetchone()
+                if row and row[0]:
+                    cur_motd = row[0]
+                conn.close()
+            except Exception:
+                pass
+
+        self.txt_motd = ctk.CTkTextbox(left, height=75, fg_color="#161B22", text_color="#E6EDF3", font=ctk.CTkFont(size=11), corner_radius=6, border_width=1, border_color="#30363D")
+        self.txt_motd.insert("1.0", cur_motd)
+        self.txt_motd.pack(fill="x", padx=15, pady=(2, 6))
+
+        f_motd_btns = ctk.CTkFrame(left, fg_color="transparent")
+        f_motd_btns.pack(fill="x", padx=15, pady=(0, 10))
+        ctk.CTkButton(f_motd_btns, text="💾 Save MOTD", font=ctk.CTkFont(size=12, weight="bold"), fg_color="#238636", hover_color="#2EA043", height=30, corner_radius=8, command=self.action_update_motd).pack(side="left", fill="x", expand=True, padx=(0, 4))
+        ctk.CTkButton(f_motd_btns, text="📢 Broadcast MOTD", font=ctk.CTkFont(size=12, weight="bold"), fg_color="#1F6FEB", hover_color="#388BFD", height=30, corner_radius=8, command=self.action_broadcast_motd).pack(side="right", fill="x", expand=True, padx=(4, 0))
 
         ctk.CTkLabel(left, text="Global Marquee Announcement:", font=ctk.CTkFont(size=12), text_color="#8B949E").pack(anchor="w", padx=15)
         self.ent_welcome = ctk.CTkEntry(left, placeholder_text="Broadcast Message", fg_color="#161B22", height=32)
-        self.ent_welcome.insert(0, "Welcome to Wonderland Online Private Server!")
+        self.ent_welcome.insert(0, "Special Announcement: Server maintenance in 10 minutes!")
         self.ent_welcome.pack(fill="x", padx=15, pady=(2, 6))
 
         self.cmb_broadcast_color = ctk.CTkComboBox(left, values=["Yellow (System)", "Red (Alert)", "Blue (Info)", "Green (Notice)", "Purple (GM)"], height=32)
         self.cmb_broadcast_color.set("Yellow (System)")
         self.cmb_broadcast_color.pack(fill="x", padx=15, pady=(0, 10))
 
-        ctk.CTkButton(left, text="📢 Send Global Announcement", font=ctk.CTkFont(weight="bold"), fg_color="#1F6FEB", hover_color="#388BFD", height=34, corner_radius=8, command=self.action_broadcast_marquee).pack(fill="x", padx=15, pady=6)
-        ctk.CTkButton(left, text="🚫 Disconnect All Players", font=ctk.CTkFont(weight="bold"), fg_color="#DA3633", hover_color="#F85149", height=34, corner_radius=8, command=self.action_kick_all).pack(fill="x", padx=15, pady=6)
-        ctk.CTkButton(left, text="🧹 Clear Console Log", font=ctk.CTkFont(), fg_color="#21262D", hover_color="#30363D", height=34, corner_radius=8, command=self.action_clear_logs).pack(fill="x", padx=15, pady=6)
+        ctk.CTkButton(left, text="📢 Send Marquee Alert", font=ctk.CTkFont(weight="bold"), fg_color="#8957E5", hover_color="#A371F7", height=34, corner_radius=8, command=self.action_broadcast_marquee).pack(fill="x", padx=15, pady=4)
+        ctk.CTkButton(left, text="🚫 Disconnect All Players", font=ctk.CTkFont(weight="bold"), fg_color="#DA3633", hover_color="#F85149", height=34, corner_radius=8, command=self.action_kick_all).pack(fill="x", padx=15, pady=4)
+        ctk.CTkButton(left, text="🧹 Clear Console Log", font=ctk.CTkFont(), fg_color="#21262D", hover_color="#30363D", height=34, corner_radius=8, command=self.action_clear_logs).pack(fill="x", padx=15, pady=4)
 
         right = ctk.CTkFrame(split, fg_color="#0D1117", corner_radius=10, border_width=1, border_color="#30363D")
         right.pack(side="right", fill="both", expand=True, pady=5)
@@ -1240,7 +1278,35 @@ class ModernServerGUI:
 
         ctk.CTkLabel(left, text="⚡ Global Gameplay Multipliers", font=ctk.CTkFont(size=14, weight="bold"), text_color="#58A6FF").pack(anchor="w", padx=15, pady=(15, 10))
 
+        cur_srv = "Mamiletta"
+        if self.game_server and hasattr(self.game_server, "get_server_name"):
+            cur_srv = self.game_server.get_server_name()
+        else:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                row = conn.execute("SELECT value FROM server_config WHERE key = 'server_name'").fetchone()
+                if row and row[0]:
+                    cur_srv = row[0]
+                conn.close()
+            except Exception:
+                pass
+
+        cur_motd = "Welcome to Wonderland Online Private Server!\nEnjoy your adventure!"
+        if self.game_server and hasattr(self.game_server, "get_motd"):
+            cur_motd = self.game_server.get_motd()
+        else:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                row = conn.execute("SELECT value FROM server_config WHERE key = 'welcome_message'").fetchone()
+                if row and row[0]:
+                    cur_motd = row[0]
+                conn.close()
+            except Exception:
+                pass
+
         multipliers = [
+            ("Server Name / Brand (AC 0):", "server_name", cur_srv),
+            ("MOTD / Welcome Message:", "welcome_message", cur_motd.replace("\n", " | ")),
             ("Base EXP Multiplier:", "exp_rate", "1.0"),
             ("Monster Drop Rate Multiplier:", "drop_rate", "1.0"),
             ("Pet EXP Multiplier:", "pet_exp_rate", "1.0"),
@@ -1255,12 +1321,12 @@ class ModernServerGUI:
             f = ctk.CTkFrame(left, fg_color="transparent")
             f.pack(fill="x", padx=15, pady=4)
             ctk.CTkLabel(f, text=label, text_color="#8B949E", width=240, anchor="w").pack(side="left")
-            ent = ctk.CTkEntry(f, width=100)
-            ent.insert(0, default)
+            ent = ctk.CTkEntry(f, width=160 if key == "server_name" else 100)
+            ent.insert(0, str(default))
             ent.pack(side="right")
             self.setting_entries[key] = ent
 
-        ctk.CTkButton(left, text="💾 Save Rates & Apply Live", font=ctk.CTkFont(size=13, weight="bold"), fg_color="#238636", hover_color="#2EA043", height=38, corner_radius=8, command=self.action_save_settings).pack(fill="x", padx=15, pady=20)
+        ctk.CTkButton(left, text="💾 Save Settings & Apply Live", font=ctk.CTkFont(size=13, weight="bold"), fg_color="#238636", hover_color="#2EA043", height=38, corner_radius=8, command=self.action_save_settings).pack(fill="x", padx=15, pady=20)
 
         right = ctk.CTkFrame(split, fg_color="#0D1117", corner_radius=10, border_width=1, border_color="#30363D")
         right.pack(side="right", fill="both", expand=True)
@@ -1784,8 +1850,121 @@ class ModernServerGUI:
                 if found >= 100:
                     break
 
+    def action_update_server_name(self):
+        """Updates and persists server branding / name."""
+        name = self.ent_srv_name.get().strip() if hasattr(self, 'ent_srv_name') else ""
+        if not name:
+            name = "Mamiletta"
+        if self.game_server and hasattr(self.game_server, "set_server_name"):
+            self.game_server.set_server_name(name)
+        else:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                conn.execute("CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)")
+                conn.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('server_name', ?)", (name,))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                logger.error(f"Error saving server name to DB: {e}")
+
+        if hasattr(self, 'setting_entries') and "server_name" in self.setting_entries:
+            self.setting_entries["server_name"].delete(0, tk.END)
+            self.setting_entries["server_name"].insert(0, name)
+
+        messagebox.showinfo("Server Branding", f"Server Name successfully updated to: '{name}'!\nClients connecting via AC 0 will now receive this brand name.")
+
+    def action_update_motd(self):
+        """Updates and persists MOTD / Welcome message."""
+        msg = ""
+        if hasattr(self, 'txt_motd'):
+            msg = self.txt_motd.get("1.0", "end-1c").strip()
+        elif hasattr(self, 'ent_welcome'):
+            msg = self.ent_welcome.get().strip()
+
+        if not msg:
+            msg = "Welcome to Wonderland Online Private Server!\nEnjoy your adventure!"
+
+        if self.game_server and hasattr(self.game_server, "set_motd"):
+            self.game_server.set_motd(msg)
+        else:
+            try:
+                conn = sqlite3.connect(self.db_path)
+                conn.execute("CREATE TABLE IF NOT EXISTS server_config (key TEXT PRIMARY KEY, value TEXT)")
+                conn.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES ('welcome_message', ?)", (msg,))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                logger.error(f"Error saving MOTD to DB: {e}")
+
+        if hasattr(self, 'setting_entries') and "welcome_message" in self.setting_entries:
+            self.setting_entries["welcome_message"].delete(0, tk.END)
+            self.setting_entries["welcome_message"].insert(0, msg.replace("\n", " | "))
+
+        messagebox.showinfo("MOTD Settings", f"MOTD (Welcome Message) saved successfully!\nPlayers logging in will now receive this announcement.")
+
+    def action_broadcast_motd(self):
+        """Broadcasts current MOTD popup and GM chat lines to all online players immediately."""
+        msg = ""
+        if hasattr(self, 'txt_motd'):
+            msg = self.txt_motd.get("1.0", "end-1c").strip()
+        elif hasattr(self, 'ent_welcome'):
+            msg = self.ent_welcome.get().strip()
+
+        if not msg:
+            msg = "Welcome to Wonderland Online Private Server!\nEnjoy your adventure!"
+
+        if self.game_server and hasattr(self.game_server, "sessions"):
+            cnt = 0
+            for s in list(self.game_server.sessions.values()):
+                if getattr(s, "in_map", False) or getattr(s, "char_name", None):
+                    import asyncio
+                    loop = getattr(self.game_server, "loop", None)
+                    if loop and loop.is_running():
+                        asyncio.run_coroutine_threadsafe(self.game_server.dispatch_login_motd(s), loop)
+                    else:
+                        try:
+                            asyncio.create_task(self.game_server.dispatch_login_motd(s))
+                        except Exception:
+                            pass
+                    cnt += 1
+            messagebox.showinfo("MOTD Broadcast", f"MOTD announcement successfully dispatched to {cnt} online player(s)!")
+        else:
+            messagebox.showinfo("MOTD Broadcast", "Server is not running or no players currently online.")
+
     def action_save_settings(self):
-        messagebox.showinfo("Settings", "Global gameplay multipliers saved and hot-reloaded across server!")
+        """Saves all global multipliers, server branding, and MOTD."""
+        if hasattr(self, 'setting_entries'):
+            # Save server name
+            if "server_name" in self.setting_entries:
+                srv_name = self.setting_entries["server_name"].get().strip()
+                if srv_name:
+                    if self.game_server and hasattr(self.game_server, "set_server_name"):
+                        self.game_server.set_server_name(srv_name)
+                    if hasattr(self, 'ent_srv_name'):
+                        self.ent_srv_name.delete(0, tk.END)
+                        self.ent_srv_name.insert(0, srv_name)
+
+            # Save MOTD
+            if "welcome_message" in self.setting_entries:
+                motd_text = self.setting_entries["welcome_message"].get().strip().replace(" | ", "\n")
+                if motd_text:
+                    if self.game_server and hasattr(self.game_server, "set_motd"):
+                        self.game_server.set_motd(motd_text)
+                    if hasattr(self, 'txt_motd'):
+                        self.txt_motd.delete("1.0", tk.END)
+                        self.txt_motd.insert("1.0", motd_text)
+
+            # Apply multipliers
+            if self.game_server:
+                try:
+                    if "exp_rate" in self.setting_entries:
+                        self.game_server.exp_multiplier = float(self.setting_entries["exp_rate"].get())
+                    if "gold_rate" in self.setting_entries:
+                        self.game_server.gold_multiplier = float(self.setting_entries["gold_rate"].get())
+                except Exception:
+                    pass
+
+        messagebox.showinfo("Settings", "Global gameplay multipliers, Server Branding & MOTD saved and applied live!")
 
 
 # Legacy alias

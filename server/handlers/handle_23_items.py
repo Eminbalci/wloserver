@@ -35,7 +35,8 @@ async def handle(server, session, reader):
             await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't use in bath"))
             return
 
-    
+    from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
+
     if sub == 54:
         # Client sends this as acknowledgment after receiving the login/warp complete signal (5, 4), or to stop fishing
         if getattr(session, 'is_fishing', False):
@@ -44,10 +45,29 @@ async def handle(server, session, reader):
             # Send stop fishing confirmation: [23, 54, 0]
             await session.send_packet(PacketWriter().write_8(23).write_8(54).write_8(0))
         else:
-            logger.info(f"[{session.char_name}] Received warp-done ACK (23, 54) — client should now enter game")
+            logger.info(f"[{session.char_name}] Received warp-done ACK (23, 54) — dispatching Item Mall catalog & entering map")
             session.is_warping = False
             session.in_map = True
-            
+            await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
+            await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
+
+    elif sub == 25:  # Request IM Point Balance (C# AC23.Recv25)
+        await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
+
+    elif sub == 26:  # Buy Item from Mall (C# AC23.Recv26)
+        if reader.remaining_bytes() >= 2:
+            item_id = reader.read_16()
+            count = reader.read_8() if reader.remaining_bytes() >= 1 else 1
+            if count <= 0:
+                count = 1
+            await GLOBAL_ITEM_MALL_MANAGER.purchase_item(server, session, item_id, count)
+
+    elif sub == 77:  # Request Player Stall / Market Listings (C# AC23.Recv77)
+        # S->C [23, 4, 0] = stall list (0 active)
+        await session.send_packet(PacketWriter().write_8(23).write_8(4).write_8(0))
+        # S->C [23, 102] = end of stall list
+        await session.send_packet(PacketWriter().write_8(23).write_8(102))
+
     elif sub == 53:  # Start fishing request (23, 53)
         if getattr(session, 'is_stall_active', False):
             logger.warning(f"[{session.char_name}] Fishing blocked: Player has an active stall.")

@@ -1,6 +1,19 @@
 """
 Wonderland Online - Action Code 34 (Item Mall / Nesne Market) Handler
-Handles in-game client Item Mall window requests, category configuration, and purchases.
+Ported from C# Src/Network/ActionCodes/AC34.cs
+Protocol:
+- AC 34 Sub 1 [0]: Initial points balance query when opening cart/mall
+  Server responds with:
+    - S->C AC 34 Sub 1 [Points(uint16)]
+    - S->C AC 75 Sub 3 [Points(uint16)]
+    - S->C AC 75 Sub 1 [Catalog Matrix]
+- AC 34 Sub 1 [mode >= 1]: Cart checkout for slot/row mode
+  Server responds with:
+    - S->C AC 34 Sub 1 [RemainingPoints(uint16)]
+    - S->C AC 75 Sub 3 [RemainingPoints(uint16)]
+    - S->C AC 35 Sub 4 [16 zero bytes] (authentic pcap packet #142 confirmation)
+    - S->C AC 75 Sub 1 [Catalog Matrix]
+- AC 34 Sub 2: Direct Item Mall Purchase [34, 2, ItemID(uint16), Quantity(uint8)]
 """
 
 import logging
@@ -13,52 +26,67 @@ ACTION_CODES = [34]
 
 
 async def handle(server, session, reader):
-    """Handles Item Mall (Nesne Market) requests (AC 34)."""
+    """Handles Item Mall / Shopping Cart actions (AC 34)."""
     sub = reader.read_8()
 
     if sub == 1:
-        logger.info(f"[{getattr(session, 'char_name', 'Player')}] Requesting Item Mall opening (AC 34 Sub 1)")
-
-        # 1. Send Item Mall Categories/Config: AC 54 (0x36) Sub 201 (0xC9)
-        # Binary catalog payload from ItemMallServer
-        from server.item_mall import ItemMallServer
-        cat_pkt = PacketWriter().write_8(54).write_8(201)
-        cat_payload = ItemMallServer().build_catalog_payload()
-        cat_pkt.write_bytes(cat_payload)
-        await session.send_packet(cat_pkt)
-
-        # 2. Send Wallet Balances: AC 35 (0x23) Sub 4
+        mode = reader.read_8() if reader.remaining_bytes() >= 1 else 0
         points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(session)
-        wallet_pkt = PacketWriter().write_8(35).write_8(4)
-        wallet_pkt.write_32(points)
-        wallet_pkt.write_32(getattr(session, 'im_bonus_points', 1000))
-        wallet_pkt.write_32(getattr(session, 'im_tokens', 50))
-        wallet_pkt.write_32(0)  # Padding
-        await session.send_packet(wallet_pkt)
 
-        # 3. Send End of Mall Data Signal: AC 35 (0x23) Sub 11 (0x0B)
-        end_pkt = PacketWriter().write_8(35).write_8(11)
-        await session.send_packet(end_pkt)
+        if mode == 0:
+            # Initial points query on Mall/Cart open
+            logger.info(f"[{getattr(session, 'char_name', 'Player')}] Item Mall balance query & open (AC 34 Sub 1 Mode 0)")
+            resp = PacketWriter().write_8(34).write_8(1).write_16(min(65535, points))
+            await session.send_packet(resp)
+            await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
+            return
+
+        # mode >= 1: Shopping Cart Checkout (Confirm button in Form_Cart)
+        catalog = GLOBAL_ITEM_MALL_MANAGER.get_catalog()
+        cat_index = mode - 1
+        item_to_buy = catalog[cat_index] if (0 <= cat_index < len(catalog)) else (catalog[0] if catalog else None)
+
+        if item_to_buy:
+            logger.info(f"[{getattr(session, 'char_name', 'Player')}] Cart Checkout Slot #{mode} -> {item_to_buy.item_name} (#{item_to_buy.item_id})")
+            success = await GLOBAL_ITEM_MALL_MANAGER.purchase_item(server, session, item_to_buy.item_id, 1)
+            rem_points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(session)
+
+            # 1. S->C AC 34 Sub 1: [RemainingPoints(2B)] -> Triggers client banner "WLO Point Remain: %04d Pts"
+            resp = PacketWriter().write_8(34).write_8(1).write_16(min(65535, rem_points))
+            await session.send_packet(resp)
+
+            # 2. S->C AC 75 Sub 3: [RemainingPoints(2B)] -> Updates GUI points counter
+            await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
+
+            # 3. S->C AC 35 Sub 4: [16 zero bytes] -> Authentic pcap #142 Cart Purchase confirmation
+            p_cart = PacketWriter().write_8(35).write_8(4).write_bytes(bytes(16))
+            await session.send_packet(p_cart)
+
+            # 4. Send updated catalog
+            await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
+        else:
+            logger.warning(f"[{getattr(session, 'char_name', 'Player')}] No catalog item found for Cart Slot #{mode}")
 
     elif sub == 2:
-        # In-game Item Mall Purchase: [34, 2, ItemID(uint16), Quantity(uint8)]
-        if len(reader.data) >= 4:
+        # In-game direct purchase: [34, 2, ItemID(uint16), Quantity(uint8)]
+        if reader.remaining_bytes() >= 2:
             item_id = reader.read_16()
-            quantity = reader.read_8()
-            logger.info(f"[{getattr(session, 'char_name', 'Player')}] Purchasing {quantity}x Item #{item_id} (AC 34 Sub 2)")
+            quantity = reader.read_8() if reader.remaining_bytes() >= 1 else 1
+            if quantity <= 0:
+                quantity = 1
+
+            logger.info(f"[{getattr(session, 'char_name', 'Player')}] Direct Mall Purchase #{item_id} x{quantity} (AC 34 Sub 2)")
             success = await GLOBAL_ITEM_MALL_MANAGER.purchase_item(server, session, item_id, quantity)
+            rem_points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(session)
 
-            # Re-send wallet balance
-            points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(session)
-            wallet_pkt = PacketWriter().write_8(35).write_8(4)
-            wallet_pkt.write_32(points)
-            wallet_pkt.write_32(getattr(session, 'im_bonus_points', 1000))
-            wallet_pkt.write_32(getattr(session, 'im_tokens', 50))
-            wallet_pkt.write_32(0)
-            await session.send_packet(wallet_pkt)
+            # Sync points and catalog
+            resp = PacketWriter().write_8(34).write_8(1).write_16(min(65535, rem_points))
+            await session.send_packet(resp)
+            await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
 
-            # End of mall data signal
-            await session.send_packet(PacketWriter().write_8(35).write_8(11))
+            p_cart = PacketWriter().write_8(35).write_8(4).write_bytes(bytes(16))
+            await session.send_packet(p_cart)
+            await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
         else:
             logger.warning(f"[{getattr(session, 'char_name', 'Player')}] Malformed AC 34 Sub 2 packet: {reader.data.hex()}")
 

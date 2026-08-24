@@ -275,106 +275,24 @@ async def handle(server, session, reader):
         
         # 0. Storm Cutscene Completion -> Warp to Shipwreck Beach (Map 10035)
         if getattr(session, 'playing_storm_cutscene', False):
+            import time
+            elapsed = time.time() - getattr(session, 'storm_cutscene_start_time', 0)
+            if elapsed < 1.0:
+                logger.debug(f"[{session.char_name}] Absorbed premature AC 20:6 during Storm Cutscene movie initialization (elapsed: {elapsed:.2f}s)")
+                return
+
             session.playing_storm_cutscene = False
             session.pending_beach_cutscene = True
             session.on_interaction_complete = None
-            logger.info(f"[{session.char_name}] Storm Cutscene completed (AC 20:6) -> Teleporting to Beach (Map 10035)")
+            logger.info(f"[{session.char_name}] Storm Cutscene completed (AC 20:6, duration: {elapsed:.2f}s) -> Teleporting to Beach (Map 10035)")
             await session.send_packet(PacketWriter().write_8(20).write_8(7))  # Warp Out
             await server.warp_player(session, 10035, 1038, 2235)
             return
 
-        # 1. Beach Cutscene State Machine (Matching authentic PCAP packets [046]-[066])
+        # 1. Absorb AC 20:6 during active beach cutscene timeline (Matching C# AC20.cs line 156)
         if getattr(session, 'beach_cutscene_active', False):
-            step = getattr(session, 'beach_cutscene_step', 1)
-            logger.info(f"[{session.char_name}] Beach Cutscene advancing step {step} -> {step + 1}")
-            
-            if step == 1:
-                # Step 2: Robinson approaches player (AC 22:12 [2, 11, 0, 5], PCAP [047]-[048])
-                session.beach_cutscene_step = 2
-                approach_pkt = (
-                    PacketWriter()
-                    .write_8(22)
-                    .write_8(12)
-                    .write_8(2)
-                    .write_8(11)
-                    .write_8(0)
-                    .write_8(5)
-                )
-                await session.send_packet(approach_pkt)
-                server.broadcast_to_map(session.map_id, approach_pkt, exclude_session=session)
-                await session.send_packet(PacketWriter().write_8(20).write_8(10))
-                return
-
-            elif step == 2:
-                # Step 3: Robinson cutscene dialogue (TalkID 12008) + SFX (PCAP [050]-[052])
-                session.beach_cutscene_step = 3
-                robinson_dialog = (
-                    PacketWriter()
-                    .write_8(20)
-                    .write_8(1)
-                    .write_8(0).write_8(0).write_8(0)
-                    .write_8(1)  # step 1
-                    .write_8(5)  # type 5 cinematic
-                    .write_32(1) # speaker NPC 1
-                    .write_8(0xE8).write_8(0x2E).write_8(0x00) # TalkID 12008 (0x2EE8)
-                    .write_32(0)
-                )
-                await session.send_packet(robinson_dialog)
-                # SFX AC 35:12 matching PCAP
-                await session.send_packet(PacketWriter().write_8(35).write_8(12).write_8(0xDA).write_8(0x80).write_8(3).write_8(0).write_8(0))
-                await session.send_packet(PacketWriter().write_8(35).write_8(12).write_8(0x77).write_8(0x8E).write_8(3).write_8(0).write_8(0))
-                return
-
-            elif step == 3:
-                # Step 4: Add Quest 12040 (AC 24:1 [8, 0x2F, 1], PCAP [054]-[055])
-                session.beach_cutscene_step = 4
-                await session.send_packet(PacketWriter().write_8(24).write_8(1).write_8(8).write_8(0x2F).write_8(1))
-                await session.send_packet(PacketWriter().write_8(20).write_8(10))
-                return
-
-            elif step == 4:
-                # Step 5: Sync tick (AC 20:10, PCAP [057])
-                session.beach_cutscene_step = 5
-                await session.send_packet(PacketWriter().write_8(20).write_8(10))
-                return
-
-            elif step == 5:
-                # Step 6: Set Quest Flag 97 (AC 24:5 [0x61, 0, 1], PCAP [059]-[060])
-                session.beach_cutscene_step = 6
-                await session.send_packet(PacketWriter().write_8(24).write_8(5).write_8(0x61).write_8(0).write_8(1))
-                await session.send_packet(PacketWriter().write_8(20).write_8(10))
-                return
-
-            elif step == 6:
-                # Step 7: Robinson walks back (AC 22:12 [1, 1, 0, 6], PCAP [062]-[063])
-                session.beach_cutscene_step = 7
-                walk_back_pkt = (
-                    PacketWriter()
-                    .write_8(22)
-                    .write_8(12)
-                    .write_8(1)
-                    .write_8(1)
-                    .write_8(0)
-                    .write_8(6)
-                )
-                await session.send_packet(walk_back_pkt)
-                server.broadcast_to_map(session.map_id, walk_back_pkt, exclude_session=session)
-                await session.send_packet(PacketWriter().write_8(20).write_8(10))
-                return
-
-            elif step >= 7:
-                # Step 8: Complete Cutscene -> Unlock Cinema mode & Player movement (PCAP [065]-[066])
-                session.beach_cutscene_active = False
-                session.beach_cutscene_step = 0
-                session.emote = 0
-                from server.eve_event_interpreter import set_session_quest_state
-                set_session_quest_state(session, 12040, 1)
-                server.save_player_to_db(session)
-                
-                await session.send_packet(PacketWriter().write_8(20).write_8(8))  # Unlock UI / Cinema
-                await session.send_packet(PacketWriter().write_8(5).write_8(4))   # Unlock Player Movement / Stand up
-                logger.info(f"[{session.char_name}] Beach Arrival Cutscene completed authentically. Controls restored.")
-                return
+            logger.debug(f"[{session.char_name}] Absorbed AC 20:6 during BeachCutsceneActive timeline")
+            return
 
         # 2. Dialogue Queue Advancement (Multi-step dialogue playback)
         queue = getattr(session, 'dialogue_queue', None)
@@ -382,6 +300,31 @@ async def handle(server, session, reader):
             next_step = queue.pop(0)
             from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
             await GLOBAL_EVE_INTERPRETER._dispatch_step(server, session, next_step)
+            return
+
+        # 2b. Map 10035 Robinson Beach Dialogue Completion
+        if getattr(session, 'map_id', 0) == 10035 and getattr(session, 'emote', 0) == 9:
+            session.emote = 0
+            # Frame 2997: Robinson returns to normal standing posture (AC 22:12 [1, 1, 0, 6])
+            stand_pkt = PacketWriter().write_8(22).write_8(12).write_8(1).write_8(1).write_8(0).write_8(6)
+            await session.send_packet(stand_pkt)
+            server.broadcast_to_map(session.map_id, stand_pkt, exclude_session=session)
+
+            # Player stands up (AC 32:2 [char_id, 0])
+            e_reset = PacketWriter().write_8(32).write_8(2).write_32(session.char_id).write_8(0)
+            await session.send_packet(e_reset)
+            server.broadcast_to_map(session.map_id, e_reset, exclude_session=session)
+
+            # Mark Quest 12040 Step 1
+            from server.eve_event_interpreter import set_session_quest_state
+            set_session_quest_state(session, 12040, 1)
+            server.save_player_to_db(session)
+
+            # Unlock Cinema mode, Screen, and Controls
+            await session.send_packet(PacketWriter().write_8(6).write_8(2).write_8(0))
+            await session.send_packet(PacketWriter().write_8(20).write_8(8))
+            await session.send_packet(PacketWriter().write_8(5).write_8(4))
+            logger.info(f"[{session.char_name}] Beach Arrival Cutscene & Robinson dialogue completed. Controls restored.")
             return
             
         # 3. Check Defer Scene Transition Warp

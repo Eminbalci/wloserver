@@ -487,31 +487,31 @@ class EveEventInterpreter:
         speaker_id = step_info.get("click_id", 0)
 
         if step_type == "storm_cutscene":
-            logger.info(f"[EveInterpreter] Starting Storm Cutscene Video (AC 186:9 & AC 20:1 Step {step_num}) for {session.char_name}")
+            import time
+            logger.info(f"[EveInterpreter] Starting Storm Cutscene Video (AC 186:12 & AC 20:1 Step {step_num}) for {session.char_name}")
             session.playing_storm_cutscene = True
-            
-            # 1. AC 186:9 Cutscene playback start signal (matching PCAP [017])
+            session.storm_cutscene_start_time = time.time()
+
+            # 1. AC 186:12 Cutscene Movie Player Init (matching PCAP [012] / C# EveEventInterpreter line 1545)
             await session.send_packet(
                 PacketWriter()
                 .write_8(186)
-                .write_8(9)
-                .write_16(1)  # cutscene_id = 1
-                .write_8(1)   # active / playing
-                .write_32(0)  # padding
+                .write_8(12)
+                .write_8(1)
+                .write_8(0).write_8(0).write_8(0).write_8(0)
             )
-            
-            # 2. AC 20:1 Step 3 Event Trigger with Thunder SFX (matching PCAP [018])
+
+            # 2. AC 20:1 Step 3 Event Trigger with Thunder SFX (matching PCAP [018] / C# Tools.FromFormat("bbdbbwwd", 20, 1, 3, 5, 0, 2, 31488, 0))
             pkt = (
                 PacketWriter()
                 .write_8(20)
                 .write_8(1)
-                .write_8(0).write_8(0).write_8(0)
-                .write_8(step_num)
-                .write_8(5)  # Type 5: Special Cinematic Event
-                .write_8(0).write_8(0).write_8(0)
-                .write_8(2)  # Param 2
-                .write_8(0x7B).write_8(0x00) # Thunder SFX (0x7B00)
-                .write_32(0) # 4 zero padding bytes
+                .write_8(0).write_8(0).write_8(0).write_8(step_num)  # 4-byte step = 3
+                .write_8(5)      # Type 5: Special Cinematic Event
+                .write_8(0)      # Target = 0
+                .write_16(2)     # Param = 2 (0x0002)
+                .write_16(31488) # Sound ID = 31488 / 0x7B00 (Thunder SFX)
+                .write_32(0)     # 4 zero padding bytes
             )
             await session.send_packet(pkt)
 
@@ -547,12 +547,6 @@ class EveEventInterpreter:
             await server.send_dialogue(session, speaker_id, talk_id, step=step_num, portrait_type=portrait)
             if text:
                 await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(text))
-
-            # If the upcoming step is storm cutscene, pre-arm the client movie player with AC 186:12 (matching PCAP [012])
-            queue = getattr(session, 'dialogue_queue', None)
-            if queue and len(queue) > 0 and queue[0].get("type") == "storm_cutscene":
-                logger.info(f"[EveInterpreter] Pre-arming client for Storm Movie with AC 186:12")
-                await session.send_packet(PacketWriter().write_8(186).write_8(12).write_8(1).write_8(0).write_8(0).write_8(0).write_8(0))
 
     async def handle_choice_selection(self, server: Any, session: Any, choice_val: int) -> bool:
         """

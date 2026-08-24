@@ -6,9 +6,15 @@ class DatabaseManager:
     """Manages SQLite connection and queries for accounts and characters."""
     def __init__(self, db_path: str = "wlo_server.db"):
         self.db_path = db_path
+        self._mem_conn = None
+        if db_path == ":memory:":
+            self._mem_conn = sqlite3.connect(":memory:")
+            self._mem_conn.row_factory = sqlite3.Row
         self.init_db()
 
     def get_connection(self):
+        if self._mem_conn is not None:
+            return self._mem_conn
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
         return conn
@@ -33,6 +39,13 @@ class DatabaseManager:
                     CharID2 INTEGER NOT NULL,
                     AddedDate TEXT NOT NULL,
                     PRIMARY KEY (CharID1, CharID2)
+                )
+            """)
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS server_config (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
                 )
             """)
 
@@ -537,9 +550,21 @@ class DatabaseManager:
             rows = conn.execute("SELECT id, username, is_gm FROM users").fetchall()
             return [dict(r) for r in rows]
 
-    def delete_user(self, user_id: int):
-        with self.get_connection() as conn:
-            conn.execute("DELETE FROM characters WHERE user_id = ?", (user_id,))
-            conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
-            conn.commit()
+    def get_config(self, key: str, default: str = "") -> str:
+        """Retrieves a configuration value from server_config table."""
+        try:
+            with self.get_connection() as conn:
+                row = conn.execute("SELECT value FROM server_config WHERE key = ?", (key,)).fetchone()
+                return row['value'] if row and row['value'] is not None else default
+        except Exception:
+            return default
+
+    def set_config(self, key: str, value: str):
+        """Sets a configuration value in server_config table."""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("INSERT OR REPLACE INTO server_config (key, value) VALUES (?, ?)", (key, str(value)))
+                conn.commit()
+        except Exception:
+            pass
 
