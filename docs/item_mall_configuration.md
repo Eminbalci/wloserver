@@ -85,11 +85,18 @@ The catalog is defined in `server/data/item_mall.json`:
 
 ---
 
-## 4. Admin GUI Suite (Tab 10)
+---
 
-Tab 10 provides full administrative management:
-1. **Live Search & Category Filtering**: Filter table view by `"All Categories"` or specific tab `1..7`.
-2. **Add / Edit Modal Dialogs**: Interactive form with real-time `Item.dat` ID auto-resolution, category selection combobox, price entries, badge selectors, and on-sale checkboxes.
-3. **Delete Item**: Removes products with confirmation dialog.
-4. **Import / Export JSON**: One-click catalog export and import to `server/data/item_mall.json`.
-5. **Live Hot-Reload**: Instantly syncs database changes to runtime memory without server restart.
+## 5. Purchase Notification & Inventory Synchronization Lifecycle
+
+### A. Authentic Client Processing (`aLogin.exe`)
+1. **Mall Purchase Handler (`FUN_0025b4a8` / `FUN_0025b7d8`)**:
+   - Parses server purchase response `AC 75 Sub 4/5` containing `[RemPoints(4B), SpentPoints(4B), ItemID(2B), Quantity(1B)]`.
+   - Plays sound effect `sound\wav0152.wav`.
+   - Prints chat notification: `"<ItemName> success. Spent: <SpentPoints>"` and `"IM Points: <RemPoints>"`.
+   - Updates GUI item mall points indicator.
+
+2. **Generic Loot Delivery vs. Item Mall (`FUN_0043eb2c`)**:
+   - `AC 23 Sub 6` is the generic world drop / quest / chest acquisition packet, which triggers the centered message box popup: `"Obtain X pcs "`.
+   - When purchasing from the Item Mall, `server.grant_item(session, item_id, amount, send_acquire_notice=False)` suppresses `AC 23 Sub 6` while dispatching `AC 23 Sub 8` (slot update) and `AC 23 Sub 5` (full bag sync).
+   - This ensures clean, authentic Item Mall UI feedback without duplicate or generic `"Obtain 1 pcs "` loot prompts.

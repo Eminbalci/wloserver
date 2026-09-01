@@ -1922,10 +1922,10 @@ class GameServer:
 
         return p
 
-    async def grant_item(self, session: PlayerSession, item_id: int, amount: int = 1, slot: int = None) -> bool:
+    async def grant_item(self, session: PlayerSession, item_id: int, amount: int = 1, slot: int = None, send_acquire_notice: bool = True) -> bool:
         """
         Atomically grants an item to player inventory, dispatches authentic client sync packets
-        (AC 23 Sub 6 item arrival, AC 23 Sub 8 slot update, AC 23 Sub 5 full inventory),
+        (AC 23 Sub 6 item arrival if send_acquire_notice is True, AC 23 Sub 8 slot update, AC 23 Sub 5 full inventory),
         and persists to SQLite database.
         """
         if not session or item_id <= 0:
@@ -1941,10 +1941,11 @@ class GameServer:
         # 1. Persist to DB
         self.save_player_to_db(session)
 
-        # 2. AC 23 Sub 6: Authentic Item Delivery / Acquisition packet
-        # Layout: [23, 6, item_id(uint16_LE), amount(uint8), padding(26 zeros)] (31 bytes)
-        p6 = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_8(amount).write_bytes(bytes(26))
-        await session.send_packet(p6)
+        # 2. AC 23 Sub 6: Authentic Item Delivery / Acquisition packet (triggers 'Obtain X pcs' client popup)
+        if send_acquire_notice:
+            # Layout: [23, 6, item_id(uint16_LE), amount(uint16_LE), padding(25 zeros)] (31 bytes total)
+            p6 = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_16(amount).write_bytes(bytes(25))
+            await session.send_packet(p6)
 
         # 3. AC 23 Sub 8: Specific slot state update
         item = get_item_at_slot(session, actual_slot)

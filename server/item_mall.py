@@ -305,10 +305,10 @@ class ItemMallManager:
         # Deduct Points
         self.set_user_points(session, user_points - total_cost)
 
-        # Grant Item to Inventory via atomic server.grant_item (dispatches AC 23:6, AC 23:8, AC 23:5, saves DB)
+        # Grant Item to Inventory via atomic server.grant_item (dispatches AC 23:8, AC 23:5, saves DB; suppresses AC 23:6 popup)
         total_items_to_add = entry.count * quantity
         if server and hasattr(server, "grant_item"):
-            res = server.grant_item(session, entry.item_id, total_items_to_add)
+            res = server.grant_item(session, entry.item_id, total_items_to_add, send_acquire_notice=False)
             if asyncio.iscoroutine(res):
                 await res
         else:

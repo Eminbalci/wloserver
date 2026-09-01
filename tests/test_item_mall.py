@@ -38,7 +38,7 @@ class TestItemMallSystem(unittest.TestCase):
         self.mgr = ItemMallManager()
         self.server = MagicMock()
         self.server.build_inventory_packet = MagicMock(return_value=PacketWriter().write_8(23).write_8(1))
-        async def mock_grant_item(session, item_id, amount=1):
+        async def mock_grant_item(session, item_id, amount=1, *args, **kwargs):
             from server.gameserver import add_item_to_inventory
             add_item_to_inventory(session, item_id, amount)
             return True
@@ -370,6 +370,40 @@ class TestItemMallSystem(unittest.TestCase):
         self.assertEqual(decrypted_23_6[4], 1)  # Amount must be 1, not 0!
         self.assertEqual(len(decrypted_23_6), 31)
 
+        found_23_8 = any(xor_crypt(p[4:])[0] == 23 and xor_crypt(p[4:])[1] == 8 for p in sent_pkts)
+        found_23_5 = any(xor_crypt(p[4:])[0] == 23 and xor_crypt(p[4:])[1] == 5 for p in sent_pkts)
+        self.assertTrue(found_23_8)
+        self.assertTrue(found_23_5)
+
+    def test_gameserver_grant_item_suppress_acquire_notice(self):
+        """Verifies grant_item with send_acquire_notice=False suppresses AC 23:6 Obtain popup."""
+        from server.gameserver import GameServer, PlayerSession
+        from unittest.mock import MagicMock
+        server = GameServer()
+        reader = MagicMock()
+        writer = MagicMock()
+        writer.get_extra_info = MagicMock(return_value=('127.0.0.1', 1234))
+        session = PlayerSession(reader, writer)
+        session.char_id = 99
+        session.char_name = "TestHero"
+        session.inventory = []
+        sent_pkts = []
+
+        async def mock_send(pkt):
+            sent_pkts.append(pkt.build())
+
+        session.send_packet = mock_send
+
+        # Grant item with send_acquire_notice=False (Item Mall flow)
+        res = asyncio.run(server.grant_item(session, 48050, 1, send_acquire_notice=False))
+        self.assertTrue(res)
+        self.assertEqual(len(session.inventory), 1)
+
+        # AC 23:6 must NOT be sent
+        found_23_6 = any(xor_crypt(p[4:])[0] == 23 and xor_crypt(p[4:])[1] == 6 for p in sent_pkts)
+        self.assertFalse(found_23_6, "AC 23:6 must not be sent when send_acquire_notice is False")
+
+        # AC 23:8 and AC 23:5 must still be sent
         found_23_8 = any(xor_crypt(p[4:])[0] == 23 and xor_crypt(p[4:])[1] == 8 for p in sent_pkts)
         found_23_5 = any(xor_crypt(p[4:])[0] == 23 and xor_crypt(p[4:])[1] == 5 for p in sent_pkts)
         self.assertTrue(found_23_8)
