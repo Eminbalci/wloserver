@@ -34,11 +34,11 @@ async def handle(server, session, reader):
         points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(session)
 
         if mode == 0:
-            # Initial points query on Mall/Cart open
-            logger.info(f"[{getattr(session, 'char_name', 'Player')}] Item Mall balance query & open (AC 34 Sub 1 Mode 0)")
-            resp = PacketWriter().write_8(34).write_8(1).write_16(min(65535, points))
+            # Initial points query on Mall/Cart open or minigame open
+            logger.info(f"[{getattr(session, 'char_name', 'Player')}] Item Mall balance query (AC 34 Sub 1 Mode 0)")
+            resp = PacketWriter().write_8(34).write_8(1).write_32(points)
             await session.send_packet(resp)
-            await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
+            await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
             return
 
         # mode >= 1: Shopping Cart Checkout (Confirm button in Form_Cart)
@@ -51,11 +51,11 @@ async def handle(server, session, reader):
             success = await GLOBAL_ITEM_MALL_MANAGER.purchase_item(server, session, item_to_buy.item_id, 1)
             rem_points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(session)
 
-            # 1. S->C AC 34 Sub 1: [RemainingPoints(2B)] -> Triggers client banner "WLO Point Remain: %04d Pts"
-            resp = PacketWriter().write_8(34).write_8(1).write_16(min(65535, rem_points))
+            # 1. S->C AC 34 Sub 1: [RemainingPoints(4B)] -> Triggers client banner "WLO Point Remain: %04d Pts"
+            resp = PacketWriter().write_8(34).write_8(1).write_32(rem_points)
             await session.send_packet(resp)
 
-            # 2. S->C AC 75 Sub 3: [RemainingPoints(2B)] -> Updates GUI points counter
+            # 2. S->C AC 75 Sub 3: [RemainingPoints(4B)] -> Updates GUI points counter
             await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
 
             # 3. S->C AC 35 Sub 4: [16 zero bytes] -> Authentic pcap #142 Cart Purchase confirmation

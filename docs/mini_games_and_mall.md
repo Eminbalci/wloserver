@@ -54,15 +54,22 @@ Wonderland Online clients open and interact with the Item Mall across several ne
 
 ### C. Category Switch & Direct Purchase (Action Code 75)
 - **Sub 1 (Catalog Request)**:
-  - Dispatches `AC 75 Sub 1` with count (uint16) and 10 bytes per entry:
-    `[item_id(2B), flag=0(1B), point_cost(2B), tag=1(1B), category_id(1B), subcat=1(1B), stock=999(2B)]`.
-  - Dispatches `AC 75 Sub 3` with user points.
-- **Sub 4 & Sub 5 (Category Switch)**:
-  - Client sends `[75, sub, category_id]`.
-  - Server replies with `AC 57 Sub 1` category ACK: `[57, 1, category_id, 0, 0, 0]` and re-sends catalog.
+  - Dispatches `AC 75 Sub 1` with count (uint16_LE) and 10 bytes per catalog entry (`<HBHBBBH`):
+    - `[0-1] item_id` (uint16_LE): In-game Item ID.
+    - `[2]   subcat_id` (uint8): Subcategory ID (default 1).
+    - `[3-4] base_price` (uint16_LE): Base price displayed at `POINTS`.
+    - `[5]   discount_percent` (uint8): **100 = 100% of price (No strike-through, regular price)**; `<100` = Sale percentage (triggers red strike-through and calculates `discount_percent * price / 100` for `On Sale`).
+    - `[6]   badge_tag` (uint8): Badge overlay (**1 = NEW starburst badge, 2 = HOT badge, 0 = Normal**).
+    - `[7]   category_id` (uint8): Category ID (**1=Hot, 2=Armory, 3=Weaponry, 4=Grocery, 5=Furniture, 6=Slot Machine, 7=Forging Room**).
+    - `[8-9] price` (uint16_LE): Actual point cost / price.
+- **Sub 3 (Points Balance)**:
+  - `[75, 3, im_points(uint32_LE), extra(uint32_LE), item_id(uint16_LE), count(uint8)]` (13 bytes total).
+- **Sub 4 / 5 (Category Switch)**:
+  - `Client -> Server`: `[75, 4, category_id]`.
+  - `Server -> Client`: `AC 57 Sub 1` ACK `[57, 1, category_id, 0, 0, 0]`, `AC 34 Sub 1` balance, `AC 75 Sub 3` balance, and `AC 75 Sub 1` catalog.
 - **Sub 4 & Sub 5 (Item Purchase)**:
   - Client sends `[75, sub, item_id (2 bytes), quantity (1 byte)]`.
-  - Server deducts points, grants inventory item, sends inventory update (`AC 23`), sends `AC 75 Sub 3` point update, and sends authentic buy response:
+  - Server deducts points (`point_cost * quantity`), grants inventory item (`count * quantity`), sends inventory update (`AC 23`), sends `AC 75 Sub 3` point update, and sends authentic buy response:
     `S->C [75, sub, remaining_points (4B), spent_points (4B), item_id (2B), quantity (1B)]`.
 
 ### D. Native Form GUI (Action Code 21)
@@ -107,3 +114,43 @@ When the client requests a spin:
 
 ### D. Jackpot Broadcast
 Winning UFO (`48013`) triggers a map-wide announcement: `[23, 57, 0, "Congratulations! {player_name} won a UFO from Lucky Draw!"]`.
+
+---
+
+## 4. Mini-Game Window, Gameplay & Point Synchronization Protocol (Claw Machine / UFO Catcher / Slot Machine)
+
+In Wonderland Online, mini-game forms (`MiniGame_DigHole_Form` / Claw Machine #20, `Doll_Exp_Form` #7, `Boxing_Exp_Form` #9, `TrunEgg_Exp_Form` #22, `Slotmach_Exp_Form` #19) operate through a coordinated packet protocol:
+
+### A. Point Balance & Form Initialization
+- When entering the mini-game (via Category 6 "Slot Machine" or props), client initializes points struct offset `+0x70` / `+0x50` to `-1` (`0xffffffff`).
+- The client requests / expects active point balances:
+  - **`AC 34 Sub 1`**: `[34, 1, points(uint32_LE)]` (updates internal point register).
+  - **`AC 75 Sub 3`**: `[75, 3, points(uint32_LE)]` (updates GUI point balance indicator).
+- The server automatically dispatches both packets upon switching to Category 6, entering maps, or opening minigames.
+
+### B. Mini-Game Exit & Window Dismissal (Action Code 57)
+- When clicking the red **Exit** button (`btn_close_s_1` / `btn_Leave_1`) in the bottom-right corner of the mini-game interface, the client sends:
+  - **`Client -> Server`**: `AC 57 Sub 1` (`[57, 1, category_id = 0]`).
+- **`Server -> Client` Response Sequence**:
+  1. `AC 57 Sub 1 ACK`: `[57, 1, category_id, 0, 0, 0]`.
+  2. `AC 34 Sub 1`: `[34, 1, points(uint32_LE)]`.
+  3. `AC 75 Sub 3`: `[75, 3, points(uint32_LE)]` balance sync.
+  4. **CRITICAL**: Server **does not** send `AC 75 Sub 1` (Catalog) on `category_id == 0`, preventing the client from endlessly reopening the "Game explanation" form after closing.
+  5. `AC 5 Sub 4`: Unfreeze and restore player HUD / movement controls.
+- This immediately dismisses the mini-game UI and returns the player to the normal game / world state.
+
+### C. Mini-Game Play & Prize Protocol (Action Code 71)
+- When the player starts the minigame or grabs a prize, the client sends:
+  - **`Client -> Server`**: `AC 71 Sub [minigame_id]` (e.g., `[71, 20, 0]` for Claw Crane).
+- **Server Execution**:
+  1. Validates player has at least **20 IM Points**.
+  2. If sufficient:
+     - Deducts 20 IM Points.
+     - Sends `AC 34:1` and `AC 75:3` points balance updates (`uint32_LE`).
+     - Sends **`AC 71 Sub 1 [1]`** (Start Game / Permission Granted).
+     - Rolls random prize from database prize pool, grants item into inventory (`server.grant_item`).
+     - Sends **`AC 71 Sub 2`**: `[71, 2, item_id(uint32_LE), count(uint8)]`.
+  3. If insufficient points:
+     - Sends **`AC 71 Sub 1 [2]`** (Not Enough Points error code).
+     - Syncs point balance via `AC 75:3`.
+

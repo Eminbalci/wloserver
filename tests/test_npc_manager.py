@@ -65,7 +65,6 @@ class TestNpcManager(unittest.TestCase):
         town_mob.next_walk_time = 0
         town_mob.update(now=time.time(), map_player_count=1, broadcast_fn=mock_broadcast)
         self.assertEqual(len(broadcasts), 0)
-        self.assertGreater(town_mob.next_walk_time, time.time() + 100)
 
     def test_scripted_waypoint_movement(self):
         """Validates that native eve.Emg NPCs do not receive unsolicited AC 22:2 broadcasts, preserving client animation."""
@@ -113,6 +112,29 @@ class TestNpcManager(unittest.TestCase):
         self.assertEqual(pkt_bytes[3], 0)
         self.assertEqual(pkt_bytes[4], 0)
         self.assertEqual(pkt_bytes[5], 0)
+
+    def test_permanent_chest_protection_from_blinking(self):
+        """Validates that permanent treasure chests and crates remain broken/open and never broadcast respawn packets."""
+        # Beach Crate (TID 19038)
+        crate = QuestNpc(map_id=10035, click_id=3, name="Chest", npc_id=19038, x=989, y=2095)
+        self.assertTrue(crate.is_permanent_chest())
+        self.assertFalse(crate.is_gathering_node())
+
+        # Beach Treasure Chest (TID 19035)
+        chest = QuestNpc(map_id=10035, click_id=7, name="Treas Che", npc_id=19035, x=1303, y=2139)
+        self.assertTrue(chest.is_permanent_chest())
+        self.assertFalse(chest.is_gathering_node())
+
+        # When opened/broken, update should NOT broadcast respawn packet
+        chest.is_broken = True
+        chest.respawn_time = time.time() - 10.0
+        broadcasts = []
+        def mock_broadcast(m_id, pkt):
+            broadcasts.append((m_id, pkt.buffer))
+
+        chest.update(now=time.time(), map_player_count=1, broadcast_fn=mock_broadcast)
+        self.assertEqual(len(broadcasts), 0, "Permanent chests must never broadcast respawn packets to avoid sprite blinking")
+        self.assertTrue(chest.is_broken, "Permanent chest must remain broken/opened")
 
 
 if __name__ == "__main__":

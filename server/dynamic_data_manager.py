@@ -12,10 +12,11 @@ Manages hot-reloadable dynamic configuration and SQLite persistence for:
 9. Player Titles & Achievements (game_titles)
 """
 
+import os
 import json
 import sqlite3
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple, Set, Union
 
 logger = logging.getLogger("WLO_Server")
 
@@ -271,14 +272,29 @@ class DynamicDataManager:
                     CREATE TABLE IF NOT EXISTS game_item_mall (
                         item_id INTEGER PRIMARY KEY,
                         item_name VARCHAR(100) NOT NULL,
-                        category VARCHAR(50) DEFAULT 'General',
+                        category VARCHAR(50) DEFAULT 'Hot',
                         point_cost INTEGER DEFAULT 100,
+                        original_price INTEGER DEFAULT 0,
                         gold_cost INTEGER DEFAULT 0,
                         count INTEGER DEFAULT 1,
                         is_hot INTEGER DEFAULT 0,
-                        stock INTEGER DEFAULT 999
+                        is_new INTEGER DEFAULT 0,
+                        on_sale INTEGER DEFAULT 0,
+                        subcategory_id INTEGER DEFAULT 1
                     )
                 """)
+
+                # Dynamic column migrations
+                for col_name, col_type in [
+                    ("original_price", "INTEGER DEFAULT 0"),
+                    ("is_new", "INTEGER DEFAULT 0"),
+                    ("on_sale", "INTEGER DEFAULT 0"),
+                    ("subcategory_id", "INTEGER DEFAULT 1"),
+                ]:
+                    try:
+                        conn.execute(f"ALTER TABLE game_item_mall ADD COLUMN {col_name} {col_type}")
+                    except Exception:
+                        pass
 
                 conn.commit()
                 logger.info("[DynamicDataManager] All dynamic data schema tables initialized.")
@@ -631,26 +647,73 @@ class DynamicDataManager:
                 # 19. Seed Item Mall Catalog
                 mall_count = conn.execute("SELECT count(*) FROM game_item_mall").fetchone()[0]
                 if mall_count == 0:
-                    mall_data = [
-                        (47010, "Brilliant Diamond (+42 Stats)", "Gems", 250, 250000, 1, 1, 999),
-                        (47001, "+24 ATK Spar Crystal", "Gems", 120, 100000, 1, 1, 999),
-                        (47002, "+24 DEF Spar Crystal", "Gems", 120, 100000, 1, 0, 999),
-                        (47003, "+24 MATK Spar Crystal", "Gems", 120, 100000, 1, 0, 999),
-                        (47004, "+24 MDEF Spar Crystal", "Gems", 120, 100000, 1, 0, 999),
-                        (47005, "+24 SPD Spar Crystal", "Gems", 120, 100000, 1, 1, 999),
-                        (48050, "Magic Repair Wrench", "Special", 80, 50000, 1, 1, 999),
-                        (36007, "Luxury Airship Ticket", "Vehicles", 500, 500000, 1, 1, 999),
-                        (36008, "Space UFO Ticket", "Vehicles", 750, 750000, 1, 1, 999),
-                        (30025, "Golden Rice Ball x10", "Pets", 50, 30000, 10, 0, 999),
-                        (48033, "Zodiac Master Chest", "Special", 300, 300000, 1, 1, 999),
-                        (28001, "Forgotten Scroll (Stat Reset)", "Special", 200, 150000, 1, 1, 999),
-                        (28002, "Potential Water", "Special", 150, 120000, 1, 0, 999),
-                        (28003, "Pet Return Scroll", "Pets", 180, 140000, 1, 0, 999),
-                    ]
-                    conn.executemany("""
-                        INSERT INTO game_item_mall (item_id, item_name, category, point_cost, gold_cost, count, is_hot, stock)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                    """, mall_data)
+                    loaded_json = False
+                    for json_candidate in [
+                        os.path.join(os.getcwd(), "server", "data", "item_mall.json"),
+                        os.path.join(os.getcwd(), "data", "item_mall.json")
+                    ]:
+                        if os.path.exists(json_candidate):
+                            try:
+                                with open(json_candidate, "r", encoding="utf-8") as f:
+                                    j_items = json.load(f)
+                                mall_rows = []
+                                for it in j_items:
+                                    mall_rows.append((
+                                        int(it["item_id"]),
+                                        str(it["item_name"]),
+                                        str(it.get("category", "Hot")),
+                                        int(it.get("point_cost", 100)),
+                                        int(it.get("original_price", 0)),
+                                        int(it.get("gold_cost", 0)),
+                                        int(it.get("count", 1)),
+                                        int(it.get("is_hot", 0)),
+                                        int(it.get("is_new", 0)),
+                                        int(it.get("on_sale", 0)),
+                                        int(it.get("subcategory_id", 1))
+                                    ))
+                                if mall_rows:
+                                    conn.executemany("""
+                                        INSERT INTO game_item_mall (item_id, item_name, category, point_cost, original_price, gold_cost, count, is_hot, is_new, on_sale, subcategory_id)
+                                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                    """, mall_rows)
+                                    loaded_json = True
+                                    logger.info(f"[DynamicDataManager] Loaded {len(mall_rows)} Item Mall items from {json_candidate}.")
+                                    break
+                            except Exception as je:
+                                logger.warning(f"[DynamicDataManager] Could not load item_mall.json: {je}")
+
+                    if not loaded_json:
+                        mall_data = [
+                            (48050, "Mecha Dragon (Mount)", "Hot", 60, 80, 0, 1, 1, 1, 1, 1),
+                            (48013, "Alien UFO (Mount)", "Hot", 500, 0, 0, 1, 1, 0, 0, 1),
+                            (48033, "Submarine Capsule", "Hot", 249, 300, 0, 1, 1, 1, 1, 1),
+                            (36005, "Yellow Submarine", "Hot", 400, 0, 0, 1, 1, 0, 0, 1),
+                            (47010, "Brilliant Diamond (+42)", "Hot", 200, 250, 0, 1, 1, 0, 1, 1),
+                            (28001, "Forgotten Scroll", "Hot", 150, 0, 0, 1, 1, 0, 0, 1),
+                            (22030, "Celestial Robes", "Armory", 280, 350, 0, 1, 0, 1, 1, 1),
+                            (22050, "Dragonscale Helm", "Armory", 250, 0, 0, 1, 1, 0, 0, 1),
+                            (21010, "Knight Bastard Armor", "Armory", 300, 0, 0, 1, 0, 0, 0, 1),
+                            (21050, "Dragon Slayer Greatsword", "Weaponry", 350, 400, 0, 1, 1, 1, 1, 1),
+                            (21060, "Celestial Magic Wand", "Weaponry", 320, 0, 0, 1, 1, 0, 0, 1),
+                            (28002, "Potential Water", "Grocery", 120, 150, 0, 1, 1, 0, 1, 1),
+                            (28003, "Pet Return Scroll", "Grocery", 150, 0, 0, 1, 0, 0, 0, 1),
+                            (30025, "Golden Rice Ball x10", "Grocery", 50, 0, 0, 10, 1, 0, 0, 1),
+                            (28004, "Double EXP Potion", "Grocery", 80, 100, 0, 1, 1, 0, 1, 1),
+                            (36007, "Luxury Airship Ticket", "Furniture", 450, 600, 0, 1, 1, 1, 1, 1),
+                            (36008, "Space UFO Ticket", "Furniture", 650, 0, 0, 1, 1, 0, 0, 1),
+                            (38027, "Alchemy Stove Station", "Furniture", 80, 0, 0, 1, 0, 0, 0, 1),
+                            (48020, "Lucky Draw Ticket x5", "Slot Machine", 50, 0, 0, 5, 1, 1, 0, 1),
+                            (48021, "Gacha Capsule Coin x5", "Slot Machine", 60, 0, 0, 5, 1, 0, 0, 1),
+                            (47001, "+24 ATK Spar Crystal", "Forging Room", 100, 120, 0, 1, 1, 0, 1, 1),
+                            (47002, "+24 DEF Spar Crystal", "Forging Room", 100, 120, 0, 1, 0, 0, 1, 1),
+                            (47003, "+24 MATK Spar Crystal", "Forging Room", 100, 120, 0, 1, 1, 0, 1, 1),
+                            (47005, "+24 SPD Spar Crystal", "Forging Room", 110, 0, 0, 1, 1, 1, 0, 1),
+                            (49001, "Alchemy Book I", "Forging Room", 80, 0, 0, 1, 0, 0, 0, 1),
+                        ]
+                        conn.executemany("""
+                            INSERT INTO game_item_mall (item_id, item_name, category, point_cost, original_price, gold_cost, count, is_hot, is_new, on_sale, subcategory_id)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """, mall_data)
 
                 conn.commit()
                 logger.info("[DynamicDataManager] Default baseline dynamic configuration seeded successfully.")
@@ -855,34 +918,110 @@ class DynamicDataManager:
             logger.error(f"[DynamicDataManager] Error getting Item Mall catalog: {e}")
             return []
 
-    def add_or_update_item_mall_item(self, item_id: int, name: str, category: str, point_cost: int, gold_cost: int = 0, count: int = 1, is_hot: int = 0) -> bool:
+    def add_or_update_item_mall_item(
+        self,
+        item_id: int,
+        name: str,
+        category: str,
+        point_cost: int,
+        original_price: int = 0,
+        gold_cost: int = 0,
+        count: int = 1,
+        is_hot: int = 0,
+        is_new: int = 0,
+        on_sale: int = 0,
+        subcategory_id: int = 1
+    ) -> bool:
         try:
             with self.get_connection() as conn:
                 conn.execute("""
-                    INSERT INTO game_item_mall (item_id, item_name, category, point_cost, gold_cost, count, is_hot, stock)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 999)
+                    INSERT INTO game_item_mall (item_id, item_name, category, point_cost, original_price, gold_cost, count, is_hot, is_new, on_sale, subcategory_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(item_id) DO UPDATE SET
                         item_name = excluded.item_name,
                         category = excluded.category,
                         point_cost = excluded.point_cost,
+                        original_price = excluded.original_price,
                         gold_cost = excluded.gold_cost,
                         count = excluded.count,
-                        is_hot = excluded.is_hot
-                """, (item_id, name, category, point_cost, gold_cost, count, is_hot))
+                        is_hot = excluded.is_hot,
+                        is_new = excluded.is_new,
+                        on_sale = excluded.on_sale,
+                        subcategory_id = excluded.subcategory_id
+                """, (item_id, name, category, point_cost, original_price, gold_cost, count, is_hot, is_new, on_sale, subcategory_id))
                 conn.commit()
             return True
         except Exception as e:
             logger.error(f"[DynamicDataManager] Error saving Item Mall item: {e}")
             return False
 
-    def delete_item_mall_item(self, item_id: int) -> bool:
+    def export_item_mall_json(self, file_path: str = "server/data/item_mall.json") -> bool:
+        """Exports the active SQLite Item Mall catalog to a clean, human-editable JSON file."""
         try:
-            with self.get_connection() as conn:
-                conn.execute("DELETE FROM game_item_mall WHERE item_id = ?", (item_id,))
-                conn.commit()
+            items = self.get_item_mall_catalog()
+            os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(items, f, indent=2, ensure_ascii=False)
+            logger.info(f"[DynamicDataManager] Exported {len(items)} Item Mall items to {file_path}.")
             return True
         except Exception as e:
-            logger.error(f"[DynamicDataManager] Error deleting Item Mall item: {e}")
+            logger.error(f"[DynamicDataManager] Error exporting Item Mall JSON: {e}")
+            return False
+
+    def import_item_mall_json(self, file_path: str = "server/data/item_mall.json", clear_existing: bool = True) -> bool:
+        """Imports Item Mall items from JSON into the SQLite dynamic database and hot-reloads Item Mall."""
+        try:
+            if not os.path.exists(file_path):
+                logger.warning(f"[DynamicDataManager] JSON file not found: {file_path}")
+                return False
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                items = json.load(f)
+
+            if not isinstance(items, list):
+                logger.error(f"[DynamicDataManager] Invalid JSON format in {file_path}")
+                return False
+
+            with self.get_connection() as conn:
+                if clear_existing:
+                    conn.execute("DELETE FROM game_item_mall")
+
+                for it in items:
+                    conn.execute("""
+                        INSERT INTO game_item_mall (item_id, item_name, category, point_cost, original_price, gold_cost, count, is_hot, is_new, on_sale, subcategory_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(item_id) DO UPDATE SET
+                            item_name = excluded.item_name,
+                            category = excluded.category,
+                            point_cost = excluded.point_cost,
+                            original_price = excluded.original_price,
+                            gold_cost = excluded.gold_cost,
+                            count = excluded.count,
+                            is_hot = excluded.is_hot,
+                            is_new = excluded.is_new,
+                            on_sale = excluded.on_sale,
+                            subcategory_id = excluded.subcategory_id
+                    """, (
+                        int(it["item_id"]),
+                        str(it["item_name"]),
+                        str(it.get("category", "Hot")),
+                        int(it.get("point_cost", 100)),
+                        int(it.get("original_price", 0)),
+                        int(it.get("gold_cost", 0)),
+                        int(it.get("count", 1)),
+                        int(it.get("is_hot", 0)),
+                        int(it.get("is_new", 0)),
+                        int(it.get("on_sale", 0)),
+                        int(it.get("subcategory_id", 1))
+                    ))
+                conn.commit()
+
+            from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
+            GLOBAL_ITEM_MALL_MANAGER.reload_from_db(self)
+            logger.info(f"[DynamicDataManager] Successfully imported {len(items)} Item Mall items from {file_path}.")
+            return True
+        except Exception as e:
+            logger.error(f"[DynamicDataManager] Error importing Item Mall JSON: {e}")
             return False
 
     # --- Live Hot Reload Method ---

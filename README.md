@@ -20,10 +20,10 @@ This repository contains a custom python-based server implementation for Wonderl
 - `server/marriage_system.py` - Marriage proposals, wedding ceremonies, and couple teleportation (AC 44)
 - `server/vehicle_system.py` - Vehicles, mount broadcasting, and sea voyage navigation (AC 15/59)
 - `server/reborn_system.py` - Rebirth transformation, 6 advanced job classes, capes, and stat multipliers
-- `server/pet_amity_system.py` - Pet amity loyalty tracking, runaway threshold, feeding, and pet rebirth
-- `server/minigames_system.py` - Lucky Draw wheel spins (AC 75) and Gobang board games (AC 104)
+- `server/minigames_system.py` - Lucky Draw wheel spins (AC 75), Claw Machine / UFO Catcher / Gacha (AC 57/104), and Gobang board games (AC 104)
+- `server/handlers/handle_57_action.py` - Category switch and Minigame Exit window dismiss packet dispatcher (AC 57)
 - `server/gathering_system.py` - AFK Gathering loop for Mining, Woodcutting, and Fishing
-- `server/chest_system.py` - World Map interactive treasure chests, dynamic loot pools, and keys
+- `server/chest_system.py` - World Map interactive treasure chests, dynamic loot pools, and keys ([docs/chest_and_loot_delivery.md](file:///d:/GitHub/Wonderland%20Online/docs/chest_and_loot_delivery.md))
 - `server/forging_system.py` - Equipment forging, spar crystal embedding, and gem sockets
 - `server/repair_system.py` - Equipment combat durability decay and Spanner tool repairs
 - `server/alchemy_system.py` - Advanced alchemy, compounding ranks, and Alchemy Books (I-IV)
@@ -45,6 +45,8 @@ This repository contains a custom python-based server implementation for Wonderl
 - `server/npc_manager.py` - Authentic NPC & world entity manager, C# QuestNpc parity, scripted waypoint pacing, and blinking prevention
 - `server/eve_loader.py` - Authentic binary parser for 1,119 maps in `data/eve.Emg` (NPCs, portals, chests, mining, bytecode events)
 - `docs/` - Technical Documentation:
+  - [Dynamic Chests & Gathering Node Loot System](docs/chest_and_gathering_loot_system.md)
+  - [Item Mall Catalog & Customization System](docs/item_mall_configuration.md)
   - [NPC Blinking Prevention & AI Waypoint Architecture](docs/npc_blinking_and_ai_system.md)
   - [MOTD & Server Branding System](docs/motd_system.md)
   - [Robinson Beach Rescue Cutscene Protocol](docs/robinson_beach_cutscene.md)
@@ -63,8 +65,7 @@ This repository contains a custom python-based server implementation for Wonderl
   - [network_protocol.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/network_protocol.md>) - Custom packet framing, XOR decryption, and helpers
   - [game_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/game_systems.md>) - Battle engine, GM commands, distance rules, and tent mechanics
   - [web_services.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/web_services.md>) - Web Admin panel & Web registration details
-  - [character_management.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/character_management.md>) - Character creation stats verify and deletion cleanups
-  - [mini_games_and_mall.md](file:///docs/mini_games_and_mall.md) - Item Mall network protocols (AC 0/13/21/23/34/75/226, TCP 6416), Server Branding (Mamiletta / GUI edit), and Lucky Draw mechanics
+  - [mini_games_and_mall.md](file:///docs/mini_games_and_mall.md) - Item Mall network protocols (AC 0/13/21/23/34/57/71/75/104/226, TCP 6416), Server Branding (Mamiletta / GUI edit), Claw Crane/Mini-Game gameplay and Exit handling, and Lucky Draw mechanics
   - [friends_and_mailbox_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/friends_and_mailbox_systems.md>) - Friend list pairings and invitation handshakes
   - [crafting_and_production_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/crafting_and_production_systems.md>) - Manufacturing recipe checks and async timers
   - [authentication_and_login.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/authentication_and_login.md>) - Login authentication check, slot lists, and redirects

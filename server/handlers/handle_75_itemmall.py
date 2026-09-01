@@ -43,7 +43,14 @@ async def handle(server, session, reader):
             # AC 57 Sub 1: Category ACK (Frame 4497 / 4606: 39 01 [catId] 00 00 00)
             ack = PacketWriter().write_8(57).write_8(1).write_8(category_id).write_8(0).write_8(0).write_8(0)
             await session.send_packet(ack)
-            await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
+
+            # Sync AC 34:1 Points & AC 75:3 Points for Minigames (Slot Machine / Claw Crane)
+            points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(session)
+            p34 = PacketWriter().write_8(34).write_8(1).write_32(points)
+            await session.send_packet(p34)
+            await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
+            if category_id > 0:
+                await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
         else:
             item_id = reader.read_16() if rem >= 2 else 0
             quantity = reader.read_8() if rem >= 3 else 1

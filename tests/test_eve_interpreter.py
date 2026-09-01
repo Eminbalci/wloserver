@@ -58,6 +58,19 @@ class TestEveInterpreter(unittest.TestCase):
         self.assertTrue(handled)
         self.assertGreater(len(session.sent_packets), 0)
 
+    def test_chest_and_item_grant_opcode1(self):
+        interp = EveEventInterpreter("data/eve.Emg")
+        from unittest.mock import AsyncMock
+        server = MagicMock()
+        server.items = {"10001": "Coconut"}
+        server.get_item_name = MagicMock(return_value="Coconut")
+        server.send_dialogue = AsyncMock()
+        
+        session = MockSession(map_id=10035)
+        # Event for Chest on Beach (Map 10035, ClickID 7, Opcode 1)
+        handled = asyncio.run(interp.try_execute(server, session, 7))
+        self.assertTrue(handled)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -188,6 +188,26 @@ class QuestNpc:
 
         return False
 
+    def is_permanent_chest(self) -> bool:
+        """Determines if this entity is a one-time world treasure chest, crate, cask, or container."""
+        if not self.is_static_npc():
+            return False
+        if self.template_id in (19034, 19035, 19037, 19038) or (12000 <= self.template_id <= 12999) or (16000 <= self.template_id <= 16999):
+            return True
+        lower = (self.name or "").lower().strip()
+        chest_keywords = ("chest", "treas", "crate", "box", "cask", "barrel", "urn", "pot")
+        return any(k in lower for k in chest_keywords)
+
+    def is_gathering_node(self) -> bool:
+        """Determines if this entity is a recurring gathering resource (e.g. coconut, wood, ore)."""
+        if not self.is_static_npc():
+            return False
+        if self.is_permanent_chest():
+            return False
+        lower = (self.name or "").lower().strip()
+        gather_keywords = ("coconut", "tree", "wood", "ore", "mine", "clay", "herb", "grass", "flower", "mushroom", "shell", "driftwood", "bamboo")
+        return any(k in lower for k in gather_keywords) or self.template_id == 19039
+
     def update(self, now: float, map_player_count: int, broadcast_fn: Callable[[int, Any], None]) -> None:
         """
         Updates NPC status and node respawning.
@@ -199,8 +219,13 @@ class QuestNpc:
 
         # Handle Gathering Nodes Respawning (e.g. Coconut, Wood, Ore)
         if self.is_broken:
-            if now >= self.respawn_time:
+            # Permanent chests/crates remain broken/opened and never auto-respawn via server tick
+            if self.is_permanent_chest():
+                return
+
+            if self.is_gathering_node() and self.respawn_time > 0 and now >= self.respawn_time:
                 self.is_broken = False
+                self.respawn_time = 0.0
                 # Broadcast un-hide / respawn packet (AC 22:10 state 0, 0)
                 respawn_pkt = PacketWriter().write_8(22).write_8(10).write_16(self.click_id).write_8(0).write_8(0)
                 broadcast_fn(self.map_id, respawn_pkt)

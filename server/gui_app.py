@@ -41,7 +41,8 @@ except ImportError:
     HAS_CTK = False
 
 from server.dynamic_data_manager import GLOBAL_DYNAMIC_DATA
-from server.dat_loaders import GLOBAL_NPC_DAT, GLOBAL_TALK_DAT
+from server.dat_loaders import GLOBAL_NPC_DAT, GLOBAL_TALK_DAT, GLOBAL_ITEM_DAT
+from server.item_mall import GLOBAL_ITEM_MALL_MANAGER, resolve_category_id, CATEGORY_ID_TO_NAME
 from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
 from server.network import PacketWriter
 
@@ -694,6 +695,215 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
 
 
 # =========================================================================
+# Item Mall Product Editor Dialog
+# =========================================================================
+
+class MallItemEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
+    """Interactive Add / Edit Item Mall Product Modal Dialog."""
+
+    def __init__(self, parent, item_data: Optional[Dict[str, Any]] = None, on_save_callback: Any = None):
+        super().__init__(parent)
+        self.item_data = item_data or {}
+        self.on_save_callback = on_save_callback
+        self.is_edit = bool(item_data and item_data.get("item_id"))
+
+        self.title("✏ Edit Item Mall Product" if self.is_edit else "➕ Add New Item Mall Product")
+        self.geometry("540x680")
+        self.resizable(False, False)
+
+        if HAS_CTK:
+            self.configure(fg_color="#0D1117")
+
+        self._build_ui()
+        if self.is_edit:
+            self._prefill_data()
+        self.grab_set()
+
+    def _build_ui(self):
+        # Header
+        top = ctk.CTkFrame(self, height=45, fg_color="#161B22", corner_radius=8)
+        top.pack(fill="x", padx=15, pady=(15, 10))
+
+        title_text = "✏ Edit Item Mall Product" if self.is_edit else "➕ Add New Item Mall Product"
+        ctk.CTkLabel(top, text=title_text, font=ctk.CTkFont(size=15, weight="bold"), text_color="#58A6FF").pack(side="left", padx=15, pady=8)
+
+        # Form Frame
+        form = ctk.CTkFrame(self, fg_color="#161B22", corner_radius=10)
+        form.pack(fill="both", expand=True, padx=15, pady=5)
+
+        # 1. Item ID
+        ctk.CTkLabel(form, text="Item ID (e.g. 48050):", font=ctk.CTkFont(weight="bold"), text_color="#E6EDF3").pack(anchor="w", padx=15, pady=(12, 2))
+        self.ent_item_id = ctk.CTkEntry(form, width=480, placeholder_text="Enter Item ID")
+        self.ent_item_id.pack(padx=15, pady=2)
+        self.ent_item_id.bind("<KeyRelease>", self._on_item_id_changed)
+
+        # 2. Item Name
+        ctk.CTkLabel(form, text="Item Name / Display Title:", font=ctk.CTkFont(weight="bold"), text_color="#E6EDF3").pack(anchor="w", padx=15, pady=(8, 2))
+        self.ent_name = ctk.CTkEntry(form, width=480, placeholder_text="Item name")
+        self.ent_name.pack(padx=15, pady=2)
+
+        # 3. Category
+        ctk.CTkLabel(form, text="Category / Shop Tab:", font=ctk.CTkFont(weight="bold"), text_color="#E6EDF3").pack(anchor="w", padx=15, pady=(8, 2))
+        categories = [
+            "1 - Hot",
+            "2 - Armory",
+            "3 - Weaponry",
+            "4 - Grocery",
+            "5 - Furniture",
+            "6 - Slot Machine",
+            "7 - Forging Room"
+        ]
+        self.cmb_category = ctk.CTkComboBox(form, values=categories, width=480)
+        self.cmb_category.set("1 - Hot")
+        self.cmb_category.pack(padx=15, pady=2)
+
+        # 4. Point Price & Original Price (Row)
+        prices_row = ctk.CTkFrame(form, fg_color="transparent")
+        prices_row.pack(fill="x", padx=15, pady=(8, 2))
+
+        p_left = ctk.CTkFrame(prices_row, fg_color="transparent")
+        p_left.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        ctk.CTkLabel(p_left, text="Point Price (IM Points):", font=ctk.CTkFont(weight="bold"), text_color="#3FB950").pack(anchor="w")
+        self.ent_points = ctk.CTkEntry(p_left, width=230)
+        self.ent_points.insert(0, "100")
+        self.ent_points.pack(fill="x", pady=2)
+
+        p_right = ctk.CTkFrame(prices_row, fg_color="transparent")
+        p_right.pack(side="right", fill="x", expand=True, padx=(5, 0))
+        ctk.CTkLabel(p_right, text="Original Price (0 = Normal):", font=ctk.CTkFont(weight="bold"), text_color="#D29922").pack(anchor="w")
+        self.ent_orig_price = ctk.CTkEntry(p_right, width=230)
+        self.ent_orig_price.insert(0, "0")
+        self.ent_orig_price.pack(fill="x", pady=2)
+
+        # 5. Quantity / Count
+        ctk.CTkLabel(form, text="Quantity / Stack Count per Purchase:", font=ctk.CTkFont(weight="bold"), text_color="#E6EDF3").pack(anchor="w", padx=15, pady=(8, 2))
+        self.ent_count = ctk.CTkEntry(form, width=480)
+        self.ent_count.insert(0, "1")
+        self.ent_count.pack(padx=15, pady=2)
+
+        # 6. Badge & Sale (Row)
+        badge_row = ctk.CTkFrame(form, fg_color="transparent")
+        badge_row.pack(fill="x", padx=15, pady=(10, 5))
+
+        b_left = ctk.CTkFrame(badge_row, fg_color="transparent")
+        b_left.pack(side="left", fill="x", expand=True, padx=(0, 5))
+        ctk.CTkLabel(b_left, text="Badge Tag:", font=ctk.CTkFont(weight="bold"), text_color="#58A6FF").pack(anchor="w")
+        self.cmb_badge = ctk.CTkComboBox(b_left, values=["None (0)", "NEW (1)", "HOT (2)"], width=230)
+        self.cmb_badge.set("None (0)")
+        self.cmb_badge.pack(fill="x", pady=2)
+
+        b_right = ctk.CTkFrame(badge_row, fg_color="transparent")
+        b_right.pack(side="right", fill="x", expand=True, padx=(5, 0))
+        ctk.CTkLabel(b_right, text="On Sale Strike-through:", font=ctk.CTkFont(weight="bold"), text_color="#F85149").pack(anchor="w")
+        self.var_on_sale = tk.IntVar(value=0)
+        self.chk_on_sale = ctk.CTkCheckBox(b_right, text="Enable On Sale", variable=self.var_on_sale)
+        self.chk_on_sale.pack(anchor="w", pady=4)
+
+        # Bottom Buttons
+        btn_bar = ctk.CTkFrame(self, fg_color="transparent")
+        btn_bar.pack(fill="x", padx=15, pady=12)
+
+        ctk.CTkButton(btn_bar, text="💾 Save Item", fg_color="#238636", hover_color="#2EA043", width=150, height=36, command=self._action_save).pack(side="right", padx=5)
+        ctk.CTkButton(btn_bar, text="Cancel", fg_color="#21262D", hover_color="#30363D", width=100, height=36, command=self.destroy).pack(side="right", padx=5)
+
+    def _on_item_id_changed(self, event=None):
+        try:
+            val = self.ent_item_id.get().strip()
+            if val.isdigit():
+                it_id = int(val)
+                if GLOBAL_ITEM_DAT and it_id in GLOBAL_ITEM_DAT.items:
+                    name = GLOBAL_ITEM_DAT.items[it_id].name
+                    if name and (not self.ent_name.get() or not self.is_edit):
+                        self.ent_name.delete(0, tk.END)
+                        self.ent_name.insert(0, name)
+        except Exception:
+            pass
+
+    def _prefill_data(self):
+        d = self.item_data
+        self.ent_item_id.insert(0, str(d.get("item_id", "")))
+        self.ent_item_id.configure(state="disabled")
+        self.ent_name.insert(0, str(d.get("item_name", "")))
+
+        cat = str(d.get("category", "Hot"))
+        cat_id = resolve_category_id(cat)
+        cat_name = CATEGORY_ID_TO_NAME.get(cat_id, "Hot")
+        self.cmb_category.set(f"{cat_id} - {cat_name}")
+
+        self.ent_points.delete(0, tk.END)
+        self.ent_points.insert(0, str(d.get("point_cost", 100)))
+
+        self.ent_orig_price.delete(0, tk.END)
+        self.ent_orig_price.insert(0, str(d.get("original_price", 0)))
+
+        self.ent_count.delete(0, tk.END)
+        self.ent_count.insert(0, str(d.get("count", 1)))
+
+        if d.get("is_new"):
+            self.cmb_badge.set("NEW (1)")
+        elif d.get("is_hot"):
+            self.cmb_badge.set("HOT (2)")
+        else:
+            self.cmb_badge.set("None (0)")
+
+        self.var_on_sale.set(1 if d.get("on_sale") else 0)
+
+    def _action_save(self):
+        try:
+            raw_id = self.ent_item_id.get().strip()
+            if not raw_id.isdigit() or int(raw_id) <= 0:
+                messagebox.showerror("Validation Error", "Please enter a valid numeric Item ID.")
+                return
+            item_id = int(raw_id)
+
+            name = self.ent_name.get().strip()
+            if not name:
+                name = f"Item #{item_id}"
+
+            cat_str = self.cmb_category.get()
+            cat_id = int(cat_str.split("-")[0].strip()) if "-" in cat_str else resolve_category_id(cat_str)
+            category_name = CATEGORY_ID_TO_NAME.get(cat_id, "Hot")
+
+            point_cost = max(0, int(self.ent_points.get().strip() or "0"))
+            orig_price = max(0, int(self.ent_orig_price.get().strip() or "0"))
+            count = max(1, int(self.ent_count.get().strip() or "1"))
+
+            badge_str = self.cmb_badge.get()
+            is_new = 1 if "NEW" in badge_str else 0
+            is_hot = 1 if "HOT" in badge_str else 0
+            on_sale = 1 if self.var_on_sale.get() == 1 else 0
+
+            # Save to dynamic DB
+            success = GLOBAL_DYNAMIC_DATA.add_or_update_item_mall_item(
+                item_id=item_id,
+                name=name,
+                category=category_name,
+                point_cost=point_cost,
+                original_price=orig_price,
+                gold_cost=0,
+                count=count,
+                is_hot=is_hot,
+                is_new=is_new,
+                on_sale=on_sale,
+                subcategory_id=1
+            )
+            if not success:
+                messagebox.showerror("Error", "Failed to save item to database.")
+                return
+
+            GLOBAL_DYNAMIC_DATA.export_item_mall_json()
+            GLOBAL_ITEM_MALL_MANAGER.reload_from_db(GLOBAL_DYNAMIC_DATA)
+
+            if self.on_save_callback:
+                self.on_save_callback()
+
+            self.destroy()
+            messagebox.showinfo("Success", f"Item #{item_id} ({name}) saved to Item Mall ({category_name}) successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not save Item Mall item: {e}")
+
+
+# =========================================================================
 # Main Modern Server GUI Application
 # =========================================================================
 
@@ -1195,16 +1405,42 @@ class ModernServerGUI:
         top = ctk.CTkFrame(parent, fg_color="#0D1117", corner_radius=10, border_width=1, border_color="#30363D")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkButton(top, text="🔄 Reload Catalog", fg_color="#21262D", width=130, command=self.action_refresh_item_mall).pack(side="left", padx=10, pady=10)
-        ctk.CTkButton(top, text="➕ Add Mall Item", fg_color="#238636", width=130, command=self.action_add_mall_item_modal).pack(side="left", padx=4)
-        ctk.CTkButton(top, text="🗑 Remove Item", fg_color="#DA3633", width=120, command=self.action_delete_mall_item).pack(side="right", padx=10)
+        ctk.CTkButton(top, text="🔄 Reload Catalog", fg_color="#21262D", hover_color="#30363D", width=120, command=self.action_refresh_item_mall).pack(side="left", padx=(10, 4), pady=10)
+        ctk.CTkButton(top, text="➕ Add Item", fg_color="#238636", hover_color="#2EA043", width=110, command=self.action_add_mall_item_modal).pack(side="left", padx=4)
+        ctk.CTkButton(top, text="✏ Edit Item", fg_color="#1F6FEB", hover_color="#388BFD", width=100, command=self.action_edit_mall_item_modal).pack(side="left", padx=4)
+        ctk.CTkButton(top, text="🗑 Delete Item", fg_color="#DA3633", hover_color="#F85149", width=110, command=self.action_delete_mall_item).pack(side="left", padx=4)
 
-        cols = ("MallID", "ItemID", "Name", "Category", "PriceGold", "PricePoints")
+        ctk.CTkButton(top, text="📥 Import JSON", fg_color="#30363D", hover_color="#484F58", width=110, command=self.action_import_mall_json).pack(side="left", padx=4)
+        ctk.CTkButton(top, text="📤 Export JSON", fg_color="#30363D", hover_color="#484F58", width=110, command=self.action_export_mall_json).pack(side="left", padx=4)
+
+        ctk.CTkLabel(top, text="Filter Category:", font=ctk.CTkFont(weight="bold"), text_color="#58A6FF").pack(side="left", padx=(15, 4))
+        self.cmb_mall_filter = ctk.CTkComboBox(
+            top,
+            values=["All Categories", "1 - Hot", "2 - Armory", "3 - Weaponry", "4 - Grocery", "5 - Furniture", "6 - Slot Machine", "7 - Forging Room"],
+            width=160,
+            command=lambda _: self.action_refresh_item_mall()
+        )
+        self.cmb_mall_filter.set("All Categories")
+        self.cmb_mall_filter.pack(side="left", padx=4)
+
+        cols = ("ItemID", "Name", "Category", "Points", "OriginalPrice", "Count", "Badge", "OnSale")
         self.tree_mall = ttk.Treeview(parent, columns=cols, show="headings")
+        col_widths = {
+            "ItemID": 80,
+            "Name": 240,
+            "Category": 140,
+            "Points": 90,
+            "OriginalPrice": 100,
+            "Count": 70,
+            "Badge": 90,
+            "OnSale": 80
+        }
         for c in cols:
             self.tree_mall.heading(c, text=c)
-            self.tree_mall.column(c, width=90 if c != "Name" else 200, anchor="center")
+            self.tree_mall.column(c, width=col_widths.get(c, 100), anchor="center" if c != "Name" else "w")
         self.tree_mall.pack(fill="both", expand=True, padx=10, pady=6)
+        self.tree_mall.bind("<Double-1>", lambda _: self.action_edit_mall_item_modal())
+
         self.action_refresh_item_mall()
 
     # -------------------------------------------------------------
@@ -1782,22 +2018,109 @@ class ModernServerGUI:
         messagebox.showinfo("Saved", "Chest drop table and respawn timer saved.")
 
     def action_refresh_item_mall(self):
+        """Refreshes Item Mall table from SQLite dynamic data with category filter support."""
         for i in self.tree_mall.get_children():
             self.tree_mall.delete(i)
-        mall_items = [
-            (1, 47001, "+24 ATK Spar Crystal", "Spar / Gems", "500,000 G", "120 IM"),
-            (2, 48033, "Spacecraft Ticket", "Vehicles", "2,000,000 G", "500 IM"),
-            (3, 60001, "Return Scroll (x10)", "Utility", "10,000 G", "20 IM"),
-            (4, 38027, "Alchemy Stove", "Furniture", "100,000 G", "80 IM"),
-        ]
-        for m in mall_items:
-            self.tree_mall.insert("", "end", values=m)
+
+        filter_cat = self.cmb_mall_filter.get() if hasattr(self, 'cmb_mall_filter') else "All Categories"
+        target_cat_id = None
+        if filter_cat and filter_cat != "All Categories":
+            target_cat_id = int(filter_cat.split("-")[0].strip()) if "-" in filter_cat else resolve_category_id(filter_cat)
+
+        items = GLOBAL_DYNAMIC_DATA.get_item_mall_catalog()
+        for it in items:
+            cat_str = str(it.get("category", "Hot"))
+            cat_id = resolve_category_id(cat_str)
+            if target_cat_id is not None and cat_id != target_cat_id:
+                continue
+
+            badge_str = "NEW" if it.get("is_new") else ("HOT" if it.get("is_hot") else "Normal")
+            sale_str = "YES" if it.get("on_sale") else "No"
+            orig_p = f"{it.get('original_price', 0)} pts" if it.get("original_price") else "-"
+            cat_display = f"{cat_id} - {CATEGORY_ID_TO_NAME.get(cat_id, cat_str)}"
+
+            row_vals = (
+                it["item_id"],
+                it["item_name"],
+                cat_display,
+                f"{it.get('point_cost', 0)} pts",
+                orig_p,
+                it.get("count", 1),
+                badge_str,
+                sale_str
+            )
+            self.tree_mall.insert("", "end", values=row_vals)
 
     def action_add_mall_item_modal(self):
-        messagebox.showinfo("Item Mall", "Mall item added.")
+        """Opens modal to add a new Item Mall product."""
+        MallItemEditorDialog(self.root, item_data=None, on_save_callback=self.action_refresh_item_mall)
+
+    def action_edit_mall_item_modal(self):
+        """Opens modal pre-populated with selected Item Mall product."""
+        sel = self.tree_mall.selection()
+        if not sel:
+            messagebox.showwarning("Select Item", "Please select an item from the Item Mall table first.")
+            return
+        item_id = int(self.tree_mall.item(sel[0])["values"][0])
+        # Find item in catalog
+        catalog = GLOBAL_DYNAMIC_DATA.get_item_mall_catalog()
+        found = next((x for x in catalog if x["item_id"] == item_id), None)
+        if not found:
+            messagebox.showerror("Error", f"Item #{item_id} not found in database.")
+            return
+        MallItemEditorDialog(self.root, item_data=found, on_save_callback=self.action_refresh_item_mall)
 
     def action_delete_mall_item(self):
-        messagebox.showinfo("Item Mall", "Mall item removed.")
+        """Deletes selected item from Item Mall database and reloads server catalog."""
+        sel = self.tree_mall.selection()
+        if not sel:
+            messagebox.showwarning("Select Item", "Please select an item from the Item Mall table first.")
+            return
+        vals = self.tree_mall.item(sel[0])["values"]
+        item_id = int(vals[0])
+        item_name = str(vals[1])
+
+        confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to remove Item #{item_id} '{item_name}' from the Item Mall?")
+        if not confirm:
+            return
+
+        GLOBAL_DYNAMIC_DATA.delete_item_mall_item(item_id)
+        GLOBAL_DYNAMIC_DATA.export_item_mall_json()
+        GLOBAL_ITEM_MALL_MANAGER.reload_from_db(GLOBAL_DYNAMIC_DATA)
+        self.action_refresh_item_mall()
+        messagebox.showinfo("Removed", f"Item #{item_id} '{item_name}' removed from Item Mall.")
+
+    def action_import_mall_json(self):
+        """Imports Item Mall items from server/data/item_mall.json into SQLite."""
+        file_path = filedialog.askopenfilename(
+            title="Import Item Mall JSON",
+            initialdir=os.path.join(os.getcwd(), "server", "data"),
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+        success = GLOBAL_DYNAMIC_DATA.import_item_mall_json(file_path)
+        if success:
+            self.action_refresh_item_mall()
+            messagebox.showinfo("Import Success", f"Successfully imported Item Mall catalog from {os.path.basename(file_path)}.")
+        else:
+            messagebox.showerror("Import Failed", "Could not import Item Mall JSON file. Check format.")
+
+    def action_export_mall_json(self):
+        """Exports Item Mall catalog from SQLite to server/data/item_mall.json."""
+        file_path = filedialog.asksaveasfilename(
+            title="Export Item Mall JSON",
+            initialdir=os.path.join(os.getcwd(), "server", "data"),
+            initialfile="item_mall.json",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+        success = GLOBAL_DYNAMIC_DATA.export_item_mall_json(file_path)
+        if success:
+            messagebox.showinfo("Export Success", f"Successfully exported Item Mall catalog to {os.path.basename(file_path)}.")
+        else:
+            messagebox.showerror("Export Failed", "Could not export Item Mall JSON file.")
 
     def _populate_npc_directory(self):
         for i in self.tree_npc_dir.get_children():

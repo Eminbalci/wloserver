@@ -314,16 +314,52 @@ class EveEventInterpreter:
                         # Consume / Remove item
                         from server.gameserver import remove_item_from_inventory
                         if remove_item_from_inventory(session, item_id, count):
-                            item_name = server.items.get(str(item_id), f"Item #{item_id}")
+                            item_name = server.get_item_name(item_id) if hasattr(server, 'get_item_name') else (getattr(server, 'items', {}).get(str(item_id)) or f"Item #{item_id}")
                             await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Lost {item_name}"))
+                            if hasattr(server, 'build_inventory_packet'):
+                                await session.send_packet(server.build_inventory_packet(session))
+                            if hasattr(server, 'save_player_to_db'):
+                                server.save_player_to_db(session)
                             executed_any = True
                     else:
-                        # Grant item
-                        from server.gameserver import add_item_to_inventory
-                        if add_item_to_inventory(session, item_id, count):
-                            item_name = server.items.get(str(item_id), f"Item #{item_id}")
+                        # Grant item atomically with AC 23:6 delivery, AC 23:8 slot update, AC 23:5 full sync
+                        granted = False
+                        if hasattr(server, 'grant_item'):
+                            granted = await server.grant_item(session, item_id, count)
+                        else:
+                            from server.gameserver import add_item_to_inventory
+                            if add_item_to_inventory(session, item_id, count) is not None:
+                                granted = True
+                                if hasattr(server, 'build_inventory_packet'):
+                                    await session.send_packet(server.build_inventory_packet(session))
+                                if hasattr(server, 'save_player_to_db'):
+                                    server.save_player_to_db(session)
+
+                        if granted:
+                            item_name = server.get_item_name(item_id) if hasattr(server, 'get_item_name') else (getattr(server, 'items', {}).get(str(item_id)) or f"Item #{item_id}")
                             await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Obtained {item_name}!"))
                             await session.send_packet(PacketWriter().write_8(20).write_8(10))  # Fanfare SFX
+                            
+                            # If this was a static chest/prop, play open animation (AC 22:1) and mark broken
+                            if click_id > 0:
+                                open_anim = PacketWriter().write_8(22).write_8(1).write_16(click_id).write_8(1)
+                                await session.send_packet(open_anim)
+                                if hasattr(server, 'broadcast_to_map'):
+                                    server.broadcast_to_map(session.map_id, open_anim, exclude_session=session)
+                                
+                                # Mark NPC object broken on map
+                                map_npcs = getattr(server, 'map_npcs', {}).get(session.map_id, [])
+                                for m_npc in map_npcs:
+                                    m_cid = m_npc.click_id if hasattr(m_npc, 'click_id') else (m_npc.get('click_id', 0) if isinstance(m_npc, dict) else 0)
+                                    if m_cid == click_id:
+                                        if hasattr(m_npc, 'is_broken'):
+                                            m_npc.is_broken = True
+                                            import time
+                                            m_npc.respawn_time = time.time() + 60.0
+                                        elif isinstance(m_npc, dict):
+                                            m_npc['is_broken'] = True
+                                        break
+                            
                             executed_any = True
                 elif d1 == 3:  # Scene Transition (Defer until interaction completes)
                     if session.map_id == 10017 or (10024 <= session.map_id <= 10028):
@@ -476,6 +512,11 @@ class EveEventInterpreter:
             first_step = dialogue_steps[0]
             await self._dispatch_step(server, session, first_step)
             executed_any = True
+        elif executed_any:
+            # Event had actions (item grant, quest updates, animation) but no dialogue window:
+            # Immediately close dialogue and unfreeze controls so inventory updates visually on client!
+            await session.send_packet(PacketWriter().write_8(20).write_8(8))
+            await session.send_packet(PacketWriter().write_8(5).write_8(4))
 
         return executed_any
 

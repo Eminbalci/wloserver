@@ -33,26 +33,23 @@ class PreEventInterpreter:
             if len(d) < 100:
                 return
 
-            num_maps = struct.unpack_from("<H", d, 0)[0]
-            ptr = 2
-            map_headers = []
-            for _ in range(num_maps):
-                if ptr + 14 > len(d):
+            entrylen = struct.unpack_from("<I", d, 8)[0]
+            ptr = 12
+            maps = {}
+            for _ in range(entrylen):
+                if ptr + 10 > len(d):
                     break
-                map_id = struct.unpack_from("<H", d, ptr)[0]
-                data_ptr = struct.unpack_from("<I", d, ptr + 2)[0]
-                data_len = struct.unpack_from("<I", d, ptr + 6)[0]
-                map_headers.append({"map_id": map_id, "dataptr": data_ptr, "datalen": data_len})
-                ptr += 14
+                map_id, scene_id, data_ptr, data_len = struct.unpack_from("<HHIH", d, ptr)
+                ptr += 10
+                maps[map_id] = {"dataptr": data_ptr, "datalen": data_len}
 
             loaded_preevents_count = 0
-            for m in map_headers:
-                map_id = m["map_id"]
-                off_ptr = m["dataptr"] + 6
+            for map_id, m in maps.items():
+                off_ptr = m["dataptr"] + m["datalen"] - 44
                 if off_ptr + 44 > len(d):
                     continue
 
-                offsets = struct.unpack_from("<IIIIIIIIIII", d, off_ptr)
+                offsets = struct.unpack_from("<11I", d, off_ptr)
                 preevent_offset = offsets[1]  # Offset 1 is PreEvents table
                 preevent_ptr = m["dataptr"] + preevent_offset
 
@@ -60,7 +57,7 @@ class PreEventInterpreter:
                     continue
 
                 pe_count = struct.unpack_from("<H", d, preevent_ptr)[0]
-                if pe_count == 0:
+                if pe_count == 0 or pe_count > 100:
                     continue
 
                 cur_ptr = preevent_ptr + 2
@@ -71,6 +68,12 @@ class PreEventInterpreter:
                         break
                     sub_count = struct.unpack_from("<H", d, cur_ptr)[0]
                     cur_ptr += 2
+                    if sub_count == 0 or sub_count > 20:
+                        break
+
+                    if cur_ptr + 22 > len(d):
+                        break
+                    cur_ptr += 22  # 22-byte name header
 
                     subentries = []
                     for _ in range(sub_count):
@@ -83,6 +86,8 @@ class PreEventInterpreter:
                             break
                         act_count = struct.unpack_from("<H", d, cur_ptr)[0]
                         cur_ptr += 2
+                        if act_count > 20:
+                            break
 
                         actions = []
                         for _ in range(act_count):
@@ -92,15 +97,18 @@ class PreEventInterpreter:
                             actions.append(act_data)
                             cur_ptr += 10
 
-                        subentries.append({
-                            "condition": cond_data,
-                            "actions": actions
-                        })
+                        if actions:
+                            subentries.append({
+                                "condition": cond_data,
+                                "actions": actions
+                            })
 
-                    preevent_list.append(subentries)
-                    loaded_preevents_count += 1
+                    if subentries:
+                        preevent_list.append(subentries)
+                        loaded_preevents_count += 1
 
-                self._map_preevents[map_id] = preevent_list
+                if preevent_list:
+                    self._map_preevents[map_id] = preevent_list
 
             self._loaded = True
             logger.info(f"[PreEventInterpreter] Loaded {loaded_preevents_count} PreEvents across {len(self._map_preevents)} maps from eve.Emg.")
@@ -191,8 +199,10 @@ class PreEventInterpreter:
             state1 = data[8]
             state2 = data[9]
 
-            act_pkt = PacketWriter().write_8(22).write_8(10).write_16(click_id).write_8(state1).write_8(state2)
-            await session.send_packet(act_pkt)
+            # Only forward valid click IDs
+            if 0 < click_id < 500:
+                act_pkt = PacketWriter().write_8(22).write_8(10).write_16(click_id).write_8(state1).write_8(state2)
+                await session.send_packet(act_pkt)
 
     def _get_player_flag_value(self, session, flag_id: int) -> int:
         if not session or flag_id == 0:

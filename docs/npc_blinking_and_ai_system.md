@@ -27,12 +27,26 @@ if click_id == 0 or (x == 0 and y == 0) or x > 4000 or y > 4000:
 - Starter ship / beach ClickIDs 6, 7, 10 on maps 10017 and 10035
 - Keywords: `chest`, `box`, `crate`, `barrel`, `pot`, `machine`, `wood`, `stone`, `clay`, `mine`, `herb`, `tree`, `door`, `switch`, `lever`, `cabinet`, `desk`, `bed`, `chair`, `stove`, `grass`, `flower`, `shell`, `mushroom`, `ore`, `statue`, `fountain`, `sign`, `well`, `grave`, `cart`, `boat`, `wreck`, `tent`, `fence`, `portal`, `warp`, `prop`, `object`, `game machine`, `coconut`, `driftwood`, `bamboo`, `iron ore`, `copper ore`, `storage`, `bank`, `clinic`, `hotel`, `inn`, `exchanger`, `doctor`, `witch`, `shop`, `store`, `market`.
 
-### 2.3 Scripted Waypoint & Wild Roaming Control (`QuestNpc.update()`)
-- **Scripted Waypoints**: Follow predetermined waypoints from `eve.Emg` with natural `3.5s - 7.5s` pauses and walking speed 2 (`AC 22:2`).
-- **Outdoor Wild Monsters**: Roam ONLY on field maps (`not is_village_or_town_map()`) with a tight `±40px` step delta and a maximum `60px` leash from spawn.
-- **Town & Village Map Safeguards**: Maps 10000..10036 (Kelan), 12000..12030 (Welling), 14000..14030 (Holy Village), 16000..16030 (Kyoto), 18000..18030 (Chang'an) are strictly protected; NPCs without scripted waypoints remain static.
+### 2.3 Client-Side Walk Simulation & Blinking Prevention
+- **Native Map NPC Simulation**: Native `eve.Emg` map NPCs have their walk cycles and waypoints animated locally by the Wonderland Online client engine. Broadcasting redundant server-side `AC 22 Sub 2` movement packets forcefully resets the client sprite animation to frame 0, causing rapid flickering and blinking.
+- **Server Update Responsibility**: `QuestNpc.update()` solely manages gathering node respawn lifecycles (`AC 22 Sub 10`), leaving native map NPC animation loops to the client's internal renderer.
 
 ### 2.4 Authentic Visibility & Respawn Packets
 - **Hide / Despawn**: `AC 22 Sub 10` `[22, 10, clickId (2B), 0xFF, 0xFF]`
 - **Show / Respawn**: `AC 22 Sub 10` `[22, 10, clickId (2B), 0x00, 0x00]`
 - **Chest Open State**: `AC 22 Sub 1` `[22, 1, clickId (2B), 0x01]`
+- **Map Load Batch Registration**: `AC 22 Sub 4` `[22, 4, (clickId 2B, state 2B, x 2B, y 2B, 1 1B, 0 1B, 0 4B)...]`
+  - `state = 0x0000`: Closed / Intact / Normal state.
+  - `state = 0x0001`: Opened / Broken / Action state (for looted treasure chests, broken crates, gathered nodes).
+  - `state = 0xFFFF`: Recruited companion or hidden entity.
+
+### 2.5 Permanent Chest vs Gathering Node Classification
+- **Permanent Chests** (`QuestNpc.is_permanent_chest()`):
+  - Templates `19034` (Treas Che), `19035` (Treas Che), `19037` (Cask), `19038` (Chest/Crate), `12000-12999`, `16000-16999`.
+  - Persisted in SQLite `charchests`.
+  - Once looted, remains in `state = 0x0001` (open/broken) permanently per character.
+  - `QuestNpc.update()` never broadcasts respawn packets for permanent chests, preventing sprite resetting and flickering.
+- **Gathering Nodes** (`QuestNpc.is_gathering_node()`):
+  - Coconuts, ores, clay, wood, herbs, mushrooms.
+  - Respawns after cooldown using `AC 22 Sub 10 [clickId, 0x00, 0x00]`.
+

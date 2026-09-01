@@ -45,10 +45,9 @@ async def handle(server, session, reader):
             # Send stop fishing confirmation: [23, 54, 0]
             await session.send_packet(PacketWriter().write_8(23).write_8(54).write_8(0))
         else:
-            logger.info(f"[{session.char_name}] Received warp-done ACK (23, 54) — dispatching Item Mall catalog & entering map")
+            logger.info(f"[{session.char_name}] Received warp-done ACK (23, 54) — entering map")
             session.is_warping = False
             session.in_map = True
-            await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
             await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
 
     elif sub == 25:  # Request IM Point Balance (C# AC23.Recv25)

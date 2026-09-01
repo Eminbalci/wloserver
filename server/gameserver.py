@@ -392,6 +392,7 @@ class GameServer:
         return {getattr(s, 'char_id', id(s)): s for s in self.active_sessions}
     
     def __init__(self, db_path: str = "wlo_server.db", static_db_path: str = "server/ServerDataBase.db"):
+        self.db_path = db_path
         self.db = DatabaseManager(db_path)
         self.static_db_path = static_db_path
         self.quest_manager = QuestManager(static_db_path)
@@ -425,6 +426,8 @@ class GameServer:
         self.map_npcs = {}
         self.map_portals_count = {}
         self.map_portals = {}
+        self.item_properties = {}
+        self.items = {}
         self._load_all_npcs()
         self._load_compound_dat()
         self._load_formula_dat()
@@ -438,8 +441,10 @@ class GameServer:
         eve_path = os.path.join(base_dir, "data", "eve.Emg")
         from server.quests import GLOBAL_QUEST_ENGINE
         from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+        from server.chest_system import ChestSystem
         GLOBAL_QUEST_ENGINE.initialize(base_dir)
         GLOBAL_PREEVENT_INTERPRETER.load_preevents(eve_path)
+        self.chest_system = ChestSystem(self.db_path)
 
         self.SERVER_VERSION = self.db.get_config("server_name", SERVER_VERSION)
         self.SUBSERVER_CONFIG = SUBSERVER_CONFIG
@@ -1917,6 +1922,41 @@ class GameServer:
 
         return p
 
+    async def grant_item(self, session: PlayerSession, item_id: int, amount: int = 1, slot: int = None) -> bool:
+        """
+        Atomically grants an item to player inventory, dispatches authentic client sync packets
+        (AC 23 Sub 6 item arrival, AC 23 Sub 8 slot update, AC 23 Sub 5 full inventory),
+        and persists to SQLite database.
+        """
+        if not session or item_id <= 0:
+            return False
+        if amount <= 0:
+            amount = 1
+
+        actual_slot = add_item_to_inventory(session, item_id, amount=amount, slot=slot)
+        if actual_slot is None:
+            logger.warning(f"[{getattr(session, 'char_name', 'Player')}] Cannot grant Item #{item_id}: Inventory is full!")
+            return False
+
+        # 1. Persist to DB
+        self.save_player_to_db(session)
+
+        # 2. AC 23 Sub 6: Authentic Item Delivery / Acquisition packet
+        # Layout: [23, 6, item_id(uint16_LE), amount(uint8), padding(26 zeros)] (31 bytes)
+        p6 = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_8(amount).write_bytes(bytes(26))
+        await session.send_packet(p6)
+
+        # 3. AC 23 Sub 8: Specific slot state update
+        item = get_item_at_slot(session, actual_slot)
+        cur_amt = item.get("amount", amount) if item else amount
+        p8 = PacketWriter().write_8(23).write_8(8).write_8(actual_slot).write_16(item_id).write_8(cur_amt).write_8(0).write_bytes(bytes(24))
+        await session.send_packet(p8)
+
+        # 4. AC 23 Sub 5: Full 50-slot serialized bag sync
+        await session.send_packet(self.build_inventory_packet(session))
+        logger.info(f"[{getattr(session, 'char_name', 'Player')}] Granted Item #{item_id} x{amount} in Slot {actual_slot}.")
+        return True
+
     def build_equipments_packet(self, session: PlayerSession) -> PacketWriter:
         """Serializes SQLite equipped items to 21-byte blocks (AC 23 Sub 11)."""
         p = PacketWriter()
@@ -1961,32 +2001,100 @@ class GameServer:
             await session.send_packet(pos)
 
     async def send_map_info(self, session: PlayerSession):
-        """Sends map initialization packets as SEPARATE framed TCP packets.
+        """Sends map initialization packets matching C# Map.cs SendMapInfo.
         Each packet has its own header - the client parses them individually."""
         
         # 1. Map ID Info (23, 138) - always first
         await session.send_packet(PacketWriter().write_8(23).write_8(138))
-        
-        # 2. Add players on map (including self) and their confirmations
+
+        # 2. Send Map NPCs Batch Registration (AC 22 Sub 4 - Matching C# Map.cs lines 1320-1372)
+        npcs = self.map_npcs.get(session.map_id, [])
+        if npcs:
+            npc_pkt = PacketWriter().write_8(22).write_8(4)
+            sorted_npcs = sorted(
+                npcs,
+                key=lambda n: n.click_id if hasattr(n, 'click_id') else (n.get('click_id', 0) if isinstance(n, dict) else 0)
+            )
+            for npc in sorted_npcs:
+                c_id = npc.click_id if hasattr(npc, 'click_id') else (npc.get('click_id', 0) if isinstance(npc, dict) else 0)
+                t_id = npc.template_id if hasattr(npc, 'template_id') else ((npc.get('npc_id', 0) or npc.get('template_id', 0)) if isinstance(npc, dict) else 0)
+                n_name = npc.name if hasattr(npc, 'name') else (npc.get('name', '') if isinstance(npc, dict) else '')
+                n_x = npc.x if hasattr(npc, 'x') else (npc.get('x', 0) if isinstance(npc, dict) else 0)
+                n_y = npc.y if hasattr(npc, 'y') else (npc.get('y', 0) if isinstance(npc, dict) else 0)
+                is_broken = getattr(npc, 'is_broken', False) or (npc.get('is_broken', False) if isinstance(npc, dict) else False)
+
+                # Check if recruited companion
+                is_recruited = False
+                if hasattr(session, 'has_recruited_companion'):
+                    is_recruited = session.has_recruited_companion(n_name, t_id)
+                elif hasattr(session, 'companions'):
+                    for c in session.companions:
+                        if (c.get('name') and c.get('name').lower() == n_name.lower()) or c.get('npc_id') == t_id:
+                            is_recruited = True
+                            break
+
+                # Check if opened in charchests for this player
+                is_opened = False
+                try:
+                    from server.chest_system import GLOBAL_CHEST_SYSTEM
+                    if hasattr(session, 'char_id') and session.char_id:
+                        is_opened = GLOBAL_CHEST_SYSTEM.is_chest_opened(session.char_id, session.map_id, c_id)
+                except Exception:
+                    is_opened = False
+
+                is_hidden = getattr(npc, 'visible', True) is False or (npc.get('visible', True) is False if isinstance(npc, dict) else False)
+
+                if is_recruited or is_hidden:
+                    state = 0xFFFF
+                elif is_opened or is_broken:
+                    state = 0x0001
+                else:
+                    state = 0x0000
+
+                npc_pkt.write_16(c_id)
+                npc_pkt.write_16(state)
+                npc_pkt.write_16(n_x)
+                npc_pkt.write_16(n_y)
+                npc_pkt.write_8(1)
+                npc_pkt.write_8(0)
+                npc_pkt.write_32(0)
+
+            await session.send_packet(npc_pkt)
+
+            # Send individual hide packets for recruited companions / permanently broken nodes (AC 22:10)
+            for npc in sorted_npcs:
+                c_id = npc.click_id if hasattr(npc, 'click_id') else (npc.get('click_id', 0) if isinstance(npc, dict) else 0)
+                t_id = npc.template_id if hasattr(npc, 'template_id') else ((npc.get('npc_id', 0) or npc.get('template_id', 0)) if isinstance(npc, dict) else 0)
+                n_name = npc.name if hasattr(npc, 'name') else (npc.get('name', '') if isinstance(npc, dict) else '')
+                is_recruited = False
+                if hasattr(session, 'has_recruited_companion'):
+                    is_recruited = session.has_recruited_companion(n_name, t_id)
+                elif hasattr(session, 'companions'):
+                    for c in session.companions:
+                        if (c.get('name') and c.get('name').lower() == n_name.lower()) or c.get('npc_id') == t_id:
+                            is_recruited = True
+                            break
+                is_hidden = getattr(npc, 'visible', True) is False or (npc.get('visible', True) is False if isinstance(npc, dict) else False)
+                if is_recruited or is_hidden:
+                    hide_pkt = PacketWriter().write_8(22).write_8(10).write_16(c_id).write_8(0xFF).write_8(0xFF)
+                    await session.send_packet(hide_pkt)
+
+        # 3. Evaluate native map PreEvents (Matching C# Map.cs line 1388)
+        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+        await GLOBAL_PREEVENT_INTERPRETER.evaluate_map_preevents(session, session.map_id)
+
+        # 4. Add players on map (including self) and their confirmations
         # C# sends 10,3 for ALL players INCLUDING self (not just others)
         if session.map_id in self.map_players:
             for r in self.map_players[session.map_id]:
                 await session.send_packet(PacketWriter().write_8(23).write_8(122).write_32(r.char_id))
                 await session.send_packet(PacketWriter().write_8(10).write_8(3).write_32(r.char_id).write_8(255))
                 await session.send_packet(PacketWriter().write_8(23).write_8(76).write_32(r.char_id))
-                
-        # Send visibility states of hidden map NPCs (AC 22:10 matching C#)
-        npcs = self.map_npcs.get(session.map_id, [])
-        for npc in npcs:
-            if npc.get('visible', True) is False or getattr(npc, 'visible', True) is False:
-                pkt_hide = PacketWriter()
-                pkt_hide.write_8(22).write_8(10).write_16(npc['click_id']).write_8(0xFF).write_8(0xFF)
-                await session.send_packet(pkt_hide)
 
-        # 3. Map load complete trigger
+        # 5. Map load complete trigger
         await session.send_packet(PacketWriter().write_8(23).write_8(102))
         
-        # 4. Interface unlock
+        # 6. Interface unlock
         await session.send_packet(PacketWriter().write_8(20).write_8(8))
 
     async def check_proximity_combat(self, session: PlayerSession):
@@ -4041,6 +4149,7 @@ class GameServer:
 
     def _load_item_properties(self):
         self.item_properties = {}
+        self.items = {}
         import json
         import os
         path = os.path.join("server", "data", "item_properties.json")
@@ -4048,9 +4157,56 @@ class GameServer:
             try:
                 with open(path, "r", encoding="utf-8") as f:
                     self.item_properties = json.load(f)
-                logger.info(f"[ItemProperties] Loaded {len(self.item_properties)} item properties from {path}")
+                for k, v in self.item_properties.items():
+                    if isinstance(v, dict):
+                        name = v.get("name") or f"Item #{k}"
+                        self.items[str(k)] = name
+                    else:
+                        self.items[str(k)] = str(v)
+                logger.info(f"[ItemProperties] Loaded {len(self.item_properties)} item properties and {len(self.items)} item names from {path}")
             except Exception as e:
                 logger.error(f"[ItemProperties] Error loading item_properties.json: {e}")
+
+    def get_item_name(self, item_id: int) -> str:
+        """Returns the canonical item name or fallback string."""
+        from server.dat_loaders import GLOBAL_ITEM_DAT
+        if GLOBAL_ITEM_DAT and item_id in GLOBAL_ITEM_DAT.items:
+            name = GLOBAL_ITEM_DAT.items[item_id].name
+            if name:
+                return name
+        if hasattr(self, 'items') and isinstance(self.items, dict):
+            name = self.items.get(str(item_id))
+            if name:
+                return name
+        
+        # Canonical fallback mappings for quest & dynamic items
+        fallbacks = {
+            48016: "Robinson's Raft",
+            48001: "Raft",
+            48002: "Canoe",
+            48003: "Sailboat",
+            48004: "Yacht",
+            48005: "Airship",
+            48006: "Submarine",
+            48013: "UFO",
+            48033: "Spacecraft",
+            32074: "Raft Plank",
+            32075: "Raft Oar",
+            32032: "Sail Cloth",
+            32073: "Raft Keel",
+            41066: "Coconut",
+            27001: "Ordinary Wood",
+            27002: "Pine Wood",
+            28014: "Fresh Fruit",
+            28001: "Sea Water",
+            30001: "Herb Potion",
+            30259: "Black Medicine",
+            24001: "Iron Ore",
+            24002: "Copper Ore",
+            24005: "Coal",
+            22061: "Headband",
+        }
+        return fallbacks.get(item_id, f"Item #{item_id}")
 
     async def send_compound_list(self, session: PlayerSession):
         """Sends the full compound recipe list to the client via AC 54 Sub 30."""

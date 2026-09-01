@@ -49,16 +49,27 @@ class LuckyDrawManager:
         if not player:
             return None
 
-        # Check IM tokens or Gold
+        from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
+
+        # 1. Check IM Points (Standard cost is 20 IM Points per play)
+        user_points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(player)
         tokens = getattr(player, "im_tokens", 0)
-        if tokens >= 1:
+
+        if user_points >= 20:
+            rem_points = user_points - 20
+            GLOBAL_ITEM_MALL_MANAGER.set_user_points(player, rem_points)
+            # Sync AC 34:1 and AC 75:3 Point Balances
+            p34 = PacketWriter().write_8(34).write_8(1).write_16(min(65535, rem_points))
+            await player.send_packet(p34)
+            await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(player)
+        elif tokens >= 1:
             player.im_tokens -= 1
         elif player.gold >= 10000:
             player.gold -= 10000
             await player.send_packet(PacketWriter().write_8(26).write_8(4).write_32(player.gold))
         else:
             sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
-                "You need at least 1 IM Token or 10,000 Gold to spin the Lucky Draw Wheel!"
+                "You need at least 20 IM Points, 1 IM Token, or 10,000 Gold to play!"
             )
             await player.send_packet(sys_msg)
             return None

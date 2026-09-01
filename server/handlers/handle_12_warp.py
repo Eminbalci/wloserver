@@ -116,5 +116,4 @@ async def handle(server, session, reader):
             await session.send_packet(PacketWriter().write_8(20).write_8(8))
             await session.send_packet(PacketWriter().write_8(5).write_8(4))
             from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
-            await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
             await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)

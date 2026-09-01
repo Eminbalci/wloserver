@@ -183,6 +183,52 @@ async def handle(server, session, reader):
             if await GLOBAL_EVE_INTERPRETER.try_execute(server, session, native_click_id):
                 return
 
+            # --- 1.2 STATIC CHEST / PROP / GATHERING NODE (1:1 C# QuestNpc.cs line 448) ---
+            is_static = False
+            if hasattr(npc, 'is_static_npc'):
+                is_static = npc.is_static_npc()
+            else:
+                from server.npc_manager import QuestNpc
+                dummy = QuestNpc(map_id=session.map_id, click_id=native_click_id, name=name, npc_id=npc_template_id, x=npc_x, y=npc_y)
+                is_static = dummy.is_static_npc()
+
+            if is_static and npc_template_id not in (14181, 14157, 14151, 14182, 14152):
+                chest_sys = getattr(server, 'chest_system', None)
+                if not chest_sys:
+                    from server.chest_system import GLOBAL_CHEST_SYSTEM
+                    chest_sys = GLOBAL_CHEST_SYSTEM
+
+                if chest_sys:
+                    await chest_sys.open_chest(server, session, session.map_id, native_click_id, prop_name=name)
+                else:
+                    is_broken = getattr(npc, 'is_broken', False) or (npc.get('is_broken', False) if isinstance(npc, dict) else False)
+                    if is_broken:
+                        await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("This node/chest is currently empty and will respawn soon."))
+                        await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                        await session.send_packet(PacketWriter().write_8(5).write_8(4))
+                        return
+
+                    anim = PacketWriter().write_8(22).write_8(1).write_16(native_click_id).write_8(1)
+                    await session.send_packet(anim)
+                    server.broadcast_to_map(session.map_id, anim, exclude_session=session)
+
+                    if hasattr(npc, 'is_broken'):
+                        npc.is_broken = True
+                    elif isinstance(npc, dict):
+                        npc['is_broken'] = True
+
+                    from server.gameserver import add_item_to_inventory
+                    item_id = 41066 if "coconut" in name.lower() else (27001 if "wood" in name.lower() else 28014)
+                    add_item_to_inventory(session, item_id, 1)
+                    item_name = server.get_item_name(item_id)
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Obtain {item_name}"))
+                    await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                    await session.send_packet(server.build_inventory_packet(session))
+                    server.save_player_to_db(session)
+                    await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                    await session.send_packet(PacketWriter().write_8(5).write_8(4))
+                return
+
             # --- 1.5 EXPLICIT DOOR / PORTAL TRIGGER CHECK ---
             if "door" in name.lower() or "door" in (npc.get('name') or "").lower():
                 linked_portals = npc.get('linked_portals', [])
