@@ -4,7 +4,7 @@ Ported from C# Pet ride handlers & AdjustRidePetPos
 """
 
 import logging
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from server.network import PacketWriter
 
@@ -17,11 +17,15 @@ class PetRideManager:
     _cached_saddles: Dict[int, Dict[str, Any]] = {}
 
     @classmethod
-    def get_saddle_multiplier(cls, item_id: int = 38020) -> float:
+    def get_saddle_multiplier(cls, item_id: int = 38020, player=None) -> float:
         if not cls._cached_saddles:
             cls.reload_from_db()
         s_data = cls._cached_saddles.get(item_id)
-        return s_data.get("speed_mult", 1.40) if s_data else 1.40
+        base_mult = s_data.get("speed_mult", 1.40) if s_data else 1.40
+        # Knight reborn passive: +20% extra mount mobility (FUN_001a3f68)
+        if player and getattr(player, "reborn", False) and getattr(player, "job", 0) == 3:
+            base_mult += 0.20
+        return base_mult
 
     @classmethod
     def reload_from_db(cls, dynamic_mgr=None):

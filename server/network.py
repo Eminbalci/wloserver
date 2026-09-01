@@ -103,6 +103,10 @@ class PacketWriter:
         self.buffer.extend(val)
         return self
 
+    def to_bytes(self) -> bytes:
+        """Returns the raw unencrypted payload buffer."""
+        return bytes(self.buffer)
+
     def build(self) -> bytes:
         """Adds signature and length headers, and encrypts with XOR key."""
         payload = bytes(self.buffer)

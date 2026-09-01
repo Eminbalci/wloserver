@@ -1,13 +1,17 @@
-import re
 import os
+import re
 
-with open('web_admin.py', 'r', encoding='utf-8') as f:
-    content = f.read()
+base_dir = os.path.dirname(__file__)
+web_admin_path = os.path.join(base_dir, 'web_admin.py')
 
-content = re.sub(r'function onItemPresetChange\(\) \{.*?\}', '', content, flags=re.DOTALL)
-content = re.sub(r'function onPetPresetChange\(\) \{.*?\}', '', content, flags=re.DOTALL)
+if os.path.exists(web_admin_path):
+    with open(web_admin_path, 'r', encoding='utf-8') as f:
+        content = f.read()
 
-js_func = '''
+    content = re.sub(r'function onItemPresetChange\(\) \{.*?\}', '', content, flags=re.DOTALL)
+    content = re.sub(r'function onPetPresetChange\(\) \{.*?\}', '', content, flags=re.DOTALL)
+
+    js_func = '''
 async function loadSearchLists() {
     try {
         const res = await fetch('/api/search_lists');
@@ -28,37 +32,40 @@ async function loadSearchLists() {
 }
 loadSearchLists();
 '''
-content = content.replace('async function initializeApp() {', js_func + '\n\nasync function initializeApp() {')
+    if 'async function loadSearchLists' not in content:
+        content = content.replace('async function initializeApp() {', js_func + '\n\nasync function initializeApp() {')
 
-datalists = '''
+    datalists = '''
 <datalist id="items-datalist"></datalist>
 <datalist id="pets-datalist"></datalist>
 '''
-content = content.replace('</body>', datalists + '\n</body>')
+    if '<datalist id="items-datalist">' not in content:
+        content = content.replace('</body>', datalists + '\n</body>')
 
-old_confirmItem = "const itemId = parseInt(document.getElementById('item-id').value);"
-new_confirmItem = "const val = document.getElementById('item-id-search').value;\n    const itemId = parseInt(val.split(' ')[0]);\n    if (isNaN(itemId)) { alert('Invalid Item ID'); return; }"
-content = content.replace(old_confirmItem, new_confirmItem)
+    old_confirmItem = "const itemId = parseInt(document.getElementById('item-id').value);"
+    new_confirmItem = "const val = document.getElementById('item-id-search').value;\n    const itemId = parseInt(val.split(' ')[0]);\n    if (isNaN(itemId)) { alert('Invalid Item ID'); return; }"
+    content = content.replace(old_confirmItem, new_confirmItem)
 
-old_confirmPet = "const petId = parseInt(document.getElementById('pet-id').value);"
-new_confirmPet = "const val = document.getElementById('pet-id-search').value;\n    const petId = parseInt(val.split(' ')[0]);\n    if (isNaN(petId)) { alert('Invalid Pet ID'); return; }"
-content = content.replace(old_confirmPet, new_confirmPet)
+    old_confirmPet = "const petId = parseInt(document.getElementById('pet-id').value);"
+    new_confirmPet = "const val = document.getElementById('pet-id-search').value;\n    const petId = parseInt(val.split(' ')[0]);\n    if (isNaN(petId)) { alert('Invalid Pet ID'); return; }"
+    content = content.replace(old_confirmPet, new_confirmPet)
 
-new_item_html = '''<div class="input-group">
-                        <label>Item Name or ID</label>
-                        <input type="text" id="item-id-search" list="items-datalist" placeholder="Search by name or type ID..." value="27001 - Water">
-                    </div>'''
-content = re.sub(r'<div class="input-group">\s*<label>Item Preset</label>.*?<input type="number" id="item-id".*?>\s*</div>', new_item_html, content, flags=re.DOTALL)
+    new_item_html = '''<div class="input-group">
+                            <label>Item Name or ID</label>
+                            <input type="text" id="item-id-search" list="items-datalist" placeholder="Search by name or type ID..." value="27001 - Water">
+                        </div>'''
+    content = re.sub(r'<div class="input-group">\s*<label>Item Preset</label>.*?<input type="number" id="item-id".*?>\s*</div>', new_item_html, content, flags=re.DOTALL)
 
-new_pet_html = '''<div class="input-group">
-                        <label>Pet Name or ID</label>
-                        <input type="text" id="pet-id-search" list="pets-datalist" placeholder="Search by name or type ID..." value="11058 - Lala">
-                    </div>'''
-content = re.sub(r'<div class="input-group">\s*<label>Pet Preset</label>.*?<input type="number" id="pet-id".*?>\s*</div>', new_pet_html, content, flags=re.DOTALL)
+    new_pet_html = '''<div class="input-group">
+                            <label>Pet Name or ID</label>
+                            <input type="text" id="pet-id-search" list="pets-datalist" placeholder="Search by name or type ID..." value="11058 - Lala">
+                        </div>'''
+    content = re.sub(r'<div class="input-group">\s*<label>Pet Preset</label>.*?<input type="number" id="pet-id".*?>\s*</div>', new_pet_html, content, flags=re.DOTALL)
 
-content = content.replace("self.app.router.add_post('/api/players/pet', self.handle_give_pet)", "self.app.router.add_post('/api/players/pet', self.handle_give_pet)\n        self.app.router.add_get('/api/search_lists', self.handle_search_lists)")
+    if '/api/search_lists' not in content:
+        content = content.replace("self.app.router.add_post('/api/players/pet', self.handle_give_pet)", "self.app.router.add_post('/api/players/pet', self.handle_give_pet)\n        self.app.router.add_get('/api/search_lists', self.handle_search_lists)")
 
-method_str = '''
+    method_str = '''
     async def handle_search_lists(self, request):
         monsters = []
         try:
@@ -94,10 +101,10 @@ method_str = '''
         return web.json_response({"monsters": monsters, "items": items})
 '''
 
-if 'def handle_search_lists' not in content:
-    content = content + method_str
+    if 'def handle_search_lists' not in content:
+        content = content + method_str
 
-with open('web_admin.py', 'w', encoding='utf-8') as f:
-    f.write(content)
+    with open(web_admin_path, 'w', encoding='utf-8') as f:
+        f.write(content)
 
-print("Patched successfully!")
+    print("Patched successfully!")

@@ -35,17 +35,26 @@ async def handle(server, session, reader):
             
         if user_data.get('banned'):
             logger.warning(f"[Auth] Banned user '{username}' attempted login — login rejected.")
-            # Send login failed / account banned message
+            # Send login failed / account banned message (FUN_0033c310: code 4)
             fail_pkt = PacketWriter()
-            fail_pkt.write_8(63).write_8(2)
+            fail_pkt.write_8(63).write_8(4)
             await session.send_packet(fail_pkt)
-            # Send system overlay: "Account is banned"
             sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("This account has been banned.")
             await session.send_packet(sys_msg)
             await session.send_packet(PacketWriter().write_8(1).write_8(6))
             return
-                
-        # user_data est valide ici
+
+        # Check if account is already logged in (FUN_0033c310: code 3)
+        for other_sess in list(server.sessions.values()):
+            if getattr(other_sess, "user_id", None) == user_data['id'] and other_sess != session:
+                logger.warning(f"[Auth] Duplicate login for user '{username}' — disconnecting older session.")
+                try:
+                    await other_sess.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Logged in from another location."))
+                    other_sess.writer.close()
+                except Exception:
+                    pass
+
+        # user_data is valid here
         session.user_id = user_data['id']
         session.username = user_data['username']
         session.cipher = user_data['cipher']

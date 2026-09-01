@@ -8,6 +8,8 @@ Handles:
 import logging
 from server.network import PacketWriter
 
+from server.security_pin import GLOBAL_SECURITY_PIN_MANAGER
+
 logger = logging.getLogger("WLO_Server")
 
 ACTION_CODES = [226]
@@ -16,7 +18,17 @@ ACTION_CODES = [226]
 async def handle(server, session, reader):
     sub = reader.read_8()
 
-    if sub == 255:
+    if sub == 1:
+        # Set 6-digit Security PIN (AC 226 Sub 1)
+        pin_str = reader.read_string() if reader.remaining_bytes() >= 2 else ""
+        await GLOBAL_SECURITY_PIN_MANAGER.set_pin(session, pin_str)
+
+    elif sub == 2:
+        # Verify 6-digit Security PIN (AC 226 Sub 2)
+        pin_str = reader.read_string() if reader.remaining_bytes() >= 2 else ""
+        await GLOBAL_SECURITY_PIN_MANAGER.verify_pin(session, pin_str)
+
+    elif sub == 255:
         # Authentic WLO Catalog Matrix (Packet #124, #141, #155 in itemmall.pcapng)
         s1 = PacketWriter()
         s1.write_8(238)

@@ -4,7 +4,7 @@ Ported from C# wlo.pserver.core/Game/PlayerRelated/Trade.cs
 """
 
 import logging
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 from dataclasses import dataclass, field
 
 from server.network import PacketWriter
@@ -51,6 +51,16 @@ class TradeSystem:
 
     async def request_trade(self, requester, target):
         if not requester or not target or requester.char_id == target.char_id:
+            return
+
+        # Security PIN lock check (FUN_001d9f08: "Target uses Secure Lock")
+        from server.security_pin import GLOBAL_SECURITY_PIN_MANAGER
+        if not GLOBAL_SECURITY_PIN_MANAGER.is_unlocked(requester.char_id):
+            await self.send_system_msg(requester, "You must unlock your Secondary Security PIN before trading!")
+            return
+
+        if not GLOBAL_SECURITY_PIN_MANAGER.is_unlocked(target.char_id):
+            await self.send_system_msg(requester, f"{target.char_name} has Security Lock active!")
             return
 
         if requester.char_id in self._active_trades or target.char_id in self._active_trades:

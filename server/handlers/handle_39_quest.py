@@ -53,7 +53,25 @@ async def handle(server, session, reader):
     elif sub == 12:  # Guild Member List Request
         await GLOBAL_GUILD_MANAGER.send_guild_members(session)
 
-    elif sub in (5, 10, 11, 16, 17, 19, 50, 51):
+    elif sub == 50:  # Pin Quest to HUD Tracker (FUN_003f9318)
+        quest_id = reader.read_16() if reader.remaining_bytes() >= 2 else 0
+        if not hasattr(session, "pinned_quests"):
+            session.pinned_quests = set()
+        if quest_id > 0:
+            session.pinned_quests.add(quest_id)
+        writer = PacketWriter().write_8(39).write_8(50).write_16(quest_id).write_8(1)
+        await session.send_packet(writer)
+        logger.info(f"[{session.char_name}] Pinned Quest #{quest_id} to HUD Tracker.")
+
+    elif sub == 51:  # Unpin Quest from HUD Tracker (FUN_003f9680)
+        quest_id = reader.read_16() if reader.remaining_bytes() >= 2 else 0
+        if hasattr(session, "pinned_quests"):
+            session.pinned_quests.discard(quest_id)
+        writer = PacketWriter().write_8(39).write_8(51).write_16(quest_id).write_8(1)
+        await session.send_packet(writer)
+        logger.info(f"[{session.char_name}] Unpinned Quest #{quest_id} from HUD Tracker.")
+
+    elif sub in (5, 10, 11, 16, 17, 19):
         writer = PacketWriter().write_8(39).write_8(sub).write_8(1)
         await session.send_packet(writer)
 

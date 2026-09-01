@@ -45,6 +45,16 @@ This repository contains a custom python-based server implementation for Wonderl
 - `server/npc_manager.py` - Authentic NPC & world entity manager, C# QuestNpc parity, scripted waypoint pacing, and blinking prevention
 - `server/eve_loader.py` - Authentic binary parser for 1,119 maps in `data/eve.Emg` (NPCs, portals, chests, mining, bytecode events)
 - `docs/` - Technical Documentation:
+  - [aLogin.exe Master Function Index & Reverse Engineering Catalog](docs/alogin_master_function_index.md)
+  - [aLogin.exe Binary Architecture & Function Map](docs/alogin_functions_architecture.md)
+  - [aLogin.exe Network Communication & Opcode Protocol](docs/alogin_network_and_packet_protocol.md)
+  - [aLogin.exe Authentication, Channel & Character Management](docs/alogin_auth_and_character_functions.md)
+  - [aLogin.exe Combat, Battle Engine & Skill Execution](docs/alogin_combat_battle_and_skills.md)
+  - [aLogin.exe Pet & Companion AI, Riding & Amity System](docs/alogin_pet_and_companion_system.md)
+  - [aLogin.exe Inventory, Forging, Alchemy & Economy](docs/alogin_inventory_item_and_economy.md)
+  - [aLogin.exe Quest Journal, Dialogue & PreEvent Engine](docs/alogin_quest_dialogue_and_preevent.md)
+  - [aLogin.exe Mini-Games, Lucky Draw & Item Mall](docs/alogin_minigames_events_and_mall.md)
+  - [aLogin.exe DirectX Graphics, Audio & Security Engine](docs/alogin_graphics_audio_and_security.md)
   - [Dynamic Chests & Gathering Node Loot System](docs/chest_and_gathering_loot_system.md)
   - [Item Mall Catalog & Customization System](docs/item_mall_configuration.md)
   - [NPC Blinking Prevention & AI Waypoint Architecture](docs/npc_blinking_and_ai_system.md)

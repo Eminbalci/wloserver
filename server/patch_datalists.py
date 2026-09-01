@@ -1,26 +1,33 @@
+import os
 import json
 import re
 
-items = json.load(open('C:/Users/muham/OneDrive/Documents/GitHub/Wonderland Online/server/data/items.json', encoding='utf-8'))
-npcs = json.load(open('C:/Users/muham/OneDrive/Documents/GitHub/Wonderland Online/server/data/npc.json', encoding='utf-8'))
+base_dir = os.path.dirname(__file__)
+items_path = os.path.join(base_dir, 'data', 'items.json')
+npc_path = os.path.join(base_dir, 'data', 'npc.json')
+web_admin_path = os.path.join(base_dir, 'web_admin.py')
 
-items_html = '<datalist id="items-datalist">\n'
-for k, v in items.items():
-    if int(k) > 0:
-        items_html += f'    <option value="{k} - {v}"></option>\n'
-items_html += '</datalist>'
+if os.path.exists(items_path) and os.path.exists(npc_path) and os.path.exists(web_admin_path):
+    items = json.load(open(items_path, encoding='utf-8'))
+    npcs = json.load(open(npc_path, encoding='utf-8'))
 
-pets_html = '<datalist id="pets-datalist">\n'
-for k, v in npcs.items():
-    if isinstance(v, dict) and int(k) > 0:
-        pets_html += f'    <option value="{k} - {v.get("name", "Unknown")}"></option>\n'
-pets_html += '</datalist>'
+    items_html = '<datalist id="items-datalist">\n'
+    for k, v in items.items():
+        if int(k) > 0:
+            items_html += f'    <option value="{k} - {v}"></option>\n'
+    items_html += '</datalist>'
 
-with open('C:/Users/muham/OneDrive/Documents/GitHub/Wonderland Online/server/web_admin.py', 'r', encoding='utf-8') as f:
-    content = f.read()
+    pets_html = '<datalist id="pets-datalist">\n'
+    for k, v in npcs.items():
+        if isinstance(v, dict) and int(k) > 0:
+            pets_html += f'    <option value="{k} - {v.get("name", "Unknown")}"></option>\n'
+    pets_html += '</datalist>'
 
-content = content.replace('</body>', f'{items_html}\n{pets_html}\n</body>')
+    with open(web_admin_path, 'r', encoding='utf-8') as f:
+        content = f.read()
 
-with open('C:/Users/muham/OneDrive/Documents/GitHub/Wonderland Online/server/web_admin.py', 'w', encoding='utf-8') as f:
-    f.write(content)
-print('Datalists injected!')
+    content = content.replace('</body>', f'{items_html}\n{pets_html}\n</body>')
+
+    with open(web_admin_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    print('Datalists injected!')

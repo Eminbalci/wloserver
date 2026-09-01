@@ -5,7 +5,7 @@ Ported from C# wlo.pserver.core/Game/PlayerRelated/RebornManager.cs
 
 import logging
 from enum import IntEnum
-from typing import Dict, Tuple
+from typing import Any, Dict, Tuple
 
 from server.network import PacketWriter
 

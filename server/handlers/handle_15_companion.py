@@ -17,6 +17,13 @@ async def handle(server, session, reader):
             pet_id = pet.get("pet_id")
             logger.info(f"[{session.char_name}] Dismissing pet {pet_id} from slot {slot}")
             
+            # Check if this pet is currently mounted (FUN_0013d794 / FUN_00344974)
+            if pet.get("riding", False):
+                pet["riding"] = False
+                confirm = PacketWriter().write_8(15).write_8(17).write_32(session.char_id)
+                await session.send_packet(confirm)
+                server.broadcast_to_map(session.map_id, confirm, exclude_session=session)
+
             # Check if this pet is currently in battle, rest it first
             if pet.get("in_battle", False):
                 # Broadcast despawn

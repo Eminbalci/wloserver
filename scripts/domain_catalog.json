@@ -1,0 +1,679 @@
+{
+  "Network & Protocol": [
+    {
+      "name": "FUN_000799c8",
+      "start_line": 88312,
+      "end_line": 88330,
+      "line_count": 19,
+      "ret_type": "void",
+      "params": "int param_1",
+      "strings": [
+        "connect"
+      ],
+      "categories": [
+        "Network & Winsock (Low-level TCP/IP & Socket Management)",
+        "Packet Protocol & Dispatch Engine (Action Codes / Opcodes)"
+      ],
+      "body_snippet": "void FUN_000799c8(int param_1)\n\n{\n  int iVar1;\n  \n  FUN_000798ec(param_1);\n  FUN_00013320(param_1,param_1,1);\n  iVar1 = connect(*(SOCKET *)(param_1 + 4),(sockaddr *)(param_1 + 0x18),0x10);\n  FUN_0007920c(iVar1,\"connect\");\n  *(undefined1 *)(param_1 + 0x29) = 0;\n  if ((*(byte *)(param_1 + 0x28) & 0x10) == 0) {\n    *(bool *)(param_1 + 8) = *(int *)(param_1 + 4) != -1;\n    FUN_00013320(param_1,param_1,2);\n  }\n  return;\n}\n\n\n\n"
+    },
+    {
+      "name": "FUN_0007a284",
+      "start_line": 88800,
+      "end_line": 88879,
+      "line_count": 80,
+      "ret_type": "void",
+      "params": "int *param_1,char *param_2,int param_3",
+      "strings": [],
+      "categories": [
+        "Network & Winsock (Low-level TCP/IP & Socket Management)",
+        "Packet Protocol & Dispatch Engine (Action Codes / Opcodes)"
+      ],
+      "body_snippet": "void FUN_0007a284(int *param_1,char *param_2,int param_3)\n\n{\n  undefined1 *puVar1;\n  undefined4 *in_FS_OFFSET;\n  undefined4 uStack_4c;\n  undefined1 *puStack_48;\n  undefined1 *puStack_44;\n  undefined4 uStack_40;\n  undefined1 *puStack_3c;\n  undefined1 *puStack_38;\n  undefined4 local_2c;\n  undefined4 local_28;\n  undefined1 local_24;\n  int local_20;\n  undefined1 local_1c;\n  undefined1 *local_18;\n  undefined1 local_14;\n  int local_10;\n  u_long local_c;\n  int *local_8;\n  \n  puStack_38 = &stack0xffffff"
+    },
+    {
+      "name": "FUN_0012479c",
+      "start_line": 130372,
+      "end_line": 130445,
+      "line_count": 74,
+      "ret_type": "void",
+      "params": "int param_1,int param_2,uint param_3",
+      "strings": [
+        "Socket send aborted",
+        "Sending Buffer"
+      ],
+      "categories": [
+        "Network & Winsock (Low-level TCP/IP & Socket Management)",
+        "Packet Protocol & Dispatch Engine (Action Codes / Opcodes)"
+      ],
+      "body_snippet": "void FUN_0012479c(int param_1,int param_2,uint param_3)\n\n{\n  undefined1 *puVar1;\n  int iVar2;\n  uint len;\n  undefined4 *in_FS_OFFSET;\n  undefined4 uStack_30;\n  undefined1 *puStack_2c;\n  undefined1 *puStack_28;\n  undefined4 uStack_24;\n  undefined1 *puStack_20;\n  undefined1 *puStack_1c;\n  undefined4 local_10;\n  int local_c;\n  int local_8;\n  \n  puStack_1c = &stack0xfffffffc;\n  local_10 = 0;\n  puStack_20 = &LAB_001248d8;\n  uStack_24 = *in_FS_OFFSET;\n  *in_FS_OFFSET = &uStack_24;\n  puStack_28 = (unde"
+    },
+    {
+      "name": "FUN_00296660",
+      "start_line": 258360,
+      "end_line": 259531,
+      "line_count": 1172,
+      "ret_type": "void",
+      "params": "int *param_1,char param_2",
+      "strings": [
+        "Num_Vip_3",
+        "Btn_FriendIcon_1",
+        "Btn_ArrowR_8",
+        "btn_blank4",
+        "Menu\\\\Skins\\\\default\\\\",
+        "Btn_on_1",
+        "Btn_ArrowL_8",
+        "Btn_ctrl",
+        "Btn_setup_2",
+        "btn_sendmail_3",
+        "icon_mail_1",
+        "Btn_OK_2",
+        "Btn_Delete_Gray_1",
+        "Btn_Delete_1",
+        "Num_SVip_3",
+        "Icon_Career",
+        "Num_VVip_3",
+        "Panel26",
+        "btn_UnCheck_1",
+        "Form_Emotion_1",
+        "btn_check_1",
+        "Btn_Cancel_3",
+        "Btn_EmuationalIcon_1",
+        "Btn_Close_s_1",
+        "Btn_Marry",
+        "icon_anim_Gotmail_1",
+        "btn_Action_",
+        "icon_mailGary_1",
+        "icon_offline_1",
+        "btn_Uncheck_1",
+        "btn_delFriend_1",
+        "icon_Jumpheart_1",
+        "Btn_onstate",
+        "Btn_Close_1"
+      ],
+      "categories": [
+        "Packet Protocol & Dispatch Engine (Action Codes / Opcodes)",
+        "Social: Guilds, Marriage, Friend Lists & Mailbox"
+      ],
+      "body_snippet": "void FUN_00296660(int *param_1,char param_2)\n\n{\n  int *piVar1;\n  undefined1 *puVar2;\n  uint uVar3;\n  int iVar4;\n  int iVar5;\n  undefined4 uVar6;\n  int iVar7;\n  int iVar8;\n  int iVar9;\n  undefined2 extraout_var;\n  undefined2 extraout_var_00;\n  undefined2 extraout_var_01;\n  undefined2 extraout_var_02;\n  undefined2 extraout_var_03;\n  undefined2 extraout_var_04;\n  undefined2 extraout_var_05;\n  undefined4 *in_FS_OFFSET;\n  float10 in_ST0;\n  undefined4 uVar10;\n  undefined4 uVar11;\n  undefined4 uVar12;\n"
+    },
+    {
+      "name": "FUN_00436178",
+      "start_line": 427019,
+      "end_line": 427053,
+      "line_count": 35,
+      "ret_type": "undefined1",
+      "params": "int param_1",
+      "strings": [],
+      "categories": [
+        "Network & Winsock (Low-level TCP/IP & Socket Management)"
+      ],
+      "body_snippet": "undefined1 FUN_00436178(int param_1)\n\n{\n  short sVar1;\n  undefined1 uVar2;\n  ushort uVar3;\n  undefined4 *in_FS_OFFSET;\n  undefined4 uStack_20;\n  undefined1 *puStack_1c;\n  undefined1 *puStack_18;\n  undefined1 local_5;\n  \n  puStack_18 = &stack0xfffffffc;\n  local_5 = 0;\n  uVar2 = local_5;\n  local_5 = 0;\n  puStack_1c = &LAB_004361d3;\n  uStack_20 = *in_FS_OFFSET;\n  *in_FS_OFFSET = &uStack_20;\n  uVar3 = FUN_00430694(param_1);\n  if (uVar3 == 0) {\n    *in_FS_OFFSET = uStack_20;\n  }\n  else {\n    sVar1 = "
+    },
+    {
+      "name": "FUN_0031ecf0",
+      "start_line": 291503,
+      "end_line": 292576,
+      "line_count": 1074,
+      "ret_type": "void",
+      "params": "undefined *param_1",
+      "strings": [],
+      "categories": [
+        "Packet Protocol & Dispatch Engine (Action Codes / Opcodes)"
+      ],
+      "body_snippet": "void FUN_0031ecf0(undefined *param_1)\n\n{\n  ushort uVar1;\n  undefined *puVar2;\n  undefined1 *puVar3;\n  undefined1 *puVar4;\n  undefined1 uVar5;\n  char cVar6;\n  char cVar7;\n  LPCSTR pCVar8;\n  HWND pHVar9;\n  undefined4 uVar10;\n  char *pcVar11;\n  uint uVar12;\n  int iVar13;\n  undefined2 extraout_var;\n  undefined2 extraout_var_00;\n  undefined2 extraout_var_01;\n  undefined2 extraout_var_02;\n  undefined2 extraout_var_03;\n  undefined2 extraout_var_04;\n  undefined2 extraout_var_05;\n  undefined2 extraout_va"
+    },
+    {
+      "name": "FUN_0041ee94",
+      "start_line": 412750,
+      "end_line": 413147,
+      "line_count": 398,
+      "ret_type": "void",
+      "params": "int param_1",
+      "strings": [],
+      "categories": [
+        "Packet Protocol & Dispatch Engine (Action Codes / Opcodes)"
+      ],
+      "body_snippet": "void FUN_0041ee94(int param_1)\n\n{\n  undefined1 *puVar1;\n  char cVar2;\n  uint uVar3;\n  undefined2 extraout_var;\n  undefined2 extraout_var_00;\n  undefined2 uVar4;\n  undefined4 *in_FS_OFFSET;\n  undefined4 uStack_20;\n  undefined1 *puStack_1c;\n  undefined1 *puStack_18;\n  undefined4 local_10;\n  undefined4 local_c;\n  undefined4 local_8;\n  \n  puStack_18 = &stack0xfffffffc;\n  local_8 = 0;\n  local_c = 0;\n  local_10 = 0;\n  puStack_1c = &LAB_0041fcb6;\n  uStack_20 = *in_FS_OFFSET;\n  *in_FS_OFFSET = &uStack_2"
+    }
+  ],
+  "Authentication & Character": [
+    {
+      "name": "FUN_0033c310",
+      "start_line": 303177,
+      "end_line": 303242,
+      "line_count": 66,
+      "ret_type": "void",
+      "params": "int *param_1,int param_2",
+      "strings": [
+        "Login/Pwd error"
+      ],
+      "categories": [
+        "Authentication, Login Server & Channel Selection"
+      ],
+      "body_snippet": "void FUN_0033c310(int *param_1,int param_2)\n\n{\n  char cVar1;\n  undefined1 *puVar2;\n  undefined4 uVar3;\n  undefined4 *in_FS_OFFSET;\n  undefined4 uStack_20;\n  undefined1 *puStack_1c;\n  undefined1 *puStack_18;\n  undefined4 local_c;\n  undefined4 local_8;\n  \n  puStack_18 = &stack0xfffffffc;\n  local_8 = 0;\n  local_c = 0;\n  puStack_1c = &LAB_0033c4b1;\n  uStack_20 = *in_FS_OFFSET;\n  *in_FS_OFFSET = &uStack_20;\n  cVar1 = *(char *)(param_2 + 1);\n  if (cVar1 == '\\x01') {\n    *(undefined1 *)(*(int *)PTR_DAT"
+    },
+    {
+      "name": "FUN_0032f674",
+      "start_line": 299311,
+      "end_line": 299528,
+      "line_count": 218,
+      "ret_type": "void",
+      "params": "undefined4 param_1,int param_2",
+      "strings": [
+        "Player offline",
+        "Channel: ",
+        "SERVER.INI",
+        "ID:",
+        "Role: "
+      ],
+      "categories": [
+        "Authentication, Login Server & Channel Selection"
+      ],
+      "body_snippet": "void FUN_0032f674(undefined4 param_1,int param_2)\n\n{\n  int *piVar1;\n  char *pcVar2;\n  undefined1 **ppuVar3;\n  undefined4 ***pppuVar4;\n  char cVar5;\n  undefined1 uVar6;\n  ushort uVar7;\n  undefined4 uVar8;\n  int *piVar9;\n  int iVar10;\n  int unaff_EBX;\n  int *in_FS_OFFSET;\n  undefined4 local_78;\n  undefined4 local_74;\n  undefined4 local_70;\n  undefined1 *local_6c;\n  undefined4 local_68;\n  undefined4 local_64;\n  undefined4 local_60;\n  undefined4 local_5c;\n  undefined1 *local_58;\n  char *local_54;\n  "
+    },
+    {
+      "name": "FUN_0014c114",
+      "start_line": 146882,
+      "end_line": 147065,
+      "line_count": 184,
+      "ret_type": "void",
+      "params": "int param_1,int param_2",
+      "strings": [],
+      "categories": [
+        "Authentication, Login Server & Channel Selection"
+      ],
+      "body_snippet": "void FUN_0014c114(int param_1,int param_2)\n\n{\n  byte bVar1;\n  undefined1 uVar2;\n  int iVar3;\n  undefined4 uVar4;\n  int iVar5;\n  uint uVar6;\n  undefined2 extraout_var;\n  byte bVar7;\n  undefined4 *in_FS_OFFSET;\n  undefined4 uVar8;\n  undefined4 uVar9;\n  undefined4 uVar10;\n  undefined4 uVar11;\n  undefined4 uVar12;\n  undefined1 *puVar13;\n  undefined4 uStack_58;\n  undefined1 *puStack_54;\n  undefined1 *puStack_50;\n  undefined1 local_40 [8];\n  undefined1 local_38 [8];\n  undefined1 local_30 [24];\n  undef"
+    },
+    {
+      "name": "FUN_0022fcf4",
+      "start_line": 224848,
+      "end_line": 225579,
+      "line_count": 732,
+      "ret_type": "void",
+      "params": "int param_1,char param_2",
+      "strings": [
+        "Btn_RolePic_2",
+        "Btn_RolePic_12",
+        "Icon_Element_",
+        "Color_R",
+        "Btn_RolePic_7",
+        "Btn_RolePic_3",
+        "btn_ok_1",
+        "Btn_ArrowL_1",
+        "Btn_RolePic_14",
+        "Prev Char",
+        "Btn_RolePic_1",
+        "Icon_LoginLogo_1",
+        "Btn_ArrowR_10",
+        "Next Char",
+        "Btn_Prev_1",
+        "Btn_ArrowL_10",
+        "Icon_Part_",
+        "Color_G",
+        "Color_B",
+        "Panel24",
+        "Icon_CreateRole_1",
+        "Btn_RolePic_10",
+        "Num_White3_2",
+        "Panel28",
+        "Btn_Default",
+        "Btn_RolePic_6",
+        "Panel25",
+        "Btn_ArrowR_4",
+        "Btn_ArrowR_1",
+        "Btn_Next",
+        "Btn_RolePic_11",
+        "CreateRoleName",
+        "Btn_ArrowR_2",
+        "Btn_RolePic_9",
+        "Btn_RolePic_5",
+        "Panel27",
+        "Btn_RolePic_8",
+        "Num_Yellow3_1",
+        "Btn_ArrowL_2",
+        "Btn_RolePic_4",
+        "Btn_ArrowL_4",
+        "Btn_RolePic_13"
+      ],
+      "categories": [
+        "Authentication, Login Server & Channel Selection"
+      ],
+      "body_snippet": "void FUN_0022fcf4(int param_1,char param_2)\n\n{\n  int iVar1;\n  undefined4 uVar2;\n  int iVar3;\n  int *piVar4;\n  undefined4 uVar5;\n  uint uVar6;\n  undefined1 extraout_DL;\n  undefined2 extraout_var;\n  undefined4 *puVar7;\n  int iVar8;\n  undefined4 *puVar9;\n  uint uVar10;\n  undefined4 *in_FS_OFFSET;\n  byte bVar11;\n  undefined *puVar12;\n  char *pcVar13;\n  undefined4 uVar14;\n  undefined4 uVar15;\n  undefined4 uVar16;\n  undefined4 uVar17;\n  undefined4 uVar18;\n  undefined4 uVar19;\n  undefined4 uVar20;\n  un"
+    }
+  ],
+  "Combat & Battle Engine": [
+    {
+      "name": "FUN_003e4b60",
+      "start_line": 379471,
+      "end_line": 379723,
+      "line_count": 253,
+      "ret_type": "void",
+      "params": "undefined4 param_1,undefined1 param_2",
+      "strings": [
+        "Go to branch 1 for Solo PVP",
+        "Below LV10 can\\'t participate",
+        "Solo PVP postponed for a week",
+        "Solo PVP has begun! Players LV10+ come to Capitol Building 2F in Welling Village. Top three players will get special rewards!",
+        "Solo PVP canceled",
+        "PVP preparing",
+        "Inventory is full. Make more space before next maintenance",
+        "Solo PVP will end in 5 minutes. Last chance to score!",
+        "Interserver PVP begins in 5 minutes. Players LV30+ can go to ",
+        "Interserver PVP resumed",
+        "Can\\'t join, player matching",
+        "Server will shutdown in 5 minutes",
+        "Below LV30 can\\'t participate",
+        "Interserver PVP will start at 3 PM, join by NPC at Capitol Building 2F!",
+        "Solo PVP begins in 5 minutes. Players LV10+ can join at Capitol Building 2F.",
+        "No teams in Interserver PVP",
+        "Server PVP has begun! Go to branch 1 of your server to join!",
+        "Interserver PVP has ended. Log out and return to your server for the results",
+        "Team PVP Matchmaking...",
+        "Interserver PVP has ended.",
+        "Team PVP will end in 5 minutes. Last chance to score!",
+        "Interserver PVP will end in 5 minutes. Last chance to score!",
+        "Go to branch 1 for Team PVP",
+        "Can\\'t use, Amity below 40",
+        "A team member is below LV30",
+        "Team PVP has ended. Come again next time!",
+        "A team member is below LV10",
+        "4-PVP event has not yet begin",
+        "Not enough applicants",
+        "Interserver PVP has begun! Players LV30+ can join at Capitol Building 2F!",
+        "Solo PVP continues",
+        "Interserver PVP event has begun! Come to Capitol Building 2F in Welling Village to join!",
+        "Can\\'t join, matchmaking",
+        "Team PVP suspended this week",
+        "Team PVP event has ended! Thanks for participation",
+        "Inter PVP preparing",
+        "Solo PVP Matchmaking...",
+        "Map is full, try later",
+        "Interserver PVP Ranks updated! You can check leaderboard",
+        "Team PVP begins in 5 minutes. Players LV10+ can  join at Capitol Building 2F.",
+        "Team PVP event has begun! Don\\'t miss it!",
+        "Max battles per event",
+        "4-PVP event temporary canceled",
+        "Interserver PVP has begun! Come to Interserver NPC!",
+        "Team PVP has begun! Players LV10+ come to Capitol Building 2F in Welling Village. Top three players will get special rewards!",
+        "Return to your server",
+        "Team PVP canceled",
+        "Team PVP resumed",
+        "Event has ended! Thanks for coming!"
+      ],
+      "categories": [
+        "Authentication, Login Server & Channel Selection",
+        "Combat, Turn-Based Battle & Skill Execution",
+        "Pet & Companion AI, Riding, Amity & Transformation",
+        "Inventory, Item Management, Alchemy, Forging & Repair"
+      ],
+      "body_snippet": "void FUN_003e4b60(undefined4 param_1,undefined1 param_2)\n\n{\n  int iVar1;\n  \n  switch(param_2) {\n  case 1:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,\n                 \"Team PVP begins in 5 minutes. Players LV10+ can  join at Capitol Building 2F.\",\n                 0xff,0);\n    return;\n  case 2:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,\n                 \"Team PVP has begun! Players LV10+ come to Capitol Building 2F in Welling Village. Top three players will get special rewards!\""
+    },
+    {
+      "name": "FUN_001a72e8",
+      "start_line": 180335,
+      "end_line": 180561,
+      "line_count": 227,
+      "ret_type": "void",
+      "params": "undefined4 param_1,int param_2",
+      "strings": [
+        "Only same guilds team",
+        "Upgrade failed",
+        "Trojan War register open. War starts at 8 PM",
+        "Only same guild can join",
+        "Defender in team",
+        "Trojan War has begun. Go to the Castle and join the battle!",
+        "Trojan War prepares",
+        "Trojan War has ended! Come again next week.",
+        "Upgrade success",
+        "Teammate can\\'t join",
+        "Can\\'t use, Amity below 40",
+        "Reached max level",
+        "Trojan War:\\nSunday 8 PM to 9 PM",
+        "Go to branch 1 for Troj War",
+        "Weekly Trojan War will end in 5 mins. Last chance to score!",
+        "Player LV is below 10",
+        "War in progress",
+        "Weekly Trojan War will begin in 5 mins ",
+        "Some teammate can\\'t join",
+        "Can\\'t join"
+      ],
+      "categories": [
+        "Authentication, Login Server & Channel Selection",
+        "Combat, Turn-Based Battle & Skill Execution",
+        "Pet & Companion AI, Riding, Amity & Transformation",
+        "Social: Guilds, Marriage, Friend Lists & Mailbox"
+      ],
+      "body_snippet": "void FUN_001a72e8(undefined4 param_1,int param_2)\n\n{\n  undefined1 *puVar1;\n  undefined4 *in_FS_OFFSET;\n  undefined4 in_stack_ffffffdc;\n  undefined1 *puStack_1c;\n  undefined1 *puStack_18;\n  undefined1 *puStack_14;\n  int local_8;\n  \n  puStack_14 = (undefined1 *)0x1a72fb;\n  local_8 = param_2;\n  FUN_000142e0(param_2);\n  puStack_18 = &LAB_001a7823;\n  puStack_1c = (undefined1 *)*in_FS_OFFSET;\n  *in_FS_OFFSET = &puStack_1c;\n  puStack_14 = &stack0xfffffffc;\n  switch(*(undefined1 *)(local_8 + 1)) {\n  cas"
+    }
+  ],
+  "Pet & Companion System": [
+    {
+      "name": "FUN_003e9898",
+      "start_line": 382158,
+      "end_line": 384691,
+      "line_count": 2534,
+      "ret_type": "undefined1",
+      "params": "int param_1,int param_2",
+      "strings": [],
+      "categories": [
+        "Pet & Companion AI, Riding, Amity & Transformation"
+      ],
+      "body_snippet": "undefined1 FUN_003e9898(int param_1,int param_2)\n\n{\n  char cVar1;\n  uint uVar2;\n  undefined1 local_1c8 [22];\n  ushort local_1b2;\n  ushort local_1b0;\n  ushort local_1ae;\n  ushort local_1ac;\n  char local_29;\n  \n  if (param_2 == 0) {\n    return 0;\n  }\n  uVar2 = 0;\n  cVar1 = *(char *)(param_1 + 8);\n  if (cVar1 == '\\x01') {\n    FUN_00431c8c(*(undefined4 *)PTR_DAT_004c94d4,param_2,local_1c8);\n    uVar2 = (uint)local_1b2;\n  }\n  else if (cVar1 == '\\x02') {\n    FUN_00431c8c(*(undefined4 *)PTR_DAT_004c94d"
+    },
+    {
+      "name": "FUN_003de310",
+      "start_line": 376389,
+      "end_line": 376408,
+      "line_count": 20,
+      "ret_type": "void",
+      "params": "int param_1",
+      "strings": [],
+      "categories": [
+        "Pet & Companion AI, Riding, Amity & Transformation"
+      ],
+      "body_snippet": "void FUN_003de310(int param_1)\n\n{\n  int iVar1;\n  \n  iVar1 = 1;\n  do {\n    *(undefined1 *)(*(int *)(param_1 + 0x21e8 + iVar1 * 4) + 0x1efc) = 0;\n    iVar1 = iVar1 + 1;\n  } while (iVar1 != 5);\n  if (((*(char *)(param_1 + 0x1f16) == '\\0') || (*(char *)(param_1 + 0x1f16) == '\\x04')) &&\n     (*(char *)(param_1 + 0x1eff) == '\\0')) {\n    *(undefined1 *)(*(int *)(param_1 + 0x21e8 + (uint)*(byte *)(param_1 + 0x2230) * 4) + 0x1efc) = 1\n    ;\n  }\n  return;\n}\n\n\n\n"
+    },
+    {
+      "name": "FUN_003cdd00",
+      "start_line": 367049,
+      "end_line": 367775,
+      "line_count": 727,
+      "ret_type": "void",
+      "params": "int param_1,byte param_2,undefined4 param_3,undefined4 param_4",
+      "strings": [
+        "_bt91",
+        "\\n level up ",
+        "_bt92",
+        "sound\\\\wav0150.wav",
+        "\\tLearned:  ",
+        "ogg",
+        "\\r Amity rises ",
+        "_bt93",
+        "\\r Amity drops "
+      ],
+      "categories": [
+        "Pet & Companion AI, Riding, Amity & Transformation"
+      ],
+      "body_snippet": "void FUN_003cdd00(int param_1,byte param_2,undefined4 param_3,undefined4 param_4)\n\n{\n  int iVar1;\n  char *pcVar2;\n  undefined1 *puVar3;\n  byte bVar4;\n  byte bVar5;\n  undefined1 uVar6;\n  char cVar7;\n  undefined2 uVar8;\n  undefined4 uVar9;\n  undefined4 uVar10;\n  uint uVar11;\n  int iVar12;\n  undefined2 extraout_var;\n  undefined2 extraout_var_00;\n  undefined2 extraout_var_01;\n  undefined2 extraout_var_02;\n  undefined2 extraout_var_03;\n  undefined2 extraout_var_04;\n  undefined2 extraout_var_05;\n  und"
+    },
+    {
+      "name": "FUN_0035369c",
+      "start_line": 313863,
+      "end_line": 315721,
+      "line_count": 1859,
+      "ret_type": "void",
+      "params": "int param_1,char param_2,undefined1 param_3,char param_4",
+      "strings": [],
+      "categories": [
+        "Pet & Companion AI, Riding, Amity & Transformation"
+      ],
+      "body_snippet": "void FUN_0035369c(int param_1,char param_2,undefined1 param_3,char param_4)\n\n{\n  int *piVar1;\n  ushort uVar2;\n  undefined1 *puVar3;\n  char cVar4;\n  byte bVar5;\n  int iVar6;\n  uint uVar7;\n  undefined3 uVar9;\n  uint uVar8;\n  int iVar10;\n  undefined2 uVar11;\n  undefined2 extraout_var;\n  undefined2 extraout_var_00;\n  undefined2 extraout_var_01;\n  undefined2 extraout_var_02;\n  uint unaff_ESI;\n  uint *in_FS_OFFSET;\n  uint uStack_78;\n  undefined1 *puStack_74;\n  undefined1 *puStack_70;\n  uint uStack_6c;"
+    },
+    {
+      "name": "FUN_003dd2b0",
+      "start_line": 375788,
+      "end_line": 375896,
+      "line_count": 109,
+      "ret_type": "uint",
+      "params": "undefined4 param_1,uint param_2",
+      "strings": [],
+      "categories": [
+        "General Runtime & Win32 Helpers"
+      ],
+      "body_snippet": "uint FUN_003dd2b0(undefined4 param_1,uint param_2)\n\n{\n  char cVar1;\n  \n  cVar1 = (char)param_2;\n  switch(param_2) {\n  case 0:\n  case 1:\n  case 2:\n  case 3:\n  case 4:\n  case 5:\n  case 6:\n  case 7:\n    return param_2;\n  case 8:\n  case 9:\n  case 10:\n  case 0xb:\n  case 0xc:\n  case 0xd:\n  case 0xe:\n  case 0xf:\n    return (uint)(byte)(cVar1 - 8);\n  case 0x10:\n  case 0x11:\n    return (uint)(byte)(cVar1 - 0x10);\n  case 0x12:\n  case 0x13:\n  case 0x14:\n  case 0x15:\n  case 0x16:\n  case 0x17:\n  case 0x18:\n "
+    },
+    {
+      "name": "FUN_003ddf94",
+      "start_line": 376198,
+      "end_line": 376303,
+      "line_count": 106,
+      "ret_type": "undefined4",
+      "params": "undefined4 param_1,undefined4 param_2",
+      "strings": [],
+      "categories": [
+        "General Runtime & Win32 Helpers"
+      ],
+      "body_snippet": "undefined4 FUN_003ddf94(undefined4 param_1,undefined4 param_2)\n\n{\n  switch(param_2) {\n  case 0:\n  case 1:\n  case 2:\n  case 3:\n  case 4:\n  case 5:\n  case 6:\n  case 7:\n    return 0;\n  case 8:\n  case 9:\n  case 10:\n  case 0xb:\n  case 0xc:\n  case 0xd:\n  case 0xe:\n  case 0xf:\n    return 8;\n  case 0x10:\n  case 0x11:\n    return 0x10;\n  case 0x12:\n  case 0x13:\n  case 0x14:\n  case 0x15:\n  case 0x16:\n  case 0x17:\n  case 0x18:\n  case 0x19:\n    return 0x12;\n  case 0x1a:\n  case 0x1b:\n    return 0x1a;\n  case 0"
+    }
+  ],
+  "Inventory, Forging, Alchemy & Economy": [
+    {
+      "name": "FUN_0044651c",
+      "start_line": 437214,
+      "end_line": 439407,
+      "line_count": 2194,
+      "ret_type": "void",
+      "params": "int param_1,byte *param_2",
+      "strings": [
+        "Seller changed amount",
+        "Gachapon suspended",
+        "Display requires garage",
+        "Bed is full, can\\'t store",
+        "Cabinet is full, can\\'t store",
+        "Placed on display",
+        "Garage is full, can\\'t store",
+        "Machine suspended",
+        "Machine sales has reached limit",
+        "hh:mm:ss",
+        "Displayed item removed ",
+        "No eggs remaining"
+      ],
+      "categories": [
+        "Inventory, Item Management, Alchemy, Forging & Repair",
+        "Item Mall, Billing, Gacha, Mini-Games & Lucky Draw"
+      ],
+      "body_snippet": "void FUN_0044651c(int param_1,byte *param_2)\n\n{\n  char *pcVar1;\n  int iVar2;\n  undefined1 *puVar3;\n  undefined1 uVar4;\n  int *piVar5;\n  char cVar6;\n  byte bVar7;\n  undefined2 uVar8;\n  short sVar9;\n  undefined2 uVar10;\n  ushort uVar11;\n  uint uVar12;\n  undefined3 uVar15;\n  undefined4 uVar13;\n  uint3 uVar16;\n  undefined4 uVar14;\n  int iVar17;\n  undefined2 extraout_var;\n  undefined2 extraout_var_00;\n  undefined2 extraout_var_01;\n  int iVar18;\n  uint extraout_ECX;\n  undefined2 extraout_var_02;\n  und"
+    }
+  ],
+  "Quest Journal & Dialogue": [],
+  "Social & Guild / Marriage": [
+    {
+      "name": "FUN_00259530",
+      "start_line": 237969,
+      "end_line": 238021,
+      "line_count": 53,
+      "ret_type": "void",
+      "params": "int *param_1",
+      "strings": [],
+      "categories": [
+        "General Runtime & Win32 Helpers"
+      ],
+      "body_snippet": "void FUN_00259530(int *param_1)\n\n{\n  char cVar1;\n  undefined1 *puVar2;\n  int iVar3;\n  undefined4 *in_FS_OFFSET;\n  undefined4 uStack_28;\n  undefined1 *puStack_24;\n  undefined1 *puStack_20;\n  undefined4 local_10;\n  undefined4 local_c;\n  int local_8;\n  \n  puStack_20 = &stack0xfffffffc;\n  local_8 = 0;\n  local_c = 0;\n  local_10 = 0;\n  puStack_24 = &LAB_00259606;\n  uStack_28 = *in_FS_OFFSET;\n  *in_FS_OFFSET = &uStack_28;\n  FUN_00013eac(&local_8);\n  iVar3 = 1;\n  do {\n    iVar3 = iVar3 + 1;\n  } while (i"
+    }
+  ],
+  "Mini-Games & Item Mall": [
+    {
+      "name": "FUN_003e175c",
+      "start_line": 378491,
+      "end_line": 378831,
+      "line_count": 341,
+      "ret_type": "void",
+      "params": "undefined4 param_1,int param_2",
+      "strings": [
+        "White Day event has ended!",
+        "Happy May has begun! Double EXP, mini-games, and Forges 50% Off",
+        ",0xff,0);\n    break;\n  case 0x4f:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,\n                 ",
+        "Halloween double EXP event has begun! Don\\'t miss it!",
+        "Quiz Zone event has ended.",
+        "Summer Vacation double EXP event has ended!",
+        "Summer Vacation double EXP event has begun! Don\\'t miss it!",
+        "Thanksgiving Turkey event has begun!",
+        "Sailing event has ended!",
+        ",0xff,0\n                );\n    break;\n  case 0x49:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,",
+        "Quiz Zone event has ended. Come to challenge next time!",
+        "Dragon Boat double EXP event has ended!",
+        "\n                 ,0xff,0);\n    break;\n  case 0x4e:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,",
+        "Forging 50% off has begun!",
+        "National Day has ended!",
+        "Double rewards in Mall mini-games event has begun!",
+        "Dragon Boat double EXP event has begun! Don\\'t miss it!",
+        "White Day event has begun!",
+        "Quiz Event has ended. Come to challenge next time!",
+        "Jade Rabbit Spring Festival event has begun! Collect Jade Rabbit bags!",
+        "National Day begun! Double EXP, mini-games, and Forges 50% Off!",
+        "New Years Eve double EXP has ended!",
+        "Thanksgiving Turkey event has ended!",
+        ",0xff,0);\n    break;\n  case 0x4d:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,\n                 ",
+        "Forge 60 pts discount event has ended!",
+        "Quiz Event has begun! Come to Capitol Building 4F in Welling Village at server branch 1 to join!",
+        "Mid-Autumn Festival event has begun!",
+        "\n                 ,0xff,0);\n    break;\n  case 0x50:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,",
+        "New Year Eve\\'s double EXP event has ended!",
+        "Double rewards in Item Mall mini-games has begun!",
+        "Happy May has ended!",
+        "Dear Players, new years eve double expereience activity has started!",
+        "Quiz Zone event has begun! Come and participate!",
+        "During event killing LV10+ monsters may drop \\",
+        "\n                 ,0xff,0);\n    break;\n  case 0x46:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,",
+        "WLO Anniversary has ended!",
+        "Christmas and New Year double EXP event has ended!",
+        "Summer double rewards in Mall mini-games has begun!",
+        "Forging 50% off has ended!",
+        "Double EXP event has begun! Don\\'t miss it!",
+        "Forge 60 pts discount event has begun!",
+        ",0xff,0\n                );\n    break;\n  case 0x48:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,",
+        "EXP Bonus event has begun!",
+        "Quiz Event has begun. Don\\'t miss to join it!",
+        "Mid-Autumn Festival event has ended!",
+        "Team PVP event has ended! Thanks for participation",
+        "Happy Summer has begun! Forges are 50% Off!",
+        "Summer double rewards event has ended!",
+        "Halloween double EXP event has ended!",
+        "Quiz Zone event has begun! Come to Capitol Building 4F in Welling Village at server branch 1 to join!",
+        "Valentine\\'s Day double EXP event has begun! Don\\'t miss it!",
+        ",0xff,0);\n    break;\n  case 0x4b:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,",
+        "Team PVP event has begun! Don\\'t miss it!",
+        ",0xff,0);\n    break;\n  case 0x5d:\n    *(undefined1 *)(*(int *)PTR_DAT_004c98f4 + 0x56e0) = 1;\n    FUN_00321bd8();\n    break;\n  case 0x5e:\n    *(undefined1 *)(*(int *)PTR_DAT_004c98f4 + 0x56e0) = 0;\n    FUN_00321bd8();\n    break;\n  case 0x5f:\n    *(undefined1 *)(*(int *)PTR_DAT_004c98f4 + 0x3c20) = 1;\n    break;\n  case 0x60:\n    *(undefined1 *)(*(int *)PTR_DAT_004c98f4 + 0x3c20) = 0;\n    *(undefined1 *)(*(int *)PTR_DAT_004c98f4 + 0x576b) = 0;\n    break;\n  case 0x61:\n    *(undefined1 *)(*(int *)PTR_DAT_004c98f4 + 0x576e) = 1;\n    break;\n  case 0x62:\n    *(undefined1 *)(*(int *)PTR_DAT_004c98f4 + 0x576e) = 0;\n    break;\n  case 99:\n    *(undefined1 *)(*(int *)PTR_DAT_004c98f4 + 0x576d) = 1;\n    break;\n  case 100:\n    *(undefined1 *)(*(int *)PTR_DAT_004c98f4 + 0x576d) = 0;\n    if (*(char *)(*(int *)PTR_DAT_004c8878 + 4) != '\\0') {\n      (**(code **)(**(int **)PTR_DAT_004c8d24 + 0x9c))\n                (*(int **)PTR_DAT_004c8d24,",
+        "Christmas and New Year double EXP event has begun!",
+        "Anniversary begun! Double EXP, mini-games, and Forges 50% Off!",
+        "Sailing has begun! Double EXP, mini-games, and Forges 50% Off!",
+        "EXP Bonus event has begun! Don\\'t miss it!",
+        "Double rewards in Item Mall mini-games has ended!",
+        "Quiz Event has ended. Thanks for participation!",
+        "Valentine\\'s Day double EXP event has ended!",
+        "Lunar New Year special event has begun!",
+        ",0xff,0);\n    break;\n  case 0x4a:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,",
+        "Double EXP event has ended! Thanks for participation",
+        ",0xff,0);\n    break;\n  case 0x47:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,",
+        "EXP Bonus event has ended!",
+        ",0xff,0);\n    break;\n  case 0x4c:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,",
+        "Jade Rabbit Spring Festival event has ended!",
+        ", \\"
+      ],
+      "categories": [
+        "Authentication, Login Server & Channel Selection",
+        "Inventory, Item Management, Alchemy, Forging & Repair",
+        "Item Mall, Billing, Gacha, Mini-Games & Lucky Draw"
+      ],
+      "body_snippet": "void FUN_003e175c(undefined4 param_1,int param_2)\n\n{\n  switch(*(undefined1 *)(param_2 + 1)) {\n  case 1:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,\"Double EXP event has begun! Don\\'t miss it!\",\n                 0xff,0);\n    break;\n  case 2:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,&DAT_003e2424,0xff,0);\n    break;\n  case 3:\n    FUN_004a44cc(*(undefined4 *)PTR_DAT_004c8f18,0,\n                 \"Double rewards in Item Mall mini-games has begun!\",0xff,0);\n    break;\n  case 4:\n    F"
+    },
+    {
+      "name": "FUN_0010e218",
+      "start_line": 119523,
+      "end_line": 119760,
+      "line_count": 238,
+      "ret_type": "undefined4",
+      "params": "undefined4 param_1,undefined1 param_2",
+      "strings": [],
+      "categories": [
+        "Item Mall, Billing, Gacha, Mini-Games & Lucky Draw"
+      ],
+      "body_snippet": "undefined4 FUN_0010e218(undefined4 param_1,undefined1 param_2)\n\n{\n  char cVar1;\n  undefined4 uVar2;\n  \n  uVar2 = 0;\n  FUN_0049eb9c();\n  cVar1 = FUN_0010e1ac();\n  switch(param_2) {\n  case 0:\n    uVar2 = 0;\n    break;\n  case 1:\n    if ((((byte)(cVar1 - 2U) < 3) || (cVar1 == '\\v')) || ((byte)(cVar1 + 0x97U) < 4)) {\n      uVar2 = 1;\n    }\n    break;\n  case 2:\n    if (((byte)(cVar1 - 2U) < 2) || ((byte)(cVar1 + 0x97U) < 4)) {\n      uVar2 = 1;\n    }\n    break;\n  case 3:\n    if (((byte)(cVar1 - 2U) < 2"
+    }
+  ],
+  "DirectX Graphics & Audio": [
+    {
+      "name": "FUN_0046f928",
+      "start_line": 457636,
+      "end_line": 458310,
+      "line_count": 675,
+      "ret_type": "void",
+      "params": "undefined4 param_1,int param_2,int param_3,undefined4 *param_4,int param_5",
+      "strings": [],
+      "categories": [
+        "General Runtime & Win32 Helpers"
+      ],
+      "body_snippet": "void FUN_0046f928(undefined4 param_1,int param_2,int param_3,undefined4 *param_4,int param_5)\n\n{\n  char cVar1;\n  uint uVar2;\n  int iVar3;\n  undefined4 local_1c;\n  undefined4 local_18;\n  int local_c;\n  undefined4 local_8;\n  \n  local_c = param_3;\n  local_8 = param_1;\n  FUN_00012d10(&local_1c,8,0);\n  if (param_5 < 0x51e) {\n    if (0x468 < param_5) {\n      if (((param_5 != 0x4a8) && (param_5 != 0x4ba)) && (param_5 != 0x51b)) goto LAB_0046f9d7;\n      goto LAB_0046f9ba;\n    }\n    if (((param_5 == 0x46"
+    },
+    {
+      "name": "FUN_0049c3bc",
+      "start_line": 482841,
+      "end_line": 484254,
+      "line_count": 1414,
+      "ret_type": "undefined4",
+      "params": "int *param_1,int *param_2",
+      "strings": [],
+      "categories": [
+        "General Runtime & Win32 Helpers"
+      ],
+      "body_snippet": "undefined4 FUN_0049c3bc(int *param_1,int *param_2)\n\n{\n  byte bVar1;\n  short sVar2;\n  ushort uVar3;\n  int iVar4;\n  int iVar5;\n  uint uVar6;\n  int iVar7;\n  undefined4 *puVar8;\n  undefined4 *puVar9;\n  undefined4 *in_FS_OFFSET;\n  byte bVar10;\n  undefined4 uStack_50;\n  undefined1 *puStack_4c;\n  undefined1 *puStack_48;\n  undefined4 local_38 [4];\n  uint local_28;\n  uint local_24;\n  undefined1 local_1d;\n  int local_1c;\n  int local_18;\n  int local_14;\n  int local_10;\n  int local_c;\n  undefined1 local_5;\n"
+    },
+    {
+      "name": "FUN_0049f5e8",
+      "start_line": 485343,
+      "end_line": 485565,
+      "line_count": 223,
+      "ret_type": "void",
+      "params": "undefined1 param_1,undefined4 param_2",
+      "strings": [
+        "Grey Clay",
+        "Fruit",
+        "Diamond",
+        "White Clay",
+        "Feces",
+        "Secrets",
+        "Chemical ",
+        "Seafood",
+        "Crystal",
+        "Magnet",
+        "Mercury",
+        "Black Clay",
+        "Stone",
+        "Can\\'t Drink",
+        "Grass",
+        "Dry Clay",
+        "Nylon",
+        "Crude",
+        "Alcohol",
+        "Veggie",
+        "Drinkable",
+        "Silver",
+        "Poison",
+        "Feather",
+        "Red Clay",
+        "Flower",
+        "Ref Oil"
+      ],
+      "categories": [
+        "General Runtime & Win32 Helpers"
+      ],
+      "body_snippet": "void FUN_0049f5e8(undefined1 param_1,undefined4 param_2)\n\n{\n  FUN_00013eac(param_2);\n  switch(param_1) {\n  default:\n    FUN_00013f00(param_2,&LAB_004a002c);\n    return;\n  case 1:\n    FUN_00013f00(param_2,\"Flower\");\n    return;\n  case 2:\n    FUN_00013f00(param_2,\"Grass\");\n    return;\n  case 3:\n    FUN_00013f00(param_2,&DAT_0049fc00);\n    return;\n  case 4:\n    FUN_00013f00(param_2,&DAT_0049fc14);\n    return;\n  case 5:\n    FUN_00013f00(param_2,&DAT_0049fc24);\n    return;\n  case 6:\n    FUN_00013f00("
+    },
+    {
+      "name": "FUN_00115a38",
+      "start_line": 123752,
+      "end_line": 123964,
+      "line_count": 213,
+      "ret_type": "undefined4",
+      "params": "undefined1 param_1",
+      "strings": [],
+      "categories": [
+        "General Runtime & Win32 Helpers"
+      ],
+      "body_snippet": "undefined4 FUN_00115a38(undefined1 param_1)\n\n{\n  undefined4 uVar1;\n  \n  uVar1 = 0;\n  switch(param_1) {\n  case 1:\n    return 0x1b;\n  case 2:\n    return 0x31;\n  case 3:\n    return 0x32;\n  case 4:\n    return 0x33;\n  case 5:\n    return 0x34;\n  case 6:\n    return 0x35;\n  case 7:\n    return 0x36;\n  case 8:\n    return 0x37;\n  case 9:\n    return 0x38;\n  case 10:\n    return 0x39;\n  case 0xb:\n    return 0x30;\n  case 0xd:\n    return 0x3d;\n  case 0xe:\n    return 8;\n  case 0xf:\n    return 9;\n  case 0x10:\n   "
+    },
+    {
+      "name": "FUN_0016ea20",
+      "start_line": 153989,
+      "end_line": 154103,
+      "line_count": 115,
+      "ret_type": "undefined4",
+      "params": "uint param_1",
+      "strings": [],
+      "categories": [
+        "General Runtime & Win32 Helpers"
+      ],
+      "body_snippet": "undefined4 FUN_0016ea20(uint param_1)\n\n{\n  int iVar1;\n  undefined4 uVar2;\n  uint uVar3;\n  \n  uVar2 = 0;\n  switch(param_1) {\n  case 0xbb81:\n  case 0xbb93:\n    uVar2 = 6;\n    break;\n  case 0xbb82:\n  case 0xbb94:\n    uVar2 = 8;\n    break;\n  case 0xbb83:\n  case 0xbb95:\n    uVar2 = 5;\n    break;\n  case 0xbb84:\n  case 0xbb96:\n    uVar2 = 9;\n    break;\n  case 0xbb85:\n  case 0xbb97:\n    uVar2 = 7;\n    break;\n  case 0xbb86:\n  case 0xbb98:\n    uVar2 = 10;\n    break;\n  case 0xbb87:\n  case 0xbb99:\n    uVar2"
+    }
+  ]
+}

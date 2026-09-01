@@ -1,9 +1,14 @@
+import os
 import re
 
-with open('C:/Users/muham/OneDrive/Documents/GitHub/Wonderland Online/server/gameserver.py', 'r', encoding='utf-8') as f:
-    content = f.read()
+base_dir = os.path.dirname(__file__)
+gameserver_path = os.path.join(base_dir, 'gameserver.py')
 
-new_inv = '''    def build_inventory_packet(self, session: PlayerSession) -> PacketWriter:
+if os.path.exists(gameserver_path):
+    with open(gameserver_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    new_inv = '''    def build_inventory_packet(self, session: PlayerSession) -> PacketWriter:
         """Serializes SQLite inventory items to 29-byte blocks (AC 23 Sub 5)."""
         p = PacketWriter()
         p.write_8(23).write_8(5)
@@ -34,7 +39,7 @@ new_inv = '''    def build_inventory_packet(self, session: PlayerSession) -> Pac
 
         return p'''
 
-new_eq = '''    def build_equipments_packet(self, session: PlayerSession) -> PacketWriter:
+    new_eq = '''    def build_equipments_packet(self, session: PlayerSession) -> PacketWriter:
         """Serializes SQLite equipped items to 19-byte blocks (AC 23 Sub 11)."""
         p = PacketWriter()
         p.write_8(23).write_8(11)
@@ -52,9 +57,9 @@ new_eq = '''    def build_equipments_packet(self, session: PlayerSession) -> Pac
             p.write_16(0).write_8(0).write_bytes(bytes(16))
         return p'''
 
-content = re.sub(r'    def build_inventory_packet.*?return p', new_inv, content, flags=re.DOTALL)
-content = re.sub(r'    def build_equipments_packet.*?return p', new_eq, content, flags=re.DOTALL)
+    content = re.sub(r'    def build_inventory_packet.*?return p', new_inv, content, flags=re.DOTALL)
+    content = re.sub(r'    def build_equipments_packet.*?return p', new_eq, content, flags=re.DOTALL)
 
-with open('C:/Users/muham/OneDrive/Documents/GitHub/Wonderland Online/server/gameserver.py', 'w', encoding='utf-8') as f:
-    f.write(content)
-print('Patched packets!')
+    with open(gameserver_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    print('Patched packets!')
