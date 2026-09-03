@@ -21,14 +21,16 @@ async def handle(server, session, reader):
     sub = reader.read_8()
 
     if sub == 1:
-        # Client requests Item Mall catalog
-        logger.info(f"[{getattr(session, 'char_name', 'Player')}] Requesting Item Mall Catalog (AC 75 Sub 1)")
-        await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
+        # Client requests Item Mall catalog (Points Mall)
+        logger.info(f"[{getattr(session, 'char_name', 'Player')}] Requesting Points Mall Catalog (AC 75 Sub 1)")
+        await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session, is_bonus=False)
+        await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
 
     elif sub == 2:
         # Client requests Bonus Mall catalog
         logger.info(f"[{getattr(session, 'char_name', 'Player')}] Requesting Bonus Mall Catalog (AC 75 Sub 2)")
-        await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
+        await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session, is_bonus=True)
+        await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
 
     elif sub == 3:
         # Client requests IM Point balance
@@ -52,16 +54,20 @@ async def handle(server, session, reader):
             if category_id > 0:
                 await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
         else:
+            is_bonus_purchase = (sub == 5)
             item_id = reader.read_16() if rem >= 2 else 0
             quantity = reader.read_8() if rem >= 3 else 1
             if quantity <= 0:
                 quantity = 1
 
-            entry = GLOBAL_ITEM_MALL_MANAGER.get_item(item_id)
+            entry = GLOBAL_ITEM_MALL_MANAGER.get_item(item_id, is_bonus=1 if is_bonus_purchase else 0)
             cost = (entry.point_cost * quantity) if entry else 0
 
-            success = await GLOBAL_ITEM_MALL_MANAGER.purchase_item(server, session, item_id, quantity)
-            rem_points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(session)
+            success = await GLOBAL_ITEM_MALL_MANAGER.purchase_item(server, session, item_id, quantity, is_bonus=is_bonus_purchase)
+            if is_bonus_purchase:
+                rem_points = GLOBAL_ITEM_MALL_MANAGER.get_user_bonus_points(session)
+            else:
+                rem_points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(session)
             spent_points = cost if success else 0
 
             # Authentic Buy Response (aLogin.exe FUN_0025b5ec / 0x25b62f):

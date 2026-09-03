@@ -39,20 +39,21 @@ async def handle(server, session, reader):
     action_type = 'attack'
     skill_id = 10001
 
-    if sub == 4:  # Defend
+    if sub == 4:  # Defend (legacy/compat)
         action_type = 'defend'
         skill_id = 60021
         if reader.remaining_bytes() >= 2:
             src_x = reader.read_8()
             src_y = reader.read_8()
-    elif sub == 5:  # Flee
+            dst_x, dst_y = src_x, src_y
+    elif sub == 5:  # Flee (legacy/compat)
         action_type = 'flee'
         skill_id = 60041
         if reader.remaining_bytes() >= 2:
             src_x = reader.read_8()
             src_y = reader.read_8()
-    elif sub in (0, 1, 2, 3, 6, 7):  # Attack/Skill
-        action_type = 'attack'
+            dst_x, dst_y = src_x, src_y
+    elif sub in (0, 1, 2, 3, 6, 7):  # Attack/Skill/Defend/Flee/Capture
         if sub == 1 and reader.remaining_bytes() >= 8:
             try:
                 src_x = reader.read_8()
@@ -69,14 +70,28 @@ async def handle(server, session, reader):
             if reader.remaining_bytes() >= 2:
                 dst_x = reader.read_8()
                 dst_y = reader.read_8()
+
+        # Authentic skill ID mapping from real pcaps
+        if skill_id == 60021:
+            action_type = 'defend'
+        elif skill_id == 60041:
+            action_type = 'flee'
+        elif skill_id == 10008:
+            action_type = 'capture'
+        else:
+            action_type = 'attack'
     else:
         logger.warning(f"[{session.char_name}] AC50 unknown sub={sub}")
         return
 
-    # Flee is executed instantly
-    if action_type == 'flee' or skill_id == 60041:
-        await server._do_flee(session, battle)
-        return
+    # Real-Pcap: Server IMMEDIATELY acknowledges registered action via AC 53 Sub 5
+    from server.network import PacketWriter
+    ack_pkt = PacketWriter().write_8(53).write_8(5).write_8(src_x).write_8(src_y)
+    await session.send_packet(ack_pkt)
+    if battle.get('is_pvp'):
+        opp_session = battle['target']['session'] if session == battle['challenger']['session'] else battle['challenger']['session']
+        if opp_session:
+            await opp_session.send_packet(ack_pkt)
 
     # Buffer action
     if 'pending_actions' not in battle:

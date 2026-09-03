@@ -5,18 +5,40 @@ Ported from C# Src/Network/ActionCodes/AC75.cs, AC104.cs and Gobang engine
 
 import random
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 from server.network import PacketWriter
 
 logger = logging.getLogger("WLO_Server")
 
 
+class LuckyDrawPrize(tuple):
+    """Hybrid prize class supporting both tuple indexing and dict key access."""
+    def __new__(cls, name: str, item_id: int, count: int = 1, weight: int = 100, is_jackpot: int = 0, category: int = 2, slot_index: int = 1):
+        instance = super().__new__(cls, (name, item_id, count, weight))
+        instance.name = name
+        instance.item_id = item_id
+        instance.count = count
+        instance.weight = weight
+        instance.is_jackpot = is_jackpot
+        instance.category = category
+        instance.slot_index = slot_index
+        return instance
+
+    def __getitem__(self, item):
+        if isinstance(item, str):
+            return getattr(self, item)
+        return super().__getitem__(item)
+
+    def get(self, key: str, default=None):
+        return getattr(self, key, default)
+
+
 class LuckyDrawManager:
     """Manages the Lucky Draw Wheel spins, prize weights, and server broadcasts."""
 
     def __init__(self):
-        self.prizes: List[Tuple[str, int, int, int]] = []
+        self.prizes: List[LuckyDrawPrize] = []
         self._load_prizes()
 
     def _load_prizes(self):
@@ -25,40 +47,59 @@ class LuckyDrawManager:
             from server.dynamic_data_manager import GLOBAL_DYNAMIC_DATA
             db_prizes = GLOBAL_DYNAMIC_DATA.get_luckydraw_prizes()
             for p in db_prizes:
-                self.prizes.append((p["item_name"], p["item_id"], p.get("count", 1), p.get("weight", 100)))
+                cat = p.get("category", 2)
+                slot = p.get("slot_index", (len(self.prizes) % 8) + 1)
+                self.prizes.append(LuckyDrawPrize(
+                    name=p["item_name"],
+                    item_id=p["item_id"],
+                    count=p.get("count", 1),
+                    weight=p.get("weight", 100),
+                    is_jackpot=p.get("is_jackpot", 0),
+                    category=cat,
+                    slot_index=slot,
+                ))
             logger.info(f"[LuckyDrawManager] Loaded {len(self.prizes)} dynamic prizes from database.")
         except Exception as e:
             logger.warning(f"[LuckyDrawManager] Fallback prizes: {e}")
 
-        # Ensure base fallbacks if empty
+        # Ensure base fallbacks matching authentic client and pcaps
         if not self.prizes:
             self.prizes = [
-                ("Zodiac Crystal Chest", 48033, 1, 10),
-                ("Reborn Hero Cape", 23001, 1, 20),
-                ("100,000 Gold Voucher", 0, 100000, 50),
-                ("Refined Iron Ingot", 46005, 5, 120),
-                ("Fine Silk Cloth", 30014, 5, 150),
-                ("Rice Ball Snack", 30025, 10, 300),
-                ("Iron Ore Bundle", 27001, 10, 350),
+                LuckyDrawPrize("Zodiac Crystal Chest", 48033, 1, 10, 1, 2, 3),
+                LuckyDrawPrize("Space UFO", 48013, 1, 5, 1, 3, 4),
+                LuckyDrawPrize("Reborn Hero Cape", 23001, 1, 20, 1, 2, 5),
+                LuckyDrawPrize("Spar Crystal (+24 ATK)", 34124, 1, 80, 0, 3, 2),
+                LuckyDrawPrize("Lucky Draw Gift Box", 34147, 1, 150, 0, 2, 1),
+                LuckyDrawPrize("Refined Iron Ingot", 46005, 5, 120, 0, 2, 2),
+                LuckyDrawPrize("Rice Ball Snack", 30025, 10, 300, 0, 2, 6),
+                LuckyDrawPrize("Iron Ore Bundle", 27001, 10, 350, 0, 2, 7),
             ]
 
     def reload_from_db(self, dynamic_mgr=None):
         self._load_prizes()
 
-    async def spin_wheel(self, server, player) -> Optional[Tuple[str, int, int]]:
+    async def spin_wheel(self, server, player) -> Optional[Dict[str, Any]]:
         if not player:
+            return None
+
+        # 1. Check Inventory Space (Must have at least 1 empty slot)
+        occupied = len([it for it in getattr(player, "inventory", []) if it.get("slot", 0) > 0])
+        if occupied >= 50:
+            sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
+                "Inventory full. Cannot use Lucky Draw."
+            )
+            await player.send_packet(sys_msg)
             return None
 
         from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
 
-        # 1. Check IM Points (Standard cost is 20 IM Points per play)
+        # 2. Check Currency (20 IM Points, 1 Token, or 10,000 Gold)
         user_points = GLOBAL_ITEM_MALL_MANAGER.get_user_points(player)
         tokens = getattr(player, "im_tokens", 0)
 
         if user_points >= 20:
             rem_points = user_points - 20
             GLOBAL_ITEM_MALL_MANAGER.set_user_points(player, rem_points)
-            # Sync AC 34:1 and AC 75:3 Point Balances
             p34 = PacketWriter().write_8(34).write_8(1).write_16(min(65535, rem_points))
             await player.send_packet(p34)
             await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(player)
@@ -74,20 +115,25 @@ class LuckyDrawManager:
             await player.send_packet(sys_msg)
             return None
 
-        # Calculate weighted prize
-        total_weight = sum(p[3] for p in self.prizes)
+        # 3. Calculate weighted prize
+        total_weight = sum(p["weight"] for p in self.prizes)
         roll = random.randint(1, total_weight)
         cur = 0
         selected = self.prizes[-1]
 
         for p in self.prizes:
-            cur += p[3]
+            cur += p["weight"]
             if roll <= cur:
                 selected = p
                 break
 
-        name, item_id, count, _ = selected
+        name = selected["name"]
+        item_id = selected["item_id"]
+        count = selected["count"]
+        category = selected.get("category", 2)
+        slot_index = selected.get("slot_index", 1)
 
+        # 4. Add item to player inventory
         from server.gameserver import add_item_to_inventory
         if item_id > 0:
             add_item_to_inventory(player, item_id, count)
@@ -95,13 +141,19 @@ class LuckyDrawManager:
             player.gold += count
             await player.send_packet(PacketWriter().write_8(26).write_8(4).write_32(player.gold))
 
-        # Send wheel spin response (AC 75 Sub 1)
-        wheel_pkt = PacketWriter().write_8(75).write_8(1).write_16(item_id).write_16(count)
-        await player.send_packet(wheel_pkt)
-        await player.send_packet(server.build_inventory_packet(player))
+        # 5. Send authentic Lucky Draw Stop Packet (AC 104 Sub 1)
+        # S->C [104, 1, 2, category (uint8), slot_index (uint8)] (5 bytes total, verified from pcap)
+        stop_pkt = PacketWriter().write_8(104).write_8(1).write_8(2).write_8(category).write_8(slot_index)
+        await player.send_packet(stop_pkt)
 
-        # Play celebration fireworks for top prizes
-        if item_id in (48033, 23001):
+        # 6. Send authentic Item Delivery Packet (AC 23 Sub 6)
+        # S->C [23, 6, item_id (uint16_LE), count (uint16_LE), 27 zero bytes] (33 bytes total, verified from pcap)
+        if item_id > 0:
+            item_delivery_pkt = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_16(count).write_bytes(bytes(27))
+            await player.send_packet(item_delivery_pkt)
+
+        # 7. Play celebration fireworks and map broadcast for jackpot
+        if selected.get("is_jackpot") or item_id in (48013, 48033, 23001):
             firework = PacketWriter().write_8(5).write_8(5).write_32(player.char_id).write_16(60050)
             server.broadcast_to_map(player.map_id, firework)
 
@@ -115,7 +167,7 @@ class LuckyDrawManager:
         )
         await player.send_packet(sys_msg)
         server.save_player_to_db(player)
-        logger.info(f"[LuckyDraw] Player {player.char_name} won {name} ({item_id} x{count}).")
+        logger.info(f"[LuckyDraw] Player {player.char_name} won {name} (ID: {item_id} x{count}, Category: {category}, Slot: {slot_index}).")
         return selected
 
 

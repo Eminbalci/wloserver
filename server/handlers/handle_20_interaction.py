@@ -130,6 +130,7 @@ async def handle(server, session, reader):
         else:
             click_id = reader.read_8() if reader.remaining_bytes() > 0 else 0
         native_click_id = click_id
+        session.last_clicked_npc_id = native_click_id
         logger.info(f"[{session.char_name}] Clicked NPC/Object ID {click_id} on map {session.map_id} (native ID: {native_click_id})")
 
         # Find the clicked NPC in the map NPCs list
@@ -321,7 +322,6 @@ async def handle(server, session, reader):
         
         # 0. Storm Cutscene Completion -> Warp to Shipwreck Beach (Map 10035)
         if getattr(session, 'playing_storm_cutscene', False):
-            import time
             elapsed = time.time() - getattr(session, 'storm_cutscene_start_time', 0)
             if elapsed < 1.0:
                 logger.debug(f"[{session.char_name}] Absorbed premature AC 20:6 during Storm Cutscene movie initialization (elapsed: {elapsed:.2f}s)")
@@ -476,15 +476,39 @@ async def handle(server, session, reader):
                 await session.send_packet(PacketWriter().write_8(20).write_8(8))
                 return
 
-        if option_id == 0x1f:  # Option 31: Buy
-            await session.send_packet(PacketWriter().write_8(27).write_8(3))
-            await session.send_packet(PacketWriter().write_8(20).write_8(8))
+        # NPC Shop Menu Transitions (Reverse-Engineered from shoplarincalismamantigi.pcapng)
+        if option_id == 0x1e:  # Option 30: Open Shop Transaction Menu (Buy/Sell selection)
+            # Send Menu 2 prompt [Pkt #677]: [14 01 00 00 00 01 06 03 17 00 00 00 00 00 00 06 00 02]
+            current_click = getattr(session, "last_clicked_npc_id", 23) or 23
+            menu2_pkt = (
+                PacketWriter()
+                .write_8(20)
+                .write_8(1)
+                .write_32(0)
+                .write_8(1)
+                .write_8(6)
+                .write_8(3)
+                .write_16(current_click)
+                .write_bytes(bytes(6))
+                .write_8(6)
+                .write_8(0)
+                .write_8(2)
+            )
+            await session.send_packet(menu2_pkt)
             return
-        elif option_id == 0x1e:  # Option 30: Sell
-            sell_hex = "140100000001060317000000000000060002"
-            sell_bytes = bytes.fromhex(sell_hex)[2:]
-            pkt = PacketWriter().write_8(20).write_8(1).write_bytes(sell_bytes)
-            await session.send_packet(pkt)
+
+        elif option_id == 0x1f:  # Option 31: Buy (Opens Props Shop or Weapon Shop)
+            # Check if active NPC is Weapon/Armor merchant or Props merchant
+            current_click = getattr(session, "last_clicked_npc_id", 23) or 23
+            is_weapon_npc = current_click in (24, 13006, 13007)
+            shop_sub = 4 if is_weapon_npc else 3
+            await session.send_packet(PacketWriter().write_8(27).write_8(shop_sub))
+            await session.send_packet(PacketWriter().write_8(20).write_8(9))
+            return
+
+        elif option_id == 0x28:  # Option 40: Sell (Opens Player Inventory Sell Window)
+            # Send AC 20 Sub 9 to release dialogue lock so client displays inventory sell UI
+            await session.send_packet(PacketWriter().write_8(20).write_8(9))
             return
             
         await session.send_packet(PacketWriter().write_8(20).write_8(8))

@@ -1,31 +1,12 @@
 # Web Servisleri (Web Services)
 
-Bu doküman, Wonderland Online Python sunucusunda yer alan web tabanlı yönetim (Web Admin) ve kayıt (Web Registration) sunucularını detaylandırır.
+Bu doküman, Wonderland Online Python sunucusunda yer alan web tabanlı kayıt (Web Registration) sunucusunu ve modern yönetim arayüzü mimarisini detaylandırır.
 
 ---
 
-## 1. Web Yönetim Paneli (Web Admin Dashboard)
+## 1. Yönetim Mimarisi (Desktop GUI Suite)
 
-Web Yönetim Paneli (`server/web_admin.py` modülü), yöneticilerin sunucuyu canlı olarak izlemelerini, bağlı oyuncuları yönetmelerini, drop tablolarını güncellemelerini ve sistem loglarını taramalarını sağlar.
-
-### A. Sunucu Özellikleri
-- **Varsayılan Port**: `8080` (Ana `main.py` dosyası üzerinden `0.0.0.0` IP'si ile başlatılır).
-- **Kullanılan Kütüphane**: `aiohttp` (Asenkron HTTP Sunucusu).
-- **Arayüz Tasarımı**: Inter ve JetBrains Mono yazı tiplerini kullanan, modern karanlık temalı (dark-mode), responsive bir HTML/CSS/JS tek sayfalık web uygulamasıdır.
-
-### B. Sağlanan HTTP Uç Noktaları (Routes)
-
-- **`GET /`**: Yönetim paneli ana arayüzünü döner (`handle_index`).
-- **`GET /api/status`**: Canlı sunucu durumunu (çalışma süresi, CPU/RAM, bağlı oyuncu sayısı, DB boyutu) içeren JSON nesnesi döner.
-- **`GET /api/players`**: Aktif bağlı olan oyuncuların listesini (Karakter ID, kullanıcı adı, seviye, harita konumu, GM yetkisi) döner.
-- **`POST /api/player/action`**: Canlıdaki bir oyuncuya işlem uygulamak için kullanılır.
-  - **Parametreler**: `{"char_name": str, "action": "kick" | "ban" | "mute" | "toggle_gm"}`
-- **`GET /api/logs`**: Sunucunun son 100 log satırını döner (JetBrains Mono fontlu konsol terminal görünümünde).
-- **`GET /api/db/tables`**: Statik oyun veritabanındaki tabloları listeler.
-- **`POST /api/db/query`**: Seçilen bir veritabanı tablosundaki satırları filtrelemek veya aramak için kullanılır.
-- **`POST /api/db/insert`**: Veritabanı tablolarına veya `drop_table.json` dosyasına yeni bir veri satırı eklemek için kullanılır.
-- **`POST /api/db/delete`**: Tablolardan veya drop tablosundan satır silmek için kullanılır.
-- **`GET /api/search/lists`**: Drop tablosuna kural eklerken arama yapılabilmesi için static canavar (`npc.json`), eşya (`items.json`) ve binek araçların listesini döner.
+Web tabanlı admin paneli yerine, tüm sunucu yönetimi, canlı GM araçları, karakter düzenleyici ve ban sistemleri **Modern Desktop Administrator Control Suite** (`server/gui_app.py`) bünyesinde merkezi ve yüksek performanslı CustomTkinter arayüzü üzerinden yürütülmektedir. Ayrıntılar için [administrator_gui_suite.md](administrator_gui_suite.md) dokümanına bakınız.
 
 ---
 

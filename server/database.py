@@ -50,6 +50,15 @@ class DatabaseManager:
             """)
 
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS banned_ips (
+                    ip TEXT PRIMARY KEY,
+                    reason TEXT DEFAULT '',
+                    banned_at TEXT DEFAULT (datetime('now')),
+                    banned_by TEXT DEFAULT 'admin'
+                )
+            """)
+
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS characters (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     user_id INTEGER NOT NULL,
@@ -86,10 +95,16 @@ class DatabaseManager:
                 )
             """)
             
-            # Ensure GM/Banned columns exist in users table
-            for col in ['is_gm', 'banned']:
+            # Ensure GM/Banned/IP tracking columns exist in users table
+            for col, col_def in [
+                ('is_gm', 'INTEGER DEFAULT 0'),
+                ('banned', 'INTEGER DEFAULT 0'),
+                ('last_ip', "TEXT DEFAULT ''"),
+                ('last_login', "TEXT DEFAULT ''"),
+                ('ban_reason', "TEXT DEFAULT ''")
+            ]:
                 try:
-                    conn.execute(f"ALTER TABLE users ADD COLUMN {col} INTEGER DEFAULT 0")
+                    conn.execute(f"ALTER TABLE users ADD COLUMN {col} {col_def}")
                 except sqlite3.OperationalError:
                     pass
 
@@ -545,10 +560,177 @@ class DatabaseManager:
             ))
             conn.commit()
 
+    def update_user_last_login(self, user_id: int, ip: str):
+        """Updates user's last login timestamp and IP address."""
+        if not user_id:
+            return
+        clean_ip = str(ip).strip()
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    UPDATE users 
+                    SET last_ip = ?, last_login = datetime('now', 'localtime') 
+                    WHERE id = ?
+                """, (clean_ip, user_id))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"[DB] Error updating user last login: {e}")
+
+    def ban_user(self, user_id: int, reason: str = "", banned: int = 1):
+        """Bans or unbans a user account."""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    UPDATE users 
+                    SET banned = ?, ban_reason = ? 
+                    WHERE id = ?
+                """, (banned, reason if banned else "", user_id))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"[DB] Error setting user ban: {e}")
+
+    def is_user_banned(self, user_id: int) -> bool:
+        """Checks if a user account is banned."""
+        try:
+            with self.get_connection() as conn:
+                row = conn.execute("SELECT banned FROM users WHERE id = ?", (user_id,)).fetchone()
+                return bool(row and row['banned'])
+        except Exception:
+            return False
+
+    def ban_ip(self, ip: str, reason: str = "", banned_by: str = "admin"):
+        """Bans an IP address."""
+        clean_ip = str(ip).strip()
+        if not clean_ip:
+            return
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO banned_ips (ip, reason, banned_at, banned_by)
+                    VALUES (?, ?, datetime('now', 'localtime'), ?)
+                """, (clean_ip, reason, banned_by))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"[DB] Error banning IP: {e}")
+
+    def unban_ip(self, ip: str):
+        """Unbans an IP address."""
+        clean_ip = str(ip).strip()
+        if not clean_ip:
+            return
+        try:
+            with self.get_connection() as conn:
+                conn.execute("DELETE FROM banned_ips WHERE ip = ?", (clean_ip,))
+                conn.commit()
+        except Exception as e:
+            logger.error(f"[DB] Error unbanning IP: {e}")
+
+    def is_ip_banned(self, ip: str) -> bool:
+        """Checks if an IP address is banned."""
+        clean_ip = str(ip).strip()
+        if not clean_ip or clean_ip in ("127.0.0.1", "0.0.0.0", "localhost"):
+            return False
+        try:
+            with self.get_connection() as conn:
+                row = conn.execute("SELECT 1 FROM banned_ips WHERE ip = ?", (clean_ip,)).fetchone()
+                return bool(row)
+        except Exception:
+            return False
+
+    def get_banned_ips(self) -> list:
+        """Returns all banned IP addresses."""
+        try:
+            with self.get_connection() as conn:
+                rows = conn.execute("SELECT ip, reason, banned_at, banned_by FROM banned_ips ORDER BY banned_at DESC").fetchall()
+                return [dict(r) for r in rows]
+        except Exception:
+            return []
+
     def get_all_users(self) -> list:
-        with self.get_connection() as conn:
-            rows = conn.execute("SELECT id, username, is_gm FROM users").fetchall()
-            return [dict(r) for r in rows]
+        """Returns all registered users with their character summaries, last IP, and ban status."""
+        try:
+            with self.get_connection() as conn:
+                rows = conn.execute("""
+                    SELECT 
+                        u.id, 
+                        u.username, 
+                        u.is_gm, 
+                        u.banned, 
+                        u.ban_reason, 
+                        u.last_ip, 
+                        u.last_login,
+                        GROUP_CONCAT(c.id || ':' || c.name || ' (Lv' || c.level || ')') AS char_list
+                    FROM users u
+                    LEFT JOIN characters c ON c.user_id = u.id
+                    GROUP BY u.id
+                    ORDER BY u.id DESC
+                """).fetchall()
+                banned_ips_set = {r['ip'] for r in self.get_banned_ips()}
+                results = []
+                for r in rows:
+                    d = dict(r)
+                    d['is_ip_banned'] = d.get('last_ip') in banned_ips_set
+                    chars = []
+                    if d.get('char_list'):
+                        for part in d['char_list'].split(','):
+                            if ':' in part:
+                                cid_str, rest = part.split(':', 1)
+                                chars.append({"id": int(cid_str), "summary": rest})
+                    d['characters'] = chars
+                    results.append(d)
+                return results
+        except Exception as e:
+            logger.error(f"[DB] Error getting all users: {e}")
+            return []
+
+    def search_accounts(self, query: str = "") -> list:
+        """Searches accounts and characters by IP, Character Name, Username, Character ID, or User ID."""
+        q = (query or "").strip()
+        if not q:
+            return self.get_all_users()
+        
+        try:
+            with self.get_connection() as conn:
+                like_q = f"%{q}%"
+                rows = conn.execute("""
+                    SELECT 
+                        u.id, 
+                        u.username, 
+                        u.is_gm, 
+                        u.banned, 
+                        u.ban_reason, 
+                        u.last_ip, 
+                        u.last_login,
+                        GROUP_CONCAT(c.id || ':' || c.name || ' (Lv' || c.level || ')') AS char_list
+                    FROM users u
+                    LEFT JOIN characters c ON c.user_id = u.id
+                    WHERE 
+                        u.username LIKE ?
+                        OR u.last_ip LIKE ?
+                        OR c.name LIKE ?
+                        OR CAST(u.id AS TEXT) = ?
+                        OR CAST(c.id AS TEXT) = ?
+                    GROUP BY u.id
+                    ORDER BY u.id DESC
+                """, (like_q, like_q, like_q, q, q)).fetchall()
+                
+                banned_ips_set = {r['ip'] for r in self.get_banned_ips()}
+                results = []
+                for r in rows:
+                    d = dict(r)
+                    d['is_ip_banned'] = d.get('last_ip') in banned_ips_set
+                    chars = []
+                    if d.get('char_list'):
+                        for part in d['char_list'].split(','):
+                            if ':' in part:
+                                cid_str, rest = part.split(':', 1)
+                                chars.append({"id": int(cid_str), "summary": rest})
+                    d['characters'] = chars
+                    results.append(d)
+                return results
+        except Exception as e:
+            logger.error(f"[DB] Error searching accounts: {e}")
+            return []
 
     def get_config(self, key: str, default: str = "") -> str:
         """Retrieves a configuration value from server_config table."""

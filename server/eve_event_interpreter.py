@@ -639,10 +639,10 @@ class EveEventInterpreter:
     async def _handle_system_action(self, server: Any, session: Any, click_id: int, action_code: int) -> bool:
         """Handles Opcode 7 system action codes (1=Weapon Shop, 2=Props Shop, 4=Storage, 5=Save Point, 7=Clinic)."""
         if action_code in (1, 2, 3):
-            catalog_id = 0x0001FB84 if action_code == 1 else (0x0001FB83 if action_code == 3 else 0x0001FB85)
-            await session.send_packet(PacketWriter().write_8(20).write_8(8))
-            await session.send_packet(PacketWriter().write_8(35).write_8(12).write_32(catalog_id).write_8(0))
-            await session.send_packet(PacketWriter().write_8(5).write_8(4))
+            # Authentic WLO NPC Shop Window: AC 27 Sub 4 (Weapons) or AC 27 Sub 3 (Props/Grocery)
+            shop_sub = 4 if action_code == 1 else 3
+            await session.send_packet(PacketWriter().write_8(27).write_8(shop_sub))
+            await session.send_packet(PacketWriter().write_8(20).write_8(9))
             return True
         elif action_code in (4, 9):
             # Storage / Props Keeper

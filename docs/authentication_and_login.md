@@ -15,7 +15,13 @@ Player sessions begin by sending credentials via **Opcode 63, Sub-opcode 4**.
 - **Banned Accounts Check**:
   - If `banned = 1` is set in the database: Server rejects the request, alerts the client using warning overlay string `"This account has been banned."`, and terminates connection via `[1, 6]`.
 
-### B. Character List Refresh (Sub-opcode 1)
+### B. Client Version & File Integrity Verification
+Before database authentication, the server inspects the 16-bit client build version and file integrity tokens:
+- **Version Check**: Evaluates if the received `client_version` is within `server.version_validator` allowed list.
+- **Failures & Rejections**:
+  - If version mismatch or file error occurs: Server transmits Opcode 0 with the authentic disconnect reason code (e.g., `[0, 65]` for `"Wrong Version"`, `[0, 69]` for `"Item.dat File Error"`) followed by `[1, 6]` socket termination. See [docs/client_version_and_integrity_validation.md](client_version_and_integrity_validation.md).
+
+### C. Character List Refresh (Sub-opcode 1)
 Upon successful credential checks, the server writes and pushes character availability arrays using **Opcode 63, Sub-opcode 1**:
 - **Character Slot 1**: If active, writes slot serialization block. If empty, writes placeholder bytes `[1, 0]`.
 - **Character Slot 2**: If active, writes slot serialization block. If empty, writes placeholder bytes `[2, 0]`.

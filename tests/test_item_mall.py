@@ -445,6 +445,99 @@ class TestItemMallSystem(unittest.TestCase):
         found_23_6 = any(xor_crypt(p[4:])[0] == 23 and xor_crypt(p[4:])[1] == 6 for p in sent_pkts)
         self.assertTrue(found_23_6)
 
+    def test_authentic_item_mall_11_pages_grocery(self):
+        """Verifies authentic Points Mall catalog contains 152 items and 123 Grocery items spanning 11 pages."""
+        import math
+        self.mgr.reload_from_db()
+        points_items = self.mgr.get_catalog(is_bonus=False)
+        self.assertGreaterEqual(len(points_items), 152)
+
+        # Grocery singles (cat 3) and packs (cat 4)
+        grocery_singles = [it for it in points_items if it.category_id == 3]
+        grocery_packs = [it for it in points_items if it.category_id == 4]
+        total_grocery = len(grocery_singles) + len(grocery_packs)
+        self.assertGreaterEqual(len(grocery_singles), 102)
+        self.assertEqual(len(grocery_packs), 21)
+        self.assertGreaterEqual(total_grocery, 123)
+
+        # 12 items per client page -> exactly 11 pages of Grocery
+        grocery_pages = math.ceil(total_grocery / 12)
+        self.assertEqual(grocery_pages, 11)
+
+    def test_bonus_mall_catalog_ac75_sub10(self):
+        """Verifies Bonus Mall catalog contains 71 authentic items and dispatches AC 75 Sub 10."""
+        self.mgr.reload_from_db()
+        bonus_items = self.mgr.get_catalog(is_bonus=True)
+        self.assertEqual(len(bonus_items), 71)
+
+        sent_pkts = []
+        class MockSession:
+            async def send_packet(self, pkt):
+                sent_pkts.append(pkt.build())
+
+        session = MockSession()
+        asyncio.run(self.mgr.send_catalog(session, is_bonus=True))
+        self.assertEqual(len(sent_pkts), 1)
+        decrypted = xor_crypt(sent_pkts[0][4:])
+        self.assertEqual(decrypted[0], 75)
+        self.assertEqual(decrypted[1], 10)  # Sub 10 for Bonus Mall
+        import struct
+        count = struct.unpack_from("<H", decrypted, 2)[0]
+        self.assertEqual(count, 71)
+
+    def test_initial_mall_sync_sequence(self):
+        """Verifies full initial mall sync sequence: AC 75:1, AC 75:10, AC 75:8, AC 75:7, AC 75:3."""
+        sent_pkts = []
+        class MockSession:
+            account_id = 999
+            char_name = "SyncHero"
+            im_points = 500
+            im_bonus_points = 100
+            async def send_packet(self, pkt):
+                sent_pkts.append(pkt.build())
+
+        session = MockSession()
+        asyncio.run(self.mgr.send_initial_mall_sync(session))
+        self.assertEqual(len(sent_pkts), 5)
+
+        decrypted_pkts = [xor_crypt(p[4:]) for p in sent_pkts]
+        # 1. Points Mall (75:1)
+        self.assertEqual((decrypted_pkts[0][0], decrypted_pkts[0][1]), (75, 1))
+        # 2. Bonus Mall (75:10)
+        self.assertEqual((decrypted_pkts[1][0], decrypted_pkts[1][1]), (75, 10))
+        # 3. Mall sync settings (75:8)
+        self.assertEqual((decrypted_pkts[2][0], decrypted_pkts[2][1]), (75, 8))
+        # 4. Mall status (75:7)
+        self.assertEqual((decrypted_pkts[3][0], decrypted_pkts[3][1]), (75, 7))
+        # 5. Dual balance sync (75:3)
+        self.assertEqual((decrypted_pkts[4][0], decrypted_pkts[4][1]), (75, 3))
+
+    def test_bonus_mall_purchase_with_bonus_points(self):
+        """Verifies purchase in Bonus Mall deducts bonus points and grants item."""
+        self.mgr.reload_from_db()
+        from unittest.mock import MagicMock
+        server = MagicMock()
+        granted = []
+        async def mock_grant(session, item_id, count, send_acquire_notice=False):
+            granted.append((item_id, count))
+        server.grant_item = mock_grant
+
+        class MockSession:
+            account_id = 888
+            char_name = "BonusBuyer"
+            im_points = 1000
+            im_bonus_points = 500
+            async def send_packet(self, pkt):
+                pass
+
+        session = MockSession()
+        # Item 57205 in Bonus Mall costs 32 bonus points
+        success = asyncio.run(self.mgr.purchase_item(server, session, item_id=57205, quantity=2, is_bonus=True))
+        self.assertTrue(success)
+        self.assertEqual(session.im_bonus_points, 500 - (32 * 2))
+        self.assertEqual(session.im_points, 1000)  # IM points untouched!
+        self.assertEqual(granted, [(57205, 2)])
+
 
 if __name__ == "__main__":
     unittest.main()

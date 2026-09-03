@@ -270,17 +270,24 @@ class DynamicDataManager:
                 # 20. Item Mall Catalog
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS game_item_mall (
-                        item_id INTEGER PRIMARY KEY,
+                        item_id INTEGER NOT NULL,
                         item_name VARCHAR(100) NOT NULL,
-                        category VARCHAR(50) DEFAULT 'Hot',
+                        category VARCHAR(50) DEFAULT 'Grocery',
                         point_cost INTEGER DEFAULT 100,
                         original_price INTEGER DEFAULT 0,
                         gold_cost INTEGER DEFAULT 0,
                         count INTEGER DEFAULT 1,
                         is_hot INTEGER DEFAULT 0,
                         is_new INTEGER DEFAULT 0,
+                        is_limited INTEGER DEFAULT 0,
                         on_sale INTEGER DEFAULT 0,
-                        subcategory_id INTEGER DEFAULT 1
+                        discount INTEGER DEFAULT 100,
+                        badge INTEGER DEFAULT 0,
+                        category_id INTEGER DEFAULT 3,
+                        order_idx INTEGER DEFAULT 0,
+                        is_bonus INTEGER DEFAULT 0,
+                        subcategory_id INTEGER DEFAULT 1,
+                        PRIMARY KEY (item_id, count, is_bonus)
                     )
                 """)
 
@@ -288,7 +295,13 @@ class DynamicDataManager:
                 for col_name, col_type in [
                     ("original_price", "INTEGER DEFAULT 0"),
                     ("is_new", "INTEGER DEFAULT 0"),
+                    ("is_limited", "INTEGER DEFAULT 0"),
                     ("on_sale", "INTEGER DEFAULT 0"),
+                    ("discount", "INTEGER DEFAULT 100"),
+                    ("badge", "INTEGER DEFAULT 0"),
+                    ("category_id", "INTEGER DEFAULT 3"),
+                    ("order_idx", "INTEGER DEFAULT 0"),
+                    ("is_bonus", "INTEGER DEFAULT 0"),
                     ("subcategory_id", "INTEGER DEFAULT 1"),
                 ]:
                     try:
@@ -909,10 +922,13 @@ class DynamicDataManager:
             logger.error(f"[DynamicDataManager] Error getting NPC visibility rules: {e}")
             return []
 
-    def get_item_mall_catalog(self) -> List[Dict[str, Any]]:
+    def get_item_mall_catalog(self, is_bonus: Optional[int] = None) -> List[Dict[str, Any]]:
         try:
             with self.get_connection() as conn:
-                rows = conn.execute("SELECT * FROM game_item_mall ORDER BY is_hot DESC, category, item_id").fetchall()
+                if is_bonus is not None:
+                    rows = conn.execute("SELECT * FROM game_item_mall WHERE is_bonus = ? ORDER BY order_idx, item_id", (is_bonus,)).fetchall()
+                else:
+                    rows = conn.execute("SELECT * FROM game_item_mall ORDER BY is_bonus ASC, order_idx ASC, item_id ASC").fetchall()
                 return [dict(r) for r in rows]
         except Exception as e:
             logger.error(f"[DynamicDataManager] Error getting Item Mall catalog: {e}")
@@ -929,26 +945,42 @@ class DynamicDataManager:
         count: int = 1,
         is_hot: int = 0,
         is_new: int = 0,
+        is_limited: int = 0,
         on_sale: int = 0,
+        discount: int = 100,
+        badge: int = 0,
+        category_id: int = 3,
+        order_idx: int = 0,
+        is_bonus: int = 0,
         subcategory_id: int = 1
     ) -> bool:
         try:
             with self.get_connection() as conn:
                 conn.execute("""
-                    INSERT INTO game_item_mall (item_id, item_name, category, point_cost, original_price, gold_cost, count, is_hot, is_new, on_sale, subcategory_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(item_id) DO UPDATE SET
+                    INSERT INTO game_item_mall (
+                        item_id, item_name, category, point_cost, original_price, gold_cost, count,
+                        is_hot, is_new, is_limited, on_sale, discount, badge, category_id, order_idx, is_bonus, subcategory_id
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(item_id, count, is_bonus) DO UPDATE SET
                         item_name = excluded.item_name,
                         category = excluded.category,
                         point_cost = excluded.point_cost,
                         original_price = excluded.original_price,
                         gold_cost = excluded.gold_cost,
-                        count = excluded.count,
                         is_hot = excluded.is_hot,
                         is_new = excluded.is_new,
+                        is_limited = excluded.is_limited,
                         on_sale = excluded.on_sale,
+                        discount = excluded.discount,
+                        badge = excluded.badge,
+                        category_id = excluded.category_id,
+                        order_idx = excluded.order_idx,
                         subcategory_id = excluded.subcategory_id
-                """, (item_id, name, category, point_cost, original_price, gold_cost, count, is_hot, is_new, on_sale, subcategory_id))
+                """, (
+                    item_id, name, category, point_cost, original_price, gold_cost, count,
+                    is_hot, is_new, is_limited, on_sale, discount, badge, category_id, order_idx, is_bonus, subcategory_id
+                ))
                 conn.commit()
             return True
         except Exception as e:
@@ -988,31 +1020,44 @@ class DynamicDataManager:
 
                 for it in items:
                     conn.execute("""
-                        INSERT INTO game_item_mall (item_id, item_name, category, point_cost, original_price, gold_cost, count, is_hot, is_new, on_sale, subcategory_id)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(item_id) DO UPDATE SET
+                        INSERT INTO game_item_mall (
+                            item_id, item_name, category, point_cost, original_price, gold_cost, count,
+                            is_hot, is_new, is_limited, on_sale, discount, badge, category_id, order_idx, is_bonus, subcategory_id
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(item_id, count, is_bonus) DO UPDATE SET
                             item_name = excluded.item_name,
                             category = excluded.category,
                             point_cost = excluded.point_cost,
                             original_price = excluded.original_price,
                             gold_cost = excluded.gold_cost,
-                            count = excluded.count,
                             is_hot = excluded.is_hot,
                             is_new = excluded.is_new,
+                            is_limited = excluded.is_limited,
                             on_sale = excluded.on_sale,
+                            discount = excluded.discount,
+                            badge = excluded.badge,
+                            category_id = excluded.category_id,
+                            order_idx = excluded.order_idx,
                             subcategory_id = excluded.subcategory_id
                     """, (
                         int(it["item_id"]),
-                        str(it["item_name"]),
-                        str(it.get("category", "Hot")),
-                        int(it.get("point_cost", 100)),
-                        int(it.get("original_price", 0)),
-                        int(it.get("gold_cost", 0)),
-                        int(it.get("count", 1)),
-                        int(it.get("is_hot", 0)),
-                        int(it.get("is_new", 0)),
-                        int(it.get("on_sale", 0)),
-                        int(it.get("subcategory_id", 1))
+                        str(it.get("item_name", f"Item_{it['item_id']}")),
+                        str(it.get("category", "Grocery")),
+                        int(it.get("point_cost", 100) or 0),
+                        int(it.get("original_price", 0) or 0),
+                        int(it.get("gold_cost", 0) or 0),
+                        int(it.get("count", 1) or 1),
+                        int(it.get("is_hot", 0) or 0),
+                        int(it.get("is_new", 0) or 0),
+                        int(it.get("is_limited", 0) or 0),
+                        int(it.get("on_sale", 0) or 0),
+                        int(it.get("discount", 100) or 100),
+                        int(it.get("badge", 0) or 0),
+                        int(it.get("category_id", 3) or 3),
+                        int(it.get("order_idx", 0) or 0),
+                        int(it.get("is_bonus", 0) or 0),
+                        int(it.get("subcategory_id", 1) or 1)
                     ))
                 conn.commit()
 

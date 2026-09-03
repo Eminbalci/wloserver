@@ -1,14 +1,16 @@
-# Wonderland Online - Item Mall Catalog & Customization System
+# Wonderland Online - Authentic Item Mall & Bonus Mall Subsystem
 
 ## Overview
-The Wonderland Online Item Mall subsystem manages point-based digital merchandise, catalog synchronization across both TCP ports (`6416` and `6414`), multi-tab category mapping, dynamic SQLite/JSON persistence, and administrator GUI configuration.
+The Wonderland Online Item Mall subsystem manages point-based and bonus-point merchandise, multi-catalog synchronization across TCP ports (`6416` and `6414`), multi-tab category mapping, 11-page Grocery catalog layout, dual-mall state synchronization, dynamic SQLite/JSON persistence, and administrator GUI configuration.
+
+Reverse engineered and verified against authentic live server captures (`itemmalldatalari.pcapng`) and Rhodes Island client (`C:\Games\WLRI`).
 
 ---
 
 ## 1. Network Protocol Specifications
 
 ### A. Dedicated Port 6416 TCP Catalog Service
-- **Purpose**: Authenticates and feeds initial catalog metadata to client binary `aLogin.exe` (`FUN_0025a684`).
+- **Purpose**: Feeds initial catalog metadata to client binary `aLogin.exe` (`FUN_0025a684`).
 - **Binary Format**:
   - `[0]` Opcode `0xC9`
   - `[1-2]` Header `0x00 0x01`
@@ -16,87 +18,126 @@ The Wonderland Online Item Mall subsystem manages point-based digital merchandis
 
 ### B. In-Game Port 6414 Packets
 
-#### 1. AC 75 Sub 1 (Item Catalog Matrix)
-- **Header**: `[75, 1, ItemCount (uint16_LE)]`
-- **Per Item (10 Bytes)**:
+#### 1. Initial Mall Handshake Sequence (Map Entry / Login)
+On player map join, the server initiates the complete authentic mall sync sequence:
+1. **`AC 75 Sub 1`**: Points Mall catalog (152 authentic items)
+2. **`AC 75 Sub 10`**: Bonus Mall catalog (71 authentic items)
+3. **`AC 75 Sub 8`**: Mall system settings (`[75, 8, 0, 0]`)
+4. **`AC 75 Sub 7`**: Mall status indicator (`[75, 7, 1]`)
+5. **`AC 75 Sub 3`**: Dual balance synchronization (IM Points + Bonus Points)
+
+#### 2. Catalog Packet Layout (AC 75 Sub 1 & AC 75 Sub 10)
+- **Header**: `[75, sub_code, ItemCount (uint16_LE)]` (`sub_code = 1` for Points Mall, `10` for Bonus Mall)
+- **Per Item (Exactly 10 Bytes)**:
   - `[0-1]` `item_id (uint16_LE)`: 16-bit numeric item identifier matching `Item.dat`.
-  - `[2]` `subcategory_id (uint8)`: Tab subcategory index (default `1`).
-  - `[3-4]` `base_price (uint16_LE)`: Original/list price in IM Points.
-  - `[5]` `discount_percent (uint8)`: `100` = Regular Price (clean, no strikethrough); `<100` = On-Sale multiplier % displaying strike-through discount.
-  - `[6]` `badge_tag (uint8)`: `0` = Clean/Normal, `1` = `NEW` starburst badge overlay, `2` = `HOT` flame badge overlay.
-  - `[7]` `category_id (uint8)`: Category tab selector (1..7).
-  - `[8-9]` `point_cost (uint16_LE)`: Effective purchase cost deducted from balance.
+  - `[2]` `count (uint8)`: Quantity per pack (1 for single item, 5/8/20/50 for bundle packs).
+  - `[3-4]` `base_price (uint16_LE)`: Original/list price in points.
+  - `[5]` `discount (uint8)`: Discount percentage (`100` = full price, `80` = 20% off, `30` = 70% off).
+  - `[6]` `badge (uint8)`: Badge overlay tag (`0` = Normal, `1` = `NEW`, `2` = `HOT`, `3` = `LIMITED`).
+  - `[7]` `category_id (uint8)`: Category selector byte:
+    - `1`: Weaponry
+    - `2`: Armory
+    - `3`: Grocery (Single items)
+    - `4`: Grocery (Multi-packs / Bundles)
+    - `5`: Furniture
+  - `[8-9]` `order_idx (uint16_LE)`: UI sort order index.
 
-#### 2. AC 75 Sub 3 (Personal IM Balance Sync)
-- **Payload**: `[75, 3, Points (uint32_LE), BonusPoints (uint32_LE), ItemID (uint16_LE), Count (uint8)]`
+#### 3. AC 75 Sub 3 (Dual Balance Synchronization)
+- **Payload**: `[75, 3, IMPoints (uint32_LE), BonusPoints (uint32_LE), 0 (uint16_LE), 0 (uint8)]`
+- Total Length: 13 bytes.
 
-#### 3. AC 75 Sub 4 & Sub 5 (Tab Switching & Purchase)
-- Client sends category switch `[75, 4, cat_id]` or buy request `[75, 5, item_id (2B_LE), quantity (1B)]`.
-- Server validates points, executes atomic `server.grant_item(...)`, updates DB, and dispatches AC 75:3 and system notice.
-
----
-
-## 2. Category Tab Mappings (1..7)
-
-| Category ID | Category Name | Description | Example Items |
-| :--- | :--- | :--- | :--- |
-| **1** | **Hot** | Featured mount vehicles, popular consumables, diamonds | Mecha Dragon (48050), Alien UFO (48013), Submarine (48033) |
-| **2** | **Armory** | Defensive gears, armors, robes, shields, helms, boots | Celestial Robes (22030), Dragonscale Helm (22050), Hermes Boots (22070) |
-| **3** | **Weaponry** | Weapons across all classes (Swords, Wands, Guns, Bows) | Dragon Slayer Sword (21050), Celestial Wand (21060), Sniper Gun (21070) |
-| **4** | **Grocery** | Stat reset scrolls, EXP potions, potential water, food | Forgotten Scroll (28001), Potential Water (28002), 2x EXP Potion (28004) |
-| **5** | **Furniture** | Tent crafting stations, luxury tickets, home decor | Luxury Airship Ticket (36007), Alchemy Stove (38027), Worktable (38025) |
-| **6** | **Slot Machine** | Lucky draw tickets, gacha tokens, minigame coins | Lucky Draw Ticket (48020), Gacha Coin (48021), UFO Token (48022) |
-| **7** | **Forging Room** | Stat spar crystals (+24 ATK/DEF/MATK/SPD), alchemy books | ATK Spar (47001), Alchemy Book I (49001), Refining Crystal (47015) |
+#### 4. AC 75 Sub 4 & Sub 5 (Tab Switching & Purchases)
+- **Category Switch**: Client sends `[75, 4, cat_id]`. Server acknowledges with `AC 57:1` (`[57, 1, cat_id, 0, 0, 0]`), synchronizes `AC 34:1` and `AC 75:3` balances, and re-dispatches the catalog.
+- **Purchase**:
+  - Points Mall: Client sends `[75, 4, item_id (uint16_LE), quantity (uint8)]`.
+  - Bonus Mall: Client sends `[75, 5, item_id (uint16_LE), quantity (uint8)]`.
+  - Server validates balance, executes `server.grant_item(...)`, updates DB, and replies with `AC 75 Sub [4/5]`: `[75, sub, RemPoints(4B), SpentPoints(4B), ItemID(2B), Quantity(1B)]`.
 
 ---
 
-## 3. Human-Readable JSON Configuration
+## 2. 11-Page Grocery Catalog Architecture
 
-The catalog is defined in `server/data/item_mall.json`:
+The authentic client displays 12 items per page.
+In `itemmalldatalari.pcapng`:
+- **Category 3 (Grocery Singles)**: 102 items (Single bottles, potions, reset scrolls, sparrows, pills)
+- **Category 4 (Grocery Bundles)**: 21 items (Packs of 5x, 8x, 20x, 50x)
+- **Total Grocery Items**: 102 + 21 = **123 items**
+- **Pages**: `ceil(123 / 12) = 11 pages`! Both Category 3 and Category 4 render under the client's Grocery tab, seamlessly creating the 11 pages of authentic items.
+
+---
+
+## 3. Database Schema (`game_item_mall`)
+
+Items can exist simultaneously in both Points Mall and Bonus Mall at different prices, and can also be sold as both singles and multi-packs (e.g. Potential Pill 1x and 5x, Chaos Crystal 1x and 5x).
+The composite primary key is `(item_id, count, is_bonus)`.
+
+```sql
+CREATE TABLE game_item_mall (
+    item_id INTEGER NOT NULL,
+    item_name VARCHAR(100) NOT NULL,
+    category VARCHAR(50) DEFAULT 'Grocery',
+    point_cost INTEGER DEFAULT 100,
+    original_price INTEGER DEFAULT 0,
+    gold_cost INTEGER DEFAULT 0,
+    count INTEGER DEFAULT 1,
+    is_hot INTEGER DEFAULT 0,
+    is_new INTEGER DEFAULT 0,
+    is_limited INTEGER DEFAULT 0,
+    on_sale INTEGER DEFAULT 0,
+    discount INTEGER DEFAULT 100,
+    badge INTEGER DEFAULT 0,
+    category_id INTEGER DEFAULT 3,
+    order_idx INTEGER DEFAULT 0,
+    is_bonus INTEGER DEFAULT 0,
+    subcategory_id INTEGER DEFAULT 1,
+    PRIMARY KEY (item_id, count, is_bonus)
+);
+```
+
+---
+
+## 4. Human-Readable JSON Configuration
+
+The catalog is exported to and imported from `server/data/item_mall.json` containing all 224 catalog entries.
+Hot-reload is supported at runtime via `GLOBAL_DYNAMIC_DATA.import_item_mall_json()`.
 
 ```json
 [
   {
-    "item_id": 48050,
-    "item_name": "Mecha Dragon (Mount)",
-    "category": "Hot",
-    "point_cost": 60,
-    "original_price": 80,
+    "item_id": 34269,
+    "item_name": "Potential Pill",
+    "category": "Grocery",
+    "category_id": 3,
+    "point_cost": 42,
+    "original_price": 42,
     "gold_cost": 0,
     "count": 1,
+    "is_hot": 0,
+    "is_new": 0,
+    "is_limited": 0,
+    "on_sale": 0,
+    "discount": 100,
+    "badge": 0,
+    "order_idx": 47,
+    "is_bonus": 0
+  },
+  {
+    "item_id": 34269,
+    "item_name": "Potential Pill",
+    "category": "Grocery",
+    "category_id": 4,
+    "point_cost": 119,
+    "original_price": 119,
+    "gold_cost": 0,
+    "count": 5,
     "is_hot": 1,
     "is_new": 0,
-    "on_sale": 1,
-    "subcategory_id": 1
+    "is_limited": 0,
+    "on_sale": 0,
+    "discount": 100,
+    "badge": 2,
+    "order_idx": 48,
+    "is_bonus": 0
   }
 ]
 ```
-
-### JSON Fields:
-- `item_id` (*int*): Authentic Item ID from `Item.dat`.
-- `item_name` (*string*): Descriptive title shown in tables and notifications.
-- `category` (*string or int*): Tab name (`Hot`, `Armory`, `Weaponry`, `Grocery`, `Furniture`, `Slot Machine`, `Forging Room`) or integer (`1`..`7`).
-- `point_cost` (*int*): IM Points price required.
-- `original_price` (*int*): List price. If `original_price > point_cost > 0` and `on_sale=1`, displays red strike-through price.
-- `count` (*int*): Quantity granted per purchase stack.
-- `is_hot` (*int 0/1*): Displays `HOT` badge.
-- `is_new` (*int 0/1*): Displays `NEW` badge.
-- `on_sale` (*int 0/1*): Enables sale calculation.
-
----
-
----
-
-## 5. Purchase Notification & Inventory Synchronization Lifecycle
-
-### A. Authentic Client Processing (`aLogin.exe`)
-1. **Mall Purchase Handler (`FUN_0025b4a8` / `FUN_0025b7d8`)**:
-   - Parses server purchase response `AC 75 Sub 4/5` containing `[RemPoints(4B), SpentPoints(4B), ItemID(2B), Quantity(1B)]`.
-   - Plays sound effect `sound\wav0152.wav`.
-   - Prints chat notification: `"<ItemName> success. Spent: <SpentPoints>"` and `"IM Points: <RemPoints>"`.
-   - Updates GUI item mall points indicator.
-
-2. **Generic Loot Delivery vs. Item Mall (`FUN_0043eb2c`)**:
-   - `AC 23 Sub 6` is the generic world drop / quest / chest acquisition packet, which triggers the centered message box popup: `"Obtain X pcs "`.
-   - When purchasing from the Item Mall, `server.grant_item(session, item_id, amount, send_acquire_notice=False)` suppresses `AC 23 Sub 6` while dispatching `AC 23 Sub 8` (slot update) and `AC 23 Sub 5` (full bag sync).
-   - This ensures clean, authentic Item Mall UI feedback without duplicate or generic `"Obtain 1 pcs "` loot prompts.

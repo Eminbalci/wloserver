@@ -448,6 +448,10 @@ class GameServer:
 
         self.SERVER_VERSION = self.db.get_config("server_name", SERVER_VERSION)
         self.SUBSERVER_CONFIG = SUBSERVER_CONFIG
+
+        from server.version_validator import ClientVersionValidator
+        self.version_validator = ClientVersionValidator(self.db)
+
         self._load_handlers()
 
     def get_server_name(self) -> str:
@@ -700,6 +704,20 @@ class GameServer:
     async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handles a new client socket connection."""
         session = PlayerSession(reader, writer)
+        if hasattr(self, 'db') and self.db.is_ip_banned(session.ip):
+            logger.warning(f"[Server] Rejected connection from banned IP: {session.ip}")
+            try:
+                fail_pkt = PacketWriter()
+                fail_pkt.write_8(63).write_8(4)
+                await session.send_packet(fail_pkt)
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Your IP address has been banned from this server."))
+                await session.send_packet(PacketWriter().write_8(1).write_8(6))
+                writer.close()
+                await writer.wait_closed()
+            except Exception:
+                pass
+            return
+
         self.active_sessions.add(session)
         logger.info(f"[Server] New connection from {session.ip}")
 
@@ -712,6 +730,51 @@ class GameServer:
         finally:
             self.active_sessions.remove(session)
             await self.handle_disconnect(session)
+
+    async def kick_user(self, user_id: int, reason: str = "Disconnected by administrator"):
+        """Kicks any active session associated with user_id."""
+        for s in list(self.active_sessions):
+            if getattr(s, 'user_id', None) == user_id:
+                try:
+                    await s.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(reason))
+                    await s.send_packet(PacketWriter().write_8(1).write_8(6))
+                    s.writer.close()
+                except Exception:
+                    pass
+
+    async def kick_ip(self, ip: str, reason: str = "Your IP address has been banned"):
+        """Kicks all active sessions matching the given IP address."""
+        clean_ip = str(ip).strip()
+        for s in list(self.active_sessions):
+            if getattr(s, 'ip', None) == clean_ip:
+                try:
+                    await s.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(reason))
+                    await s.send_packet(PacketWriter().write_8(1).write_8(6))
+                    s.writer.close()
+                except Exception:
+                    pass
+
+    async def ban_user(self, user_id: int, reason: str = "Banned by administrator"):
+        """Bans user in DB and kicks immediately if online."""
+        self.db.ban_user(user_id, reason=reason, banned=1)
+        await self.kick_user(user_id, f"Account banned: {reason}")
+        logger.info(f"[Server] Banned user ID {user_id} (Reason: {reason})")
+
+    async def unban_user(self, user_id: int):
+        """Unbans user in DB."""
+        self.db.ban_user(user_id, reason="", banned=0)
+        logger.info(f"[Server] Unbanned user ID {user_id}")
+
+    async def ban_ip(self, ip: str, reason: str = "Banned by administrator", banned_by: str = "admin"):
+        """Bans IP in DB and kicks all active connections from this IP."""
+        self.db.ban_ip(ip, reason=reason, banned_by=banned_by)
+        await self.kick_ip(ip, f"IP Banned: {reason}")
+        logger.info(f"[Server] Banned IP {ip} (Reason: {reason})")
+
+    async def unban_ip(self, ip: str):
+        """Unbans IP in DB."""
+        self.db.unban_ip(ip)
+        logger.info(f"[Server] Unbanned IP {ip}")
 
     async def read_packets_loop(self, session: PlayerSession):
         """Reads and frames TCP bytes into distinct packets."""
@@ -1424,10 +1487,9 @@ class GameServer:
         
         await session.send_packet(PacketWriter().write_8(5).write_8(4))
         
-        # Dispatch Item Mall Catalog & Point Balance to initialize client mall matrix
+        # Dispatch Authentic Item Mall Handshake (AC 75:1, AC 75:10, AC 75:8, AC 75:7, AC 75:3)
         from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
-        await GLOBAL_ITEM_MALL_MANAGER.send_catalog(session)
-        await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
+        await GLOBAL_ITEM_MALL_MANAGER.send_initial_mall_sync(session)
         
         # Send ground items to the player who just joined the map
         await self.send_ground_items(session)
@@ -3474,6 +3536,7 @@ class GameServer:
             return p
 
         # Collect actions
+        # Collect actions
         actions_to_process = []
         p_act = battle['pending_actions'].get((4, 2))
         if p_act and pf['hp'] > 0:
@@ -3487,17 +3550,53 @@ class GameServer:
         # Clear pending actions
         battle['pending_actions'] = {}
 
+        # Reset defend states for this turn
+        pf['is_defending'] = False
+        if pet_f:
+            pet_f['is_defending'] = False
+
+        # Sort by Speed (SPD) descending for turn execution order
+        actions_to_process.sort(key=lambda item: item[0].get('spd', 0), reverse=True)
+
         combined_anim = PacketWriter()
         combined_anim.write_8(50).write_8(1)
         sync_packets = []
 
-        # Process each action
+        # Process each player/pet action
         for actor, act in actions_to_process:
             actor_name = actor['name']
             action_name = act['action']
             skill_id = act['skill_id']
             dst_x = act['dst_x']
             dst_y = act['dst_y']
+
+            # ── 1. FLEE ACTION (Skill 60041 / 0xea89) ──
+            if action_name == 'flee' or skill_id == 60041:
+                logger.info(f"[Battle] T{turn}: {actor_name} flees from combat!")
+                # AC 50:6 action execution signal
+                await session.send_packet(
+                    PacketWriter().write_8(50).write_8(6).write_8(actor['x']).write_8(actor['y']).write_8(0)
+                )
+                # AC 50:1 Flee animation
+                p_flee = PacketWriter()
+                p_flee.write_8(50).write_8(1)
+                p_flee.write_8(0x11).write_8(0x00)
+                p_flee.write_8(actor['x']).write_8(actor['y'])
+                p_flee.write_16(60041)
+                p_flee.write_8(0).write_8(1)
+                p_flee.write_8(actor['x']).write_8(actor['y'])
+                p_flee.write_8(1).write_8(0).write_8(1)
+                p_flee.write_8(0).write_32(0).write_8(1)
+                await session.send_packet(p_flee)
+                await asyncio.sleep(1.5)
+                await self._end_battle(session, battle, won=False, fled=True)
+                return
+
+            # ── 2. DEFEND / SHIELD ACTION (Skill 60021 / 0xea75) ──
+            if action_name == 'defend' or skill_id == 60021:
+                actor['is_defending'] = True
+                logger.info(f"[Battle] T{turn}: {actor_name} enters defensive stance (50% damage reduction).")
+                continue
 
             # Find target monster
             target_mon = None
@@ -3511,9 +3610,104 @@ class GameServer:
                         target_mon = m
                         break
 
-            if not target_mon and action_name != 'defend':
+            if not target_mon:
                 continue
 
+            # ── 3. PET CAPTURE ACTION (Skill 10008 / 0x2718) ──
+            if action_name == 'capture' or skill_id == 10008:
+                logger.info(f"[Battle] T{turn}: {actor_name} attempts to capture {target_mon['name']} at ({target_mon['x']},{target_mon['y']}).")
+                # AC 50:6 action execution signal
+                await session.send_packet(
+                    PacketWriter().write_8(50).write_8(6).write_8(actor['x']).write_8(actor['y']).write_8(0)
+                )
+                # AC 50:1 Capture animation
+                p_cap = PacketWriter()
+                p_cap.write_8(50).write_8(1)
+                p_cap.write_8(0x11).write_8(0x00)
+                p_cap.write_8(actor['x']).write_8(actor['y'])
+                p_cap.write_16(10008)
+                p_cap.write_8(0).write_8(1)
+                p_cap.write_8(target_mon['x']).write_8(target_mon['y'])
+                p_cap.write_8(1).write_8(0).write_8(1)
+                p_cap.write_8(0).write_32(0).write_8(1)
+                await session.send_packet(p_cap)
+                await asyncio.sleep(2.0)
+
+                # Roll catch success via battle engine
+                from server.battle_engine import GLOBAL_BATTLE_ENGINE
+                caught = GLOBAL_BATTLE_ENGINE.roll_catch_success(
+                    actor.get('level', 1),
+                    target_mon.get('hp', 1),
+                    target_mon.get('max_hp', 100),
+                    target_mon.get('level', 1)
+                )
+
+                if caught:
+                    logger.info(f"[Battle] T{turn}: Successfully captured {target_mon['name']}!")
+                    # AC 11:4 - Authentic Catch Success Packet: [11, 4, 2, mon_id (4 bytes), 00 00, 01]
+                    p11_4 = PacketWriter()
+                    p11_4.write_8(11).write_8(4).write_8(2)
+                    p11_4.write_32(target_mon['id'])
+                    p11_4.write_16(0)
+                    p11_4.write_8(1)
+                    await session.send_packet(p11_4)
+
+                    # Add pet to player's companions
+                    pet_entry = {
+                        'pet_id': target_mon['id'],
+                        'name': target_mon.get('name', 'Pet'),
+                        'level': target_mon.get('level', 1),
+                        'element': target_mon.get('element', 0),
+                        'hp': target_mon.get('max_hp', 100),
+                        'max_hp': target_mon.get('max_hp', 100),
+                        'sp': target_mon.get('max_sp', 50),
+                        'max_sp': target_mon.get('max_sp', 50),
+                        'in_battle': False,
+                        'str': target_mon.get('atk', 10) // 2,
+                        'con': target_mon.get('def', 10) // 2,
+                        'int': target_mon.get('matk', 10) // 2,
+                        'wis': target_mon.get('mdef', 10) // 2,
+                        'agi': target_mon.get('spd', 10) // 2,
+                        'exp': 0,
+                        'potential': 0
+                    }
+                    if not hasattr(session, 'pets') or session.pets is None:
+                        session.pets = []
+                    session.pets.append(pet_entry)
+                    self.save_player_to_db(session)
+
+                    # Send notification & refresh pet list
+                    await session.send_packet(
+                        PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
+                            f"Successfully caught {target_mon['name']}!"
+                        )
+                    )
+                    await self.send_pet_list(session)
+
+                    # Mark monster as captured & remove from grid
+                    target_mon['hp'] = 0
+                    target_mon['captured'] = True
+                    await session.send_packet(
+                        PacketWriter().write_8(53).write_8(1).write_8(target_mon['x']).write_8(target_mon['y']).write_8(1).write_8(0).write_8(0)
+                    )
+                    await session.send_packet(
+                        PacketWriter().write_8(53).write_8(3).write_8(target_mon['x']).write_8(target_mon['y'])
+                    )
+
+                    # If all monsters captured or dead, end battle with victory
+                    if all(m['hp'] <= 0 for m in monsters):
+                        await self._end_battle(session, battle, won=True)
+                        return
+                else:
+                    logger.info(f"[Battle] T{turn}: Failed to capture {target_mon['name']}.")
+                    await session.send_packet(
+                        PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
+                            f"Failed to capture {target_mon['name']}!"
+                        )
+                    )
+                continue
+
+            # ── 4. ATTACK / SKILL ACTION ──
             # Skill lookup
             def get_skill_info(sid, actor_el):
                 if hasattr(self, 'parsed_skills') and sid in self.parsed_skills:
@@ -3533,6 +3727,11 @@ class GameServer:
                             p['sp'] = actor['sp']
                             break
                 sync_packets.append((actor['x'], actor['y'], actor['sp'], 0x1a))
+
+            # Send AC 50:6 action execution signal
+            await session.send_packet(
+                PacketWriter().write_8(50).write_8(6).write_8(actor['x']).write_8(actor['y']).write_8(0)
+            )
 
             if is_heal:
                 heal_val = int(round(actor['matk'] * multiplier))
@@ -3572,8 +3771,6 @@ class GameServer:
                     modified_atk += int(15 * multiplier)
 
                 dmg = calculate_atk_damage(modified_atk, def_stat, hitter_element, target_element)
-                if action_name == 'defend':
-                    dmg = max(1, dmg // 2)
 
                 if target_mon:
                     target_mon['hp'] = max(0, target_mon['hp'] - dmg)
@@ -3593,13 +3790,16 @@ class GameServer:
 
                     sync_packets.append((target_mon['x'], target_mon['y'], target_mon['hp'], 0x19))
 
-        # Send action notifications (AC 53 Sub 5) for all actors
-        for actor, _ in actions_to_process:
-            await session.send_packet(
-                PacketWriter().write_8(53).write_8(5).write_8(actor['x']).write_8(actor['y'])
-            )
+                    # If monster was defeated, remove from combat grid
+                    if target_mon['hp'] <= 0:
+                        await session.send_packet(
+                            PacketWriter().write_8(53).write_8(1).write_8(target_mon['x']).write_8(target_mon['y']).write_8(1).write_8(0).write_8(0)
+                        )
+                        await session.send_packet(
+                            PacketWriter().write_8(53).write_8(3).write_8(target_mon['x']).write_8(target_mon['y'])
+                        )
 
-        # Send combined animations
+        # Send combined attack/heal animations
         if len(combined_anim.buffer) > 2:
             await session.send_packet(combined_anim)
 
@@ -3609,8 +3809,9 @@ class GameServer:
                 PacketWriter().write_8(51).write_8(1).write_8(x).write_8(y).write_8(stat).write_32(val)
             )
 
-        # Wait for player animations to complete
-        await asyncio.sleep(2.0 if len(actions_to_process) == 1 else 3.8)
+        # Wait for animations to display
+        if len(combined_anim.buffer) > 2:
+            await asyncio.sleep(2.0 if len(actions_to_process) == 1 else 3.5)
 
         # Save DB
         self.save_player_to_db(session)
@@ -3673,9 +3874,9 @@ class GameServer:
 
             dmg_to_target = calculate_atk_damage(modified_atk, target['def'], hitter_element, target['element'])
             
-            # Check if target defended in this turn
-            target_acted = battle['pending_actions'].get((target['x'], target['y']))
-            if target_acted and target_acted['action'] == 'defend':
+            # Check if target defended in this turn (50% reduction + guarded hit flag)
+            target_defended = target.get('is_defending', False)
+            if target_defended:
                 dmg_to_target = max(1, dmg_to_target // 2)
 
             target['hp'] = max(0, target['hp'] - dmg_to_target)
@@ -3688,14 +3889,15 @@ class GameServer:
                         p['hp'] = target['hp']
                         break
 
-            logger.info(f"[Battle] T{turn}: {mf['name']} -> {target_name} using skill={skill_id}: {dmg_to_target} dmg. Target HP: {target['hp']}/{target['max_hp']}")
+            logger.info(f"[Battle] T{turn}: {mf['name']} -> {target_name} using skill={skill_id}: {dmg_to_target} dmg. Target HP: {target['hp']}/{target['max_hp']} (Defended: {target_defended})")
 
-            # AC 53:5 – monster action notification
+            # AC 50:6 – monster action execution signal
             await session.send_packet(
-                PacketWriter().write_8(53).write_8(5).write_8(mf['x']).write_8(mf['y'])
+                PacketWriter().write_8(50).write_8(6).write_8(mf['x']).write_8(mf['y']).write_8(0)
             )
 
-            # AC 50:1 – monster animation
+            # AC 50:1 – monster animation (with guarded flag if defended)
+            is_defended_flag = 1 if target_defended else 0
             p_manim = PacketWriter()
             p_manim.write_8(50).write_8(1)
             p_manim.write_8(0x11).write_8(0x00)
@@ -3703,7 +3905,7 @@ class GameServer:
             p_manim.write_16(skill_id)
             p_manim.write_8(0).write_8(1)
             p_manim.write_8(target['x']).write_8(target['y'])
-            p_manim.write_8(1).write_8(0).write_8(1)
+            p_manim.write_8(1).write_8(is_defended_flag).write_8(1)
             p_manim.write_8(0x19)
             p_manim.write_32(dmg_to_target)
             p_manim.write_8(1)
@@ -3726,22 +3928,22 @@ class GameServer:
                 await self._end_battle(session, battle, won=False)
                 return
 
-        # ── Sonraki Tur: AC 53:5, AC 50:6, AC 52:1 ─────────────────────────────
-        await session.send_packet(
-            PacketWriter().write_8(53).write_8(5).write_8(pf['x']).write_8(pf['y'])
-        )
-        if pet_f and pet_f['hp'] > 0:
+        # ── Sonraki Tur: HP/SP Sync & AC 52:1 (20s Round Timer) ───────────────────
+        for stat, val in [(0x19, pf['hp']), (0x1a, pf['sp'])]:
             await session.send_packet(
-                PacketWriter().write_8(53).write_8(5).write_8(pet_f['x']).write_8(pet_f['y'])
+                PacketWriter().write_8(51).write_8(1).write_8(pf['x']).write_8(pf['y']).write_8(stat).write_32(val)
             )
-
-        await session.send_packet(
-            PacketWriter().write_8(50).write_8(6).write_8(pf['x']).write_8(pf['y']).write_8(0)
-        )
         if pet_f and pet_f['hp'] > 0:
-            await session.send_packet(
-                PacketWriter().write_8(50).write_8(6).write_8(pet_f['x']).write_8(pet_f['y']).write_8(0)
-            )
+            for stat, val in [(0x19, pet_f['hp']), (0x1a, pet_f['sp'])]:
+                await session.send_packet(
+                    PacketWriter().write_8(51).write_8(1).write_8(pet_f['x']).write_8(pet_f['y']).write_8(stat).write_32(val)
+                )
+        for mf in monsters:
+            if mf['hp'] > 0:
+                for stat, val in [(0x19, mf['hp']), (0x1a, mf['sp'])]:
+                    await session.send_packet(
+                        PacketWriter().write_8(51).write_8(1).write_8(mf['x']).write_8(mf['y']).write_8(stat).write_32(val)
+                    )
 
         await session.send_packet(
             PacketWriter().write_8(52).write_8(1)

@@ -41,10 +41,12 @@ This repository contains a custom python-based server implementation for Wonderl
 - `server/recycle_system.py` - Smelting furnace recycling of obsolete equipment into raw materials
 - `server/death_system.py` - Combat defeat EXP loss, ghost state aura, and sacred altar respawns
 - `server/events_system.py` - Scheduled server events, Double EXP 2.0x multiplier, and festival notices
+- `server/version_validator.py` - Client version validation, Data\\Item.Dat integrity checks, and authentic Opcode 0 disconnect responses (AC 0 0x41 Wrong Version)
 - `server/dynamic_data_manager.py` - Central dynamic configuration manager (drops, crafting, alchemy, chests, gathering, instances)
 - `server/npc_manager.py` - Authentic NPC & world entity manager, C# QuestNpc parity, scripted waypoint pacing, and blinking prevention
 - `server/eve_loader.py` - Authentic binary parser for 1,119 maps in `data/eve.Emg` (NPCs, portals, chests, mining, bytecode events)
 - `docs/` - Technical Documentation:
+  - [Client Version & File Integrity Validation](docs/client_version_and_integrity_validation.md) - Client build version checking, Data\\Item.Dat integrity checks, and authentic Opcode 0 reason codes (0x41 Wrong Version, 0x45 Item.dat File Error)
   - [aLogin.exe Master Function Index & Reverse Engineering Catalog](docs/alogin_master_function_index.md)
   - [aLogin.exe Binary Architecture & Function Map](docs/alogin_functions_architecture.md)
   - [aLogin.exe Network Communication & Opcode Protocol](docs/alogin_network_and_packet_protocol.md)
@@ -54,7 +56,10 @@ This repository contains a custom python-based server implementation for Wonderl
   - [aLogin.exe Inventory, Forging, Alchemy & Economy](docs/alogin_inventory_item_and_economy.md)
   - [aLogin.exe Quest Journal, Dialogue & PreEvent Engine](docs/alogin_quest_dialogue_and_preevent.md)
   - [aLogin.exe Mini-Games, Lucky Draw & Item Mall](docs/alogin_minigames_events_and_mall.md)
-  - [aLogin.exe DirectX Graphics, Audio & Security Engine](docs/alogin_graphics_audio_and_security.md)
+  - [Authentic Combat Engine & Action Protocol](docs/authentic_combat_engine.md) - Turn-based combat cycle, immediate AC 53:5 ACK, Defend (60021), Flee (60041), and Pet Capture (10008 + AC 11:4) reverse-engineered from real pcaps
+  - [HP/MP Auto-Recovery & Lucky Draw Protocol](docs/hpmp_autofill_and_luckydraw.md) - Quick HP/MP refill button (AC 23:15 / AC 23:208) and Lucky Draw stop & delivery packets (AC 104:1 / AC 23:6) reverse-engineered from real pcaps
+  - [Ground Item Pickup & Compounding Protocol](docs/ground_item_and_compounding_protocol.md) - Ground item interaction & despawn broadcast (AC 23:2 / AC 23:6) and compounding/alchemy synthesis cycle (AC 23:14 / AC 23:122 / AC 23:9 / AC 23:8 / AC 23:13) reverse-engineered from real pcaps
+  - [User & IP Ban System & Account Search](docs/user_and_ip_ban_system.md) - Account banning, IP banning with subnet & loopback protection, last login IP tracking, multi-field search (IP, character, username, ID), and Modern Desktop GUI integration
   - [Dynamic Chests & Gathering Node Loot System](docs/chest_and_gathering_loot_system.md)
   - [Item Mall Catalog & Customization System](docs/item_mall_configuration.md)
   - [NPC Blinking Prevention & AI Waypoint Architecture](docs/npc_blinking_and_ai_system.md)
@@ -74,8 +79,11 @@ This repository contains a custom python-based server implementation for Wonderl
   - [database_management.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/database_management.md>) - SQLite DB schemas and data access methods
   - [network_protocol.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/network_protocol.md>) - Custom packet framing, XOR decryption, and helpers
   - [game_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/game_systems.md>) - Battle engine, GM commands, distance rules, and tent mechanics
-  - [web_services.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/web_services.md>) - Web Admin panel & Web registration details
+  - [web_services.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/web_services.md>) - Web registration service details and Modern Desktop GUI architecture
   - [mini_games_and_mall.md](file:///docs/mini_games_and_mall.md) - Item Mall network protocols (AC 0/13/21/23/34/57/71/75/104/226, TCP 6416), Server Branding (Mamiletta / GUI edit), Claw Crane/Mini-Game gameplay and Exit handling, and Lucky Draw mechanics
+  - [item_mall_configuration.md](file:///docs/item_mall_configuration.md) - Authentic Item Mall & Bonus Mall Subsystem, 11-page Grocery catalog architecture, dual-currency checkout, and live packet capture specifications
+  - [authentic_shop_system.md](file:///docs/authentic_shop_system.md) - Authentic NPC Shop Protocol (AC 27 / 0x1B), Props Shop (1b 03), Weapon Shop (1b 04), Item Selling (1b 02), Inventory and Gold sync reverse-engineered from packet captures
+  - [first_quest_animations_protocol.md](file:///docs/first_quest_animations_protocol.md) - Ocean Star introductory quest line, multi-stage dialogue (Talk IDs 95660/95661), dynamic actor spawning (AC 3:123), camera waypoints (AC 22:4), and quest progression (AC 24:1/5)
   - [friends_and_mailbox_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/friends_and_mailbox_systems.md>) - Friend list pairings and invitation handshakes
   - [crafting_and_production_systems.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/crafting_and_production_systems.md>) - Manufacturing recipe checks and async timers
   - [authentication_and_login.md](<file:///c:/Users/muham/OneDrive/Documents/GitHub/Wonderland%20Online/docs/authentication_and_login.md>) - Login authentication check, slot lists, and redirects

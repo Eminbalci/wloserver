@@ -220,6 +220,35 @@ class AdvancedBattleManager:
 
         return False, 1.0
 
+    def calculate_catch_rate(
+        self,
+        player_level: int,
+        monster_cur_hp: int,
+        monster_max_hp: int,
+        monster_level: int
+    ) -> float:
+        """
+        Calculates pet capture success probability in WLO combat.
+        Lower monster remaining HP significantly increases capture chance.
+        Level difference provides bonus if player level >= monster level.
+        """
+        hp_ratio = monster_cur_hp / max(1, monster_max_hp)
+        base_rate = (1.0 - hp_ratio) * 0.70 + 0.15
+        lvl_diff = player_level - monster_level
+        rate = base_rate + (lvl_diff * 0.02)
+        return max(0.15, min(0.95, rate))
+
+    def roll_catch_success(
+        self,
+        player_level: int,
+        monster_cur_hp: int,
+        monster_max_hp: int,
+        monster_level: int
+    ) -> bool:
+        """Rolls a random check against calculate_catch_rate."""
+        rate = self.calculate_catch_rate(player_level, monster_cur_hp, monster_max_hp, monster_level)
+        return random.random() < rate
+
     def apply_status_effect(
         self,
         target: BattleUnit,

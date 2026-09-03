@@ -10,21 +10,47 @@ async def handle(server, session, reader):
     sub = reader.read_8()
     
     if sub == 4:  # Login Authentication
-        reader.read_16()  
+        client_version = reader.read_16()
         username = reader.read_string()
         password = reader.read_string()
+        file_check_payload = reader.data[reader.offset:] if reader.remaining_bytes() > 0 else b""
+
+        # 1. Validate Client Version & File Integrity
+        version_validator = getattr(server, "version_validator", None)
+        if version_validator:
+            is_valid, reason_code, reason_msg = version_validator.validate(client_version, file_check_payload)
+            if not is_valid:
+                logger.warning(
+                    f"[Auth] Client rejection: user='{username}', version={client_version} (0x{client_version:04X}) "
+                    f"— {reason_msg}. Disconnecting with reason {reason_code} (0x{reason_code:02X})."
+                )
+                # Authentic Opcode 0 disconnect response (e.g. 0x00, 0x41 for 'Wrong Version')
+                disconnect_pkt = version_validator.build_disconnect_packet(reason_code)
+                await session.send_packet(disconnect_pkt)
+                await session.send_packet(PacketWriter().write_8(1).write_8(6))
+                return
 
         if not username or len(username.strip()) == 0:
             fail_pkt = PacketWriter()
             fail_pkt.write_8(63).write_8(2)
             await session.send_packet(fail_pkt)
             return
-        
-        logger.info(f"[Auth] Username '{username}' attempting login...")
+
+        logger.info(f"[Auth] Username '{username}' (Client Ver: {client_version}) attempting login...")
         
         # Check database credentials
         user_data = server.db.verify_user(username, password)
         
+        if hasattr(server, 'db') and hasattr(server.db, 'is_ip_banned') and server.db.is_ip_banned(session.ip):
+            logger.warning(f"[Auth] Banned IP '{session.ip}' attempted login — login rejected.")
+            fail_pkt = PacketWriter()
+            fail_pkt.write_8(63).write_8(4)
+            await session.send_packet(fail_pkt)
+            sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Your IP address has been banned.")
+            await session.send_packet(sys_msg)
+            await session.send_packet(PacketWriter().write_8(1).write_8(6))
+            return
+
         if not user_data:
             logger.warning(f"[Auth] Unknown user '{username}' — login rejected.")
             fail_pkt = PacketWriter()
@@ -59,6 +85,10 @@ async def handle(server, session, reader):
         session.username = user_data['username']
         session.cipher = user_data['cipher']
         session.is_gm = user_data.get('is_gm', False)
+
+        # Track last login IP & timestamp in database
+        if hasattr(server, 'db') and hasattr(server.db, 'update_user_last_login'):
+            server.db.update_user_last_login(session.user_id, session.ip)
         
         # Send Login Success
         #success_pkt = PacketWriter()
