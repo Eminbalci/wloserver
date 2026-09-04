@@ -181,18 +181,20 @@ class ChestSystem:
                 return entry
         return entries[-1]
 
-    def is_chest_opened(self, char_id: int, map_id: int, chest_id: int) -> bool:
+    def is_chest_opened(self, char_id: int, map_id: int, chest_id: int, is_permanent: bool = False) -> bool:
         try:
             conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
+            row_match = conn.execute(
                 "SELECT opened_at FROM charchests WHERE char_id = ? AND map_id = ? AND chest_id = ?",
                 (char_id, map_id, chest_id)
             ).fetchone()
             conn.close()
-            if not row or row[0] is None:
+            if not row_match or row_match[0] is None:
                 return False
-            opened_at = float(row[0])
-            # If respawn time elapsed, chest/node is available again
+            if is_permanent:
+                return True
+            opened_at = float(row_match[0])
+            # If respawn time elapsed for gathering node, it is available again
             if self.default_respawn_seconds > 0 and (time.time() - opened_at) >= self.default_respawn_seconds:
                 return False
             return True
@@ -267,8 +269,9 @@ class ChestSystem:
             if m_cid == chest_id:
                 if hasattr(m_npc, 'is_broken'):
                     m_npc.is_broken = True
+                    is_perm = hasattr(m_npc, 'is_permanent_chest') and m_npc.is_permanent_chest()
                     is_gather = hasattr(m_npc, 'is_gathering_node') and m_npc.is_gathering_node()
-                    if is_gather or self.default_respawn_seconds > 0:
+                    if not is_perm and (is_gather or self.default_respawn_seconds > 0):
                         m_npc.respawn_time = time.time() + self.default_respawn_seconds
                     else:
                         m_npc.respawn_time = 0.0

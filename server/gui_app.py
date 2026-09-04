@@ -43,10 +43,108 @@ except ImportError:
 from server.dynamic_data_manager import GLOBAL_DYNAMIC_DATA
 from server.dat_loaders import GLOBAL_NPC_DAT, GLOBAL_TALK_DAT, GLOBAL_ITEM_DAT
 from server.item_mall import GLOBAL_ITEM_MALL_MANAGER, resolve_category_id, CATEGORY_ID_TO_NAME
+from server.starter_pack_manager import GLOBAL_STARTER_PACK_MANAGER
 from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
 from server.network import PacketWriter
 
 logger = logging.getLogger("ModernGUI")
+
+
+# =========================================================================
+# UI Scrollbar Helper Utilities
+# =========================================================================
+
+def attach_scrollbar(widget, parent, side="right", fill="y", pack_widget=True, padx=(0, 2), pady=0):
+    """
+    Attaches a modern themed scrollbar to any scrollable Tk/ttk widget (Treeview, Listbox, Text).
+    If pack_widget is True, packs the widget on the left and the scrollbar on the right.
+    Returns (scrollbar, container_frame).
+    """
+    container = ctk.CTkFrame(parent, fg_color="transparent")
+    container.pack(fill="both", expand=True)
+
+    if HAS_CTK:
+        scrollbar = ctk.CTkScrollbar(container, orientation="vertical", command=widget.yview)
+    else:
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=widget.yview)
+
+    widget.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side=side, fill=fill, padx=padx, pady=pady)
+    widget.pack(side="left", fill="both", expand=True)
+
+    return scrollbar, container
+
+
+def create_scrolled_treeview(parent, columns, show="headings", selectmode="extended", height=10, padx=10, pady=6):
+    """
+    Creates a ttk.Treeview with a docked vertical scrollbar inside a dedicated transparent frame.
+    Returns (tree, scrollbar, frame).
+    """
+    frame = ctk.CTkFrame(parent, fg_color="transparent")
+    frame.pack(fill="both", expand=True, padx=padx, pady=pady)
+
+    tree = ttk.Treeview(frame, columns=columns, show=show, selectmode=selectmode, height=height)
+
+    if HAS_CTK:
+        scrollbar = ctk.CTkScrollbar(frame, orientation="vertical", command=tree.yview)
+    else:
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=tree.yview)
+
+    tree.configure(yscrollcommand=scrollbar.set)
+    scrollbar.pack(side="right", fill="y", padx=(2, 0))
+    tree.pack(side="left", fill="both", expand=True)
+
+    return tree, scrollbar, frame
+
+
+# Helper for item display names
+_ITEM_NAMES_CACHE: Dict[int, str] = {}
+
+def get_item_display_name(item_id: int) -> str:
+    """Resolves item ID to human-readable item name from starter pack, items.json, Item.dat, or dynamic tables."""
+    if not item_id:
+        return "Empty"
+    if item_id in _ITEM_NAMES_CACHE:
+        return _ITEM_NAMES_CACHE[item_id]
+
+    # 1. Check starter items dynamic table / manager
+    try:
+        from server.starter_pack_manager import GLOBAL_STARTER_PACK_MANAGER
+        for it in GLOBAL_STARTER_PACK_MANAGER.get_items():
+            if it.item_id == item_id and it.item_name:
+                _ITEM_NAMES_CACHE[item_id] = it.item_name
+                return it.item_name
+    except Exception:
+        pass
+
+    # 2. Check items.json
+    try:
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        json_path = os.path.join(base_dir, "server", "data", "items.json")
+        if os.path.exists(json_path):
+            with open(json_path, "r", encoding="utf-8") as f:
+                d = json.load(f)
+                name = d.get(str(item_id))
+                if name:
+                    _ITEM_NAMES_CACHE[item_id] = name
+                    return name
+    except Exception:
+        pass
+
+    # 3. Check binary Item.dat
+    try:
+        from server.dat_loaders import GLOBAL_ITEM_DAT
+        it = GLOBAL_ITEM_DAT.items.get(item_id)
+        if it and getattr(it, "name", None):
+            _ITEM_NAMES_CACHE[item_id] = it.name
+            return it.name
+    except Exception:
+        pass
+
+    fallback = f"Item #{item_id}"
+    _ITEM_NAMES_CACHE[item_id] = fallback
+    return fallback
+
 
 
 # =========================================================================
@@ -227,11 +325,10 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
 
         # Quests Treeview
         cols = ("QuestID", "QuestName", "StateCode", "StateDescription", "Step")
-        self.tree_quests = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_quests, self.sb_quests, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         for c in cols:
             self.tree_quests.heading(c, text=c)
             self.tree_quests.column(c, width=80 if c in ("QuestID", "StateCode", "Step") else 200, anchor="center")
-        self.tree_quests.pack(fill="both", expand=True, padx=10, pady=6)
 
     # 3. Pets Tab
     def _build_pets_tab(self, parent):
@@ -261,11 +358,10 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
         ctk.CTkButton(tb, text="🗑 Dismiss Selected Pet", fg_color="#DA3633", width=150, command=self.action_delete_pet).pack(side="right", padx=4)
 
         cols = ("Slot", "PetID", "Name", "Level", "Amity", "HP", "SP", "STR", "CON", "AGI")
-        self.tree_pets = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_pets, self.sb_pets, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         for c in cols:
             self.tree_pets.heading(c, text=c)
             self.tree_pets.column(c, width=70 if c != "Name" else 130, anchor="center")
-        self.tree_pets.pack(fill="both", expand=True, padx=10, pady=6)
 
     # 4. Inventory Tab
     def _build_inv_tab(self, parent):
@@ -287,11 +383,10 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
         ctk.CTkButton(tb, text="🧹 Clear All 50 Slots", fg_color="#21262D", width=140, command=self.action_clear_inventory).pack(side="right", padx=4)
 
         cols = ("Slot", "ItemID", "ItemName", "Amount", "Damage", "Defense", "SparBonus")
-        self.tree_inv = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_inv, self.sb_inv, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         for c in cols:
             self.tree_inv.heading(c, text=c)
             self.tree_inv.column(c, width=70 if c in ("Slot", "ItemID", "Amount") else 140, anchor="center")
-        self.tree_inv.pack(fill="both", expand=True, padx=10, pady=6)
 
     # 5. Skills Tab
     def _build_skills_tab(self, parent):
@@ -313,11 +408,10 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
         ctk.CTkButton(tb, text="🔄 Reset All Skills", fg_color="#21262D", width=130, command=self.action_reset_skills).pack(side="right", padx=4)
 
         cols = ("SkillID", "SkillName", "Grade", "EXP", "SPCost", "Element")
-        self.tree_skills = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_skills, self.sb_skills, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         for c in cols:
             self.tree_skills.heading(c, text=c)
             self.tree_skills.column(c, width=80 if c in ("SkillID", "Grade", "SPCost") else 150, anchor="center")
-        self.tree_skills.pack(fill="both", expand=True, padx=10, pady=6)
 
     # 6. NPC Visibility Tab
     def _build_vis_tab(self, parent):
@@ -333,11 +427,10 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
         ctk.CTkButton(tb, text="🙈 Force Hide NPC", fg_color="#DA3633", width=130, command=self.action_force_hide_npc).pack(side="right", padx=4)
 
         cols = ("ClickID", "NPCName", "TemplateID", "PreEventRule", "CurrentVisibility", "OverrideState")
-        self.tree_vis = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_vis, self.sb_vis, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         for c in cols:
             self.tree_vis.heading(c, text=c)
             self.tree_vis.column(c, width=90 if c in ("ClickID", "TemplateID") else 160, anchor="center")
-        self.tree_vis.pack(fill="both", expand=True, padx=10, pady=6)
 
     # Data Loaders
     def load_all_character_data(self):
@@ -349,12 +442,17 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
 
         # Load from DB
         try:
+            # Clear all treeviews before loading fresh data
+            for tree in (self.tree_inv, self.tree_quests, self.tree_skills, self.tree_pets, self.tree_vis):
+                for item_id in tree.get_children():
+                    tree.delete(item_id)
+
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
 
             # Character table
             cur.execute("""
-                SELECT id, name, user_id, level, hp, gold, element, reborn, job, map_id, x, y, points, potential, skill_points, inventory, skills, quests, pets 
+                SELECT id, name, user_id, level, hp, gold, element, reborn, job, map_id, x, y, points, potential, skill_points, inventory, skills, quests, pets, str, con, int, wis, agi, exp, bank_gold 
                 FROM characters 
                 WHERE id = ? OR name = ?
             """, (self.char_id, self.char_name))
@@ -364,17 +462,34 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
                 self.char_name = row[1]
                 data = {
                     "char_id": row[0], "char_name": row[1], "account_id": row[2],
-                    "level": row[3], "exp": 0, "gold": row[5], "bank_gold": 0,
+                    "level": row[3], "exp": row[24] if len(row) > 24 and row[24] is not None else 0,
+                    "gold": row[5], "bank_gold": row[25] if len(row) > 25 and row[25] is not None else 0,
                     "element": row[6], "reborn": row[7], "reborn_job": row[8],
-                    "str": 10, "con": 10, "int": 10, "wis": 10, "agi": 10,
-                    "stat_points": row[12], "potential": row[13], "map_id": row[9],
-                    "x": row[10], "y": row[11]
+                    "str": row[19] if len(row) > 19 and row[19] is not None else 10,
+                    "con": row[20] if len(row) > 20 and row[20] is not None else 10,
+                    "int": row[21] if len(row) > 21 and row[21] is not None else 10,
+                    "wis": row[22] if len(row) > 22 and row[22] is not None else 10,
+                    "agi": row[23] if len(row) > 23 and row[23] is not None else 10,
+                    "stat_points": row[12] if row[12] is not None else 0,
+                    "potential": row[13] if row[13] is not None else 0,
+                    "map_id": row[9] if row[9] is not None else 10001,
+                    "x": row[10] if row[10] is not None else 300,
+                    "y": row[11] if row[11] is not None else 400
                 }
                 for k, v in data.items():
                     if k in self.stat_entries:
                         ent = self.stat_entries[k]
                         if isinstance(ent, ctk.CTkComboBox):
-                            ent.set(str(v))
+                            # Match prefix for combo boxes (e.g., '1 - Water')
+                            v_str = str(v)
+                            matched = False
+                            for opt in getattr(ent, "_values", []):
+                                if opt.startswith(f"{v_str} ") or opt.startswith(f"{v_str}-"):
+                                    ent.set(opt)
+                                    matched = True
+                                    break
+                            if not matched:
+                                ent.set(v_str)
                         else:
                             ent.delete(0, tk.END)
                             ent.insert(0, str(v))
@@ -383,13 +498,24 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
                 if row[15]:
                     try:
                         inv_list = json.loads(row[15]) if isinstance(row[15], str) else row[15]
-                        for idx, item in enumerate(inv_list, 1):
-                            iid = item if isinstance(item, int) else item.get('id', 0)
-                            amt = 1 if isinstance(item, int) else item.get('count', 1)
-                            iname = GLOBAL_DYNAMIC_DATA.get_item_name(iid) if hasattr(GLOBAL_DYNAMIC_DATA, "get_item_name") else f"Item #{iid}"
-                            self.tree_inv.insert("", "end", values=(idx, iid, iname, amt, 0, 0, 0))
-                    except Exception:
-                        pass
+                        if isinstance(inv_list, list):
+                            for idx, item in enumerate(inv_list, 1):
+                                if isinstance(item, int):
+                                    iid = item
+                                    amt = 1
+                                    dmg = 0
+                                    slot = idx
+                                elif isinstance(item, dict):
+                                    iid = item.get("item_id") or item.get("id") or 0
+                                    amt = item.get("amount") or item.get("count") or 1
+                                    dmg = item.get("damage", 0)
+                                    slot = item.get("slot", idx)
+                                else:
+                                    continue
+                                iname = get_item_display_name(iid)
+                                self.tree_inv.insert("", "end", values=(slot, iid, iname, amt, dmg, 0, 0))
+                    except Exception as e:
+                        logger.error(f"[CharEditor] Error parsing inventory JSON: {e}")
 
                 # Parse JSON quests
                 if row[17]:
@@ -409,9 +535,12 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
                 if row[16]:
                     try:
                         sk_list = json.loads(row[16]) if isinstance(row[16], str) else row[16]
-                        for sk in sk_list:
-                            sk_id = sk if isinstance(sk, int) else sk.get("id", 0)
-                            self.tree_skills.insert("", "end", values=(sk_id, f"Skill #{sk_id}", 1, 0, 15, "Universal"))
+                        if isinstance(sk_list, list):
+                            for sk in sk_list:
+                                sk_id = sk if isinstance(sk, int) else (sk.get("skill_id") or sk.get("id") or 0)
+                                gr = 1 if isinstance(sk, int) else sk.get("grade", 1)
+                                exp = 0 if isinstance(sk, int) else sk.get("exp", 0)
+                                self.tree_skills.insert("", "end", values=(sk_id, f"Skill #{sk_id}", gr, exp, 15, "Universal"))
                     except Exception:
                         pass
 
@@ -421,9 +550,13 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
                         pet_list = json.loads(row[18]) if isinstance(row[18], str) else row[18]
                         if isinstance(pet_list, list):
                             for idx, p in enumerate(pet_list, 1):
-                                pid = p if isinstance(p, int) else p.get("id", 0)
-                                pname = "Companion" if isinstance(p, int) else p.get("name", "Companion")
-                                self.tree_pets.insert("", "end", values=(idx, pid, pname, 10, 100, 500, 200, 15, 15, 15))
+                                pid = p if isinstance(p, int) else (p.get("pet_id") or p.get("id") or 0)
+                                pname = "Companion" if isinstance(p, int) else p.get("name", f"Pet #{pid}")
+                                plvl = 10 if isinstance(p, int) else p.get("level", 10)
+                                pamity = 100 if isinstance(p, int) else p.get("amity", 100)
+                                php = 500 if isinstance(p, int) else p.get("hp", 500)
+                                psp = 200 if isinstance(p, int) else p.get("sp", 200)
+                                self.tree_pets.insert("", "end", values=(idx, pid, pname, plvl, pamity, php, psp, 15, 15, 15))
                     except Exception:
                         pass
 
@@ -460,9 +593,13 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
                 UPDATE characters SET
                     level = ?, gold = ?, element = ?,
                     reborn = ?, job = ?, points = ?, potential = ?,
-                    map_id = ?, x = ?, y = ?
+                    map_id = ?, x = ?, y = ?,
+                    str = ?, con = ?, int = ?, wis = ?, agi = ?,
+                    exp = ?, bank_gold = ?
                 WHERE id = ? OR name = ?
-            """, (lvl, gold, elem, rb, rb_job, pts, pot, mid, pos_x, pos_y, self.char_id, self.char_name))
+            """, (lvl, gold, elem, rb, rb_job, pts, pot, mid, pos_x, pos_y,
+                  s_str, s_con, s_int, s_wis, s_agi, exp, bgold,
+                  self.char_id, self.char_name))
 
             conn.commit()
             conn.close()
@@ -485,7 +622,9 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
                 live.stat_points = pts
                 live.potential = pot
                 # Stat packet AC 8 Sub 1
-                if self.game_server and hasattr(self.game_server, "send_stat_packet"):
+                if self.game_server and hasattr(self.game_server, "send_stats_update"):
+                    asyncio.create_task(self.game_server.send_stats_update(live, levelup=False))
+                elif self.game_server and hasattr(self.game_server, "send_stat_packet"):
                     asyncio.create_task(self.game_server.send_stat_packet(live))
 
             messagebox.showinfo("Success", f"Character [{self.char_name}] successfully saved to database & live session!")
@@ -615,6 +754,15 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
             self._set_char_json("pets", pets)
         self.load_all_character_data()
 
+    def _sync_live_inventory(self, inv_list: List[Dict[str, Any]]):
+        """Synchronizes updated inventory to the live session and dispatches AC 23 Sub 5 packet."""
+        live = self._get_live_session()
+        if live:
+            live.inventory = list(inv_list)
+            if self.game_server and hasattr(self.game_server, "build_inventory_packet"):
+                pkt = self.game_server.build_inventory_packet(live)
+                asyncio.create_task(live.send_packet(pkt))
+
     def action_add_inv_item(self):
         try:
             iid = int(self.ent_inv_item_id.get())
@@ -622,15 +770,42 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
             inv = self._get_char_json("inventory", [])
             if not isinstance(inv, list):
                 inv = []
-            inv.append({"item_id": iid, "count": amt, "damage": 0})
+
+            # Find next free slot (1 to 50)
+            occupied_slots = set()
+            for it in inv:
+                if isinstance(it, dict) and "slot" in it:
+                    occupied_slots.add(it["slot"])
+            next_slot = 1
+            for s in range(1, 51):
+                if s not in occupied_slots:
+                    next_slot = s
+                    break
+
+            inv.append({"item_id": iid, "amount": amt, "damage": 0, "slot": next_slot})
             self._set_char_json("inventory", inv)
+            self._sync_live_inventory(inv)
             self.load_all_character_data()
-            messagebox.showinfo("Item Added", f"Added {amt}x Item #{iid} to inventory.")
+            iname = get_item_display_name(iid)
+            messagebox.showinfo("Item Added", f"Added {amt}x {iname} (ID: {iid}) at Slot {next_slot}.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to add item: {e}")
 
     def action_repair_inv_item(self):
-        messagebox.showinfo("Repaired", "Selected equipment durability restored to full!")
+        sel = self.tree_inv.selection()
+        if not sel:
+            messagebox.showinfo("Info", "Please select an item from the inventory table first.")
+            return
+        slot = int(self.tree_inv.item(sel[0])["values"][0])
+        inv = self._get_char_json("inventory", [])
+        if isinstance(inv, list):
+            for it in inv:
+                if isinstance(it, dict) and it.get("slot") == slot:
+                    it["damage"] = 0
+            self._set_char_json("inventory", inv)
+            self._sync_live_inventory(inv)
+            self.load_all_character_data()
+        messagebox.showinfo("Repaired", f"Slot {slot} item durability restored to 0 damage (100% full)!")
 
     def action_delete_inv_item(self):
         sel = self.tree_inv.selection()
@@ -638,15 +813,17 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
             return
         slot = int(self.tree_inv.item(sel[0])["values"][0])
         inv = self._get_char_json("inventory", [])
-        if isinstance(inv, list) and 0 <= slot - 1 < len(inv):
-            inv.pop(slot - 1)
+        if isinstance(inv, list):
+            inv = [it for it in inv if not (isinstance(it, dict) and it.get("slot") == slot)]
             self._set_char_json("inventory", inv)
+            self._sync_live_inventory(inv)
         self.load_all_character_data()
 
     def action_clear_inventory(self):
         if not messagebox.askyesno("Confirm", "Are you sure you want to clear this entire inventory?"):
             return
         self._set_char_json("inventory", [])
+        self._sync_live_inventory([])
         self.load_all_character_data()
 
     def action_add_skill(self):
@@ -913,6 +1090,171 @@ class MallItemEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
 
 
 # =========================================================================
+# Starter Item Pack Editor Dialog
+# =========================================================================
+
+class StarterItemEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
+    """Interactive Add / Edit Starter Gift Item Modal Dialog."""
+
+    def __init__(self, parent, item_data: Optional[Dict[str, Any]] = None, on_save_callback: Any = None):
+        super().__init__(parent)
+        self.item_data = item_data or {}
+        self.on_save_callback = on_save_callback
+        self.is_edit = bool(item_data and item_data.get("item_id"))
+
+        self.title("✏ Edit Starter Gift Item" if self.is_edit else "➕ Add New Starter Gift Item")
+        self.geometry("520x460")
+        self.resizable(False, False)
+
+        if HAS_CTK:
+            self.configure(fg_color="#0D1117")
+
+        self._build_ui()
+        if self.is_edit:
+            self._prefill_data()
+        self.grab_set()
+
+    def _build_ui(self):
+        top = ctk.CTkFrame(self, height=45, fg_color="#161B22", corner_radius=8)
+        top.pack(fill="x", padx=15, pady=(15, 10))
+
+        title_text = "✏ Edit Starter Gift Item" if self.is_edit else "➕ Add New Starter Gift Item"
+        ctk.CTkLabel(top, text=title_text, font=ctk.CTkFont(size=15, weight="bold"), text_color="#38BDF8").pack(side="left", padx=15, pady=8)
+
+        form = ctk.CTkFrame(self, fg_color="#161B22", corner_radius=10)
+        form.pack(fill="both", expand=True, padx=15, pady=5)
+
+        # 1. Item ID
+        ctk.CTkLabel(form, text="Item ID (e.g. 34058):", font=ctk.CTkFont(weight="bold"), text_color="#E6EDF3").pack(anchor="w", padx=15, pady=(12, 2))
+        self.ent_item_id = ctk.CTkEntry(form, width=460, placeholder_text="Enter Item ID")
+        self.ent_item_id.pack(padx=15, pady=2)
+        self.ent_item_id.bind("<KeyRelease>", self._on_item_id_changed)
+
+        # 2. Item Name
+        ctk.CTkLabel(form, text="Item Name / Display Title:", font=ctk.CTkFont(weight="bold"), text_color="#E6EDF3").pack(anchor="w", padx=15, pady=(8, 2))
+        self.ent_name = ctk.CTkEntry(form, width=460, placeholder_text="Item name")
+        self.ent_name.pack(padx=15, pady=2)
+
+        # 3. Count & Order
+        row_cf = ctk.CTkFrame(form, fg_color="transparent")
+        row_cf.pack(fill="x", padx=15, pady=(8, 2))
+
+        f_cnt = ctk.CTkFrame(row_cf, fg_color="transparent")
+        f_cnt.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        ctk.CTkLabel(f_cnt, text="Quantity / Count:", font=ctk.CTkFont(weight="bold"), text_color="#E6EDF3").pack(anchor="w")
+        self.ent_count = ctk.CTkEntry(f_cnt, placeholder_text="1")
+        self.ent_count.insert(0, "1")
+        self.ent_count.pack(fill="x", pady=2)
+
+        f_ord = ctk.CTkFrame(row_cf, fg_color="transparent")
+        f_ord.pack(side="right", fill="x", expand=True, padx=(6, 0))
+        ctk.CTkLabel(f_ord, text="Order Index (Delivery Seq):", font=ctk.CTkFont(weight="bold"), text_color="#E6EDF3").pack(anchor="w")
+        self.ent_order = ctk.CTkEntry(f_ord, placeholder_text="1")
+        self.ent_order.insert(0, "1")
+        self.ent_order.pack(fill="x", pady=2)
+
+        # 4. Description
+        ctk.CTkLabel(form, text="Description / Admin Notes:", font=ctk.CTkFont(weight="bold"), text_color="#E6EDF3").pack(anchor="w", padx=15, pady=(8, 2))
+        self.ent_desc = ctk.CTkEntry(form, width=460, placeholder_text="Starter item description")
+        self.ent_desc.pack(padx=15, pady=2)
+
+        # Bottom Buttons
+        bottom = ctk.CTkFrame(self, height=45, fg_color="transparent")
+        bottom.pack(fill="x", padx=15, pady=(10, 15))
+
+        btn_save = ctk.CTkButton(
+            bottom,
+            text="💾 Save Starter Item",
+            font=ctk.CTkFont(weight="bold"),
+            fg_color="#10B981",
+            hover_color="#059669",
+            width=160,
+            height=34,
+            corner_radius=8,
+            command=self._action_save
+        )
+        btn_save.pack(side="right", padx=(6, 0))
+
+        btn_cancel = ctk.CTkButton(
+            bottom,
+            text="Cancel",
+            fg_color="#30363D",
+            hover_color="#3F4752",
+            width=90,
+            height=34,
+            corner_radius=8,
+            command=self.destroy
+        )
+        btn_cancel.pack(side="right")
+
+    def _on_item_id_changed(self, event=None):
+        val = self.ent_item_id.get().strip()
+        if val.isdigit():
+            iid = int(val)
+            item_info = GLOBAL_ITEM_DAT.get_item(iid)
+            if item_info and item_info.get("name"):
+                self.ent_name.delete(0, tk.END)
+                self.ent_name.insert(0, item_info["name"])
+
+    def _prefill_data(self):
+        d = self.item_data
+        self.ent_item_id.delete(0, tk.END)
+        self.ent_item_id.insert(0, str(d.get("item_id", "")))
+        if self.is_edit:
+            self.ent_item_id.configure(state="disabled")
+
+        self.ent_name.delete(0, tk.END)
+        self.ent_name.insert(0, str(d.get("item_name", "")))
+
+        self.ent_count.delete(0, tk.END)
+        self.ent_count.insert(0, str(d.get("count", 1)))
+
+        self.ent_order.delete(0, tk.END)
+        self.ent_order.insert(0, str(d.get("order_idx", 0)))
+
+        self.ent_desc.delete(0, tk.END)
+        self.ent_desc.insert(0, str(d.get("description", "")))
+
+    def _action_save(self):
+        try:
+            raw_id = self.ent_item_id.get().strip()
+            if not raw_id.isdigit() or int(raw_id) <= 0:
+                messagebox.showerror("Validation Error", "Please enter a valid numeric Item ID.")
+                return
+            item_id = int(raw_id)
+
+            name = self.ent_name.get().strip()
+            if not name:
+                name = f"Item #{item_id}"
+
+            count = max(1, int(self.ent_count.get().strip() or "1"))
+            order_idx = int(self.ent_order.get().strip() or "0")
+            desc = self.ent_desc.get().strip()
+
+            success = GLOBAL_DYNAMIC_DATA.add_or_update_starter_item(
+                item_id=item_id,
+                item_name=name,
+                count=count,
+                order_idx=order_idx,
+                description=desc
+            )
+            if not success:
+                messagebox.showerror("Error", "Failed to save starter item to database.")
+                return
+
+            GLOBAL_DYNAMIC_DATA.export_starter_items_json()
+            GLOBAL_STARTER_PACK_MANAGER.reload_from_db(GLOBAL_DYNAMIC_DATA)
+
+            if self.on_save_callback:
+                self.on_save_callback()
+
+            self.destroy()
+            messagebox.showinfo("Success", f"Starter Item #{item_id} ({name} x{count}) saved successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not save starter item: {e}")
+
+
+# =========================================================================
 # Main Modern Server GUI Application
 # =========================================================================
 
@@ -1032,6 +1374,7 @@ class ModernServerGUI:
         self.tab_drops = self.tabview.add("🐉 Monster Drops")
         self.tab_chests = self.tabview.add("📦 Chest Drops")
         self.tab_mall = self.tabview.add("💎 Item Mall")
+        self.tab_starter = self.tabview.add("🎁 Starter Items")
         self.tab_npc_res = self.tabview.add("🧙 NPC Resolver")
         self.tab_talk = self.tabview.add("📜 Talk Resolver")
         self.tab_settings = self.tabview.add("⚙️ Global Settings")
@@ -1046,6 +1389,7 @@ class ModernServerGUI:
         self._build_monster_drops_content(self.tab_drops)
         self._build_chest_drops_content(self.tab_chests)
         self._build_item_mall_content(self.tab_mall)
+        self._build_starter_items_content(self.tab_starter)
         self._build_npc_resolver_content(self.tab_npc_res)
         self._build_talk_resolver_content(self.tab_talk)
         self._build_settings_content(self.tab_settings)
@@ -1134,8 +1478,17 @@ class ModernServerGUI:
         ctk.CTkLabel(f_bar, text="Live Server Console Terminal", font=ctk.CTkFont(size=13, weight="bold"), text_color="#F8FAFC").pack(side="left")
         ctk.CTkButton(f_bar, text="🧹 Clear", width=65, height=26, font=ctk.CTkFont(size=11), fg_color="#1E293B", hover_color="#334155", corner_radius=6, command=self.action_clear_logs).pack(side="right")
 
-        self.log_text = tk.Text(right, bg="#030712", fg="#F1F5F9", font=("JetBrains Mono", 9), relief="flat", padx=12, pady=12, highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#1E293B")
-        self.log_text.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+        f_log_wrap = ctk.CTkFrame(right, fg_color="transparent")
+        f_log_wrap.pack(fill="both", expand=True, padx=15, pady=(0, 15))
+
+        self.log_text = tk.Text(f_log_wrap, bg="#030712", fg="#F1F5F9", font=("JetBrains Mono", 9), relief="flat", padx=12, pady=12, highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#1E293B")
+        if HAS_CTK:
+            sb_log = ctk.CTkScrollbar(f_log_wrap, orientation="vertical", command=self.log_text.yview)
+        else:
+            sb_log = ttk.Scrollbar(f_log_wrap, orient="vertical", command=self.log_text.yview)
+        self.log_text.configure(yscrollcommand=sb_log.set)
+        sb_log.pack(side="right", fill="y", padx=(2, 0))
+        self.log_text.pack(side="left", fill="both", expand=True)
 
         self.log_text.tag_config("INFO", foreground="#38BDF8")
         self.log_text.tag_config("WARNING", foreground="#FBBF24")
@@ -1170,8 +1523,13 @@ class ModernServerGUI:
         self.ent_search_maps = ctk.CTkEntry(c1, placeholder_text="Filter Maps...", fg_color="#0B0F19", border_color="#1E293B", height=30)
         self.ent_search_maps.pack(fill="x", padx=10, pady=(0, 4))
         self.ent_search_maps.bind("<KeyRelease>", lambda e: self._filter_maps_list())
-        self.list_maps = tk.Listbox(c1, bg="#080C14", fg="#F1F5F9", selectbackground="#2563EB", selectforeground="#FFFFFF", highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#2563EB", relief="flat", font=("Segoe UI", 9))
-        self.list_maps.pack(fill="both", expand=True, padx=10, pady=4)
+        f_maps = ctk.CTkFrame(c1, fg_color="transparent")
+        f_maps.pack(fill="both", expand=True, padx=10, pady=4)
+        self.list_maps = tk.Listbox(f_maps, bg="#080C14", fg="#F1F5F9", selectbackground="#2563EB", selectforeground="#FFFFFF", highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#2563EB", relief="flat", font=("Segoe UI", 9))
+        sb_maps = ctk.CTkScrollbar(f_maps, orientation="vertical", command=self.list_maps.yview) if HAS_CTK else ttk.Scrollbar(f_maps, orient="vertical", command=self.list_maps.yview)
+        self.list_maps.configure(yscrollcommand=sb_maps.set)
+        sb_maps.pack(side="right", fill="y", padx=(2, 0))
+        self.list_maps.pack(side="left", fill="both", expand=True)
         ctk.CTkButton(c1, text="🚀 Warp Player to Map", fg_color="#0284C7", hover_color="#0369A1", height=32, corner_radius=8, command=self.action_cheat_warp_map).pack(fill="x", padx=10, pady=(4, 10))
 
         # Col 2: Vehicles
@@ -1180,8 +1538,13 @@ class ModernServerGUI:
         ctk.CTkLabel(c2, text="🚗 Vehicles", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8").pack(anchor="w", padx=12, pady=(10, 6))
         self.ent_search_veh = ctk.CTkEntry(c2, placeholder_text="Filter Vehicles...", fg_color="#0B0F19", border_color="#1E293B", height=30)
         self.ent_search_veh.pack(fill="x", padx=10, pady=(0, 4))
-        self.list_veh = tk.Listbox(c2, bg="#080C14", fg="#F1F5F9", selectbackground="#2563EB", selectforeground="#FFFFFF", highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#2563EB", relief="flat", font=("Segoe UI", 9))
-        self.list_veh.pack(fill="both", expand=True, padx=10, pady=4)
+        f_veh = ctk.CTkFrame(c2, fg_color="transparent")
+        f_veh.pack(fill="both", expand=True, padx=10, pady=4)
+        self.list_veh = tk.Listbox(f_veh, bg="#080C14", fg="#F1F5F9", selectbackground="#2563EB", selectforeground="#FFFFFF", highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#2563EB", relief="flat", font=("Segoe UI", 9))
+        sb_veh = ctk.CTkScrollbar(f_veh, orientation="vertical", command=self.list_veh.yview) if HAS_CTK else ttk.Scrollbar(f_veh, orient="vertical", command=self.list_veh.yview)
+        self.list_veh.configure(yscrollcommand=sb_veh.set)
+        sb_veh.pack(side="right", fill="y", padx=(2, 0))
+        self.list_veh.pack(side="left", fill="both", expand=True)
         f_veh_btns = ctk.CTkFrame(c2, fg_color="transparent")
         f_veh_btns.pack(fill="x", padx=10, pady=(4, 10))
         ctk.CTkButton(f_veh_btns, text="Ride", width=70, height=32, fg_color="#10B981", hover_color="#059669", corner_radius=8, command=self.action_cheat_ride_vehicle).pack(side="left", padx=2)
@@ -1194,8 +1557,13 @@ class ModernServerGUI:
         self.ent_search_items = ctk.CTkEntry(c3, placeholder_text="Filter Items...", fg_color="#0B0F19", border_color="#1E293B", height=30)
         self.ent_search_items.pack(fill="x", padx=10, pady=(0, 4))
         self.ent_search_items.bind("<KeyRelease>", lambda e: self._filter_items_list())
-        self.list_items = tk.Listbox(c3, bg="#080C14", fg="#F1F5F9", selectbackground="#2563EB", selectforeground="#FFFFFF", highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#2563EB", relief="flat", font=("Segoe UI", 9))
-        self.list_items.pack(fill="both", expand=True, padx=10, pady=4)
+        f_items = ctk.CTkFrame(c3, fg_color="transparent")
+        f_items.pack(fill="both", expand=True, padx=10, pady=4)
+        self.list_items = tk.Listbox(f_items, bg="#080C14", fg="#F1F5F9", selectbackground="#2563EB", selectforeground="#FFFFFF", highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#2563EB", relief="flat", font=("Segoe UI", 9))
+        sb_items = ctk.CTkScrollbar(f_items, orientation="vertical", command=self.list_items.yview) if HAS_CTK else ttk.Scrollbar(f_items, orient="vertical", command=self.list_items.yview)
+        self.list_items.configure(yscrollcommand=sb_items.set)
+        sb_items.pack(side="right", fill="y", padx=(2, 0))
+        self.list_items.pack(side="left", fill="both", expand=True)
         f_item_spawn = ctk.CTkFrame(c3, fg_color="transparent")
         f_item_spawn.pack(fill="x", padx=10, pady=(4, 10))
         self.ent_spawn_qty = ctk.CTkEntry(f_item_spawn, width=55, height=32, fg_color="#0B0F19", border_color="#1E293B")
@@ -1210,8 +1578,13 @@ class ModernServerGUI:
         self.ent_search_npcs = ctk.CTkEntry(c4, placeholder_text="Filter NPCs...", fg_color="#0B0F19", border_color="#1E293B", height=30)
         self.ent_search_npcs.pack(fill="x", padx=10, pady=(0, 4))
         self.ent_search_npcs.bind("<KeyRelease>", lambda e: self._filter_npcs_list())
-        self.list_npcs = tk.Listbox(c4, bg="#080C14", fg="#F1F5F9", selectbackground="#2563EB", selectforeground="#FFFFFF", highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#2563EB", relief="flat", font=("Segoe UI", 9))
-        self.list_npcs.pack(fill="both", expand=True, padx=10, pady=4)
+        f_npcs = ctk.CTkFrame(c4, fg_color="transparent")
+        f_npcs.pack(fill="both", expand=True, padx=10, pady=4)
+        self.list_npcs = tk.Listbox(f_npcs, bg="#080C14", fg="#F1F5F9", selectbackground="#2563EB", selectforeground="#FFFFFF", highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#2563EB", relief="flat", font=("Segoe UI", 9))
+        sb_npcs = ctk.CTkScrollbar(f_npcs, orientation="vertical", command=self.list_npcs.yview) if HAS_CTK else ttk.Scrollbar(f_npcs, orient="vertical", command=self.list_npcs.yview)
+        self.list_npcs.configure(yscrollcommand=sb_npcs.set)
+        sb_npcs.pack(side="right", fill="y", padx=(2, 0))
+        self.list_npcs.pack(side="left", fill="both", expand=True)
         f_npc_btns = ctk.CTkFrame(c4, fg_color="transparent")
         f_npc_btns.pack(fill="x", padx=10, pady=(4, 10))
         ctk.CTkButton(f_npc_btns, text="⚔️ Battle", width=70, height=32, fg_color="#DC2626", hover_color="#B91C1C", corner_radius=8, command=self.action_cheat_battle_npc).pack(side="left", padx=2)
@@ -1248,11 +1621,10 @@ class ModernServerGUI:
         left.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
         cols = ("CharID", "Name", "Account", "Level", "Gold", "MapID", "X", "Y", "IP")
-        self.tree_players = ttk.Treeview(left, columns=cols, show="headings", selectmode="browse")
+        self.tree_players, _, _ = create_scrolled_treeview(left, columns=cols, show="headings", selectmode="browse", padx=15, pady=15)
         for c in cols:
             self.tree_players.heading(c, text=c)
             self.tree_players.column(c, width=70 if c in ("Level", "X", "Y") else 100, anchor="center")
-        self.tree_players.pack(fill="both", expand=True, padx=15, pady=15)
 
         right = ctk.CTkFrame(split, width=340, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         right.pack(side="right", fill="y")
@@ -1296,11 +1668,10 @@ class ModernServerGUI:
         ctk.CTkButton(top, text="🔓 Unban IP", fg_color="#0D9488", hover_color="#0F766E", width=95, corner_radius=8, command=self.action_unban_ip_gui).pack(side="right", padx=3)
 
         cols = ("AccountID", "Username", "Characters", "LastIP", "LastLogin", "UserBan", "IPBan", "GMLevel")
-        self.tree_users = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_users, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         for c in cols:
             self.tree_users.heading(c, text=c)
             self.tree_users.column(c, width=70 if c in ("AccountID", "GMLevel", "UserBan", "IPBan") else (180 if c == "Characters" else 130), anchor="center")
-        self.tree_users.pack(fill="both", expand=True, padx=10, pady=6)
         self.action_refresh_users()
 
     # -------------------------------------------------------------
@@ -1315,11 +1686,10 @@ class ModernServerGUI:
         ctk.CTkButton(top, text="🗑 Delete Character", fg_color="#DC2626", hover_color="#B91C1C", width=140, corner_radius=8, command=self.action_delete_character).pack(side="right", padx=10)
 
         cols = ("CharID", "AccountID", "CharName", "Level", "Element", "RebornJob", "Gold", "MapID", "LastLogin")
-        self.tree_characters = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_characters, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         for c in cols:
             self.tree_characters.heading(c, text=c)
             self.tree_characters.column(c, width=70 if c in ("CharID", "AccountID", "Level", "Element") else 120, anchor="center")
-        self.tree_characters.pack(fill="both", expand=True, padx=10, pady=6)
         self.tree_characters.bind("<Double-1>", lambda e: self.action_open_selected_char_editor())
         self.action_refresh_characters()
 
@@ -1338,11 +1708,10 @@ class ModernServerGUI:
         ctk.CTkButton(top, text="🚀 Test Warp on Player", fg_color="#10B981", hover_color="#059669", width=170, corner_radius=8, command=self.action_test_warp_portal).pack(side="right", padx=10)
 
         cols = ("PortalID", "SourceMap", "PortalName", "DestMap", "DestX", "DestY")
-        self.tree_portals = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_portals, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         for c in cols:
             self.tree_portals.heading(c, text=c)
             self.tree_portals.column(c, width=80 if c != "PortalName" else 200, anchor="center")
-        self.tree_portals.pack(fill="both", expand=True, padx=10, pady=6)
         self.action_refresh_portals()
 
     # -------------------------------------------------------------
@@ -1366,11 +1735,10 @@ class ModernServerGUI:
         left.pack(side="left", fill="both", padx=(0, 6))
 
         cols = ("ClickID", "NPCName", "TID", "Pos", "Events")
-        self.tree_studio_npcs = ttk.Treeview(left, columns=cols, show="headings")
+        self.tree_studio_npcs, _, _ = create_scrolled_treeview(left, columns=cols, show="headings", padx=10, pady=10)
         for c in cols:
             self.tree_studio_npcs.heading(c, text=c)
             self.tree_studio_npcs.column(c, width=60 if c in ("ClickID", "TID") else 95, anchor="center")
-        self.tree_studio_npcs.pack(fill="both", expand=True, padx=10, pady=10)
         self.tree_studio_npcs.bind("<<TreeviewSelect>>", self._on_studio_npc_selected)
 
         # Right Event Sequence Flow Viewer
@@ -1378,8 +1746,13 @@ class ModernServerGUI:
         right.pack(side="right", fill="both", expand=True)
 
         ctk.CTkLabel(right, text="📜 Event Sequence Flow & Opcode Inspector", font=ctk.CTkFont(size=12, weight="bold"), text_color="#38BDF8").pack(anchor="w", padx=12, pady=(10, 4))
-        self.txt_event_flow = tk.Text(right, bg="#030712", fg="#F1F5F9", font=("JetBrains Mono", 9), relief="flat", padx=12, pady=12, highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#1E293B")
-        self.txt_event_flow.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        f_flow_wrap = ctk.CTkFrame(right, fg_color="transparent")
+        f_flow_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.txt_event_flow = tk.Text(f_flow_wrap, bg="#030712", fg="#F1F5F9", font=("JetBrains Mono", 9), relief="flat", padx=12, pady=12, highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#1E293B")
+        sb_flow = ctk.CTkScrollbar(f_flow_wrap, orientation="vertical", command=self.txt_event_flow.yview) if HAS_CTK else ttk.Scrollbar(f_flow_wrap, orient="vertical", command=self.txt_event_flow.yview)
+        self.txt_event_flow.configure(yscrollcommand=sb_flow.set)
+        sb_flow.pack(side="right", fill="y", padx=(2, 0))
+        self.txt_event_flow.pack(side="left", fill="both", expand=True)
 
     # -------------------------------------------------------------
     # TAB 8: Monster Drops Studio (C# SetupMonsterDropsTab)
@@ -1400,11 +1773,10 @@ class ModernServerGUI:
         left.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
         cols = ("MonsterID", "Name", "Level", "HP", "SP", "Element")
-        self.tree_monsters = ttk.Treeview(left, columns=cols, show="headings")
+        self.tree_monsters, _, _ = create_scrolled_treeview(left, columns=cols, show="headings", padx=15, pady=15)
         for c in cols:
             self.tree_monsters.heading(c, text=c)
             self.tree_monsters.column(c, width=75 if c in ("Level", "HP", "SP") else 110, anchor="center")
-        self.tree_monsters.pack(fill="both", expand=True, padx=15, pady=15)
 
         right = ctk.CTkFrame(split, width=380, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         right.pack(side="right", fill="both")
@@ -1412,11 +1784,10 @@ class ModernServerGUI:
         ctk.CTkLabel(right, text="Monster Item Drops (5 Slots)", font=ctk.CTkFont(size=13, weight="bold"), text_color="#38BDF8").pack(anchor="w", padx=15, pady=(15, 8))
 
         drop_cols = ("Slot", "ItemID", "ItemName", "Rate(1-10000)")
-        self.tree_drops = ttk.Treeview(right, columns=drop_cols, show="headings", height=7)
+        self.tree_drops, _, _ = create_scrolled_treeview(right, columns=drop_cols, show="headings", height=7, padx=15, pady=5)
         for c in drop_cols:
             self.tree_drops.heading(c, text=c)
             self.tree_drops.column(c, width=80, anchor="center")
-        self.tree_drops.pack(fill="x", padx=15, pady=5)
 
         f_edit = ctk.CTkFrame(right, fg_color="transparent")
         f_edit.pack(fill="x", padx=15, pady=10)
@@ -1450,11 +1821,10 @@ class ModernServerGUI:
         ctk.CTkButton(top, text="💾 Save Chest Table", fg_color="#10B981", hover_color="#059669", width=140, corner_radius=8, command=self.action_save_chest_drops).pack(side="right", padx=10)
 
         cols = ("ItemID", "ItemName", "Count", "Weight/Rate", "RareFlag")
-        self.tree_chests = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_chests, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         for c in cols:
             self.tree_chests.heading(c, text=c)
             self.tree_chests.column(c, width=100 if c != "ItemName" else 200, anchor="center")
-        self.tree_chests.pack(fill="both", expand=True, padx=10, pady=6)
         self._load_sample_chest_drops()
 
     # -------------------------------------------------------------
@@ -1485,7 +1855,7 @@ class ModernServerGUI:
         self.cmb_mall_filter.pack(side="left", padx=4)
 
         cols = ("ItemID", "Name", "Category", "Points", "OriginalPrice", "Count", "Badge", "OnSale")
-        self.tree_mall = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_mall, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         col_widths = {
             "ItemID": 80,
             "Name": 240,
@@ -1499,13 +1869,46 @@ class ModernServerGUI:
         for c in cols:
             self.tree_mall.heading(c, text=c)
             self.tree_mall.column(c, width=col_widths.get(c, 100), anchor="center" if c != "Name" else "w")
-        self.tree_mall.pack(fill="both", expand=True, padx=10, pady=6)
         self.tree_mall.bind("<Double-1>", lambda _: self.action_edit_mall_item_modal())
 
         self.action_refresh_item_mall()
 
     # -------------------------------------------------------------
-    # TAB 11: NPC Resolver & Directory (C# SetupNpcResolverTab)
+    # TAB 11: Starter Items Pack Manager (AC 23 Sub 6)
+    # -------------------------------------------------------------
+    def _build_starter_items_content(self, parent):
+        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top.pack(fill="x", padx=10, pady=(10, 5))
+
+        ctk.CTkButton(top, text="🔄 Reload Starters", fg_color="#1E293B", hover_color="#334155", width=125, corner_radius=8, command=self.action_refresh_starter_items).pack(side="left", padx=(10, 4), pady=10)
+        ctk.CTkButton(top, text="➕ Add Starter Item", fg_color="#10B981", hover_color="#059669", width=140, corner_radius=8, command=self.action_add_starter_item_modal).pack(side="left", padx=4)
+        ctk.CTkButton(top, text="✏ Edit Selected", fg_color="#2563EB", hover_color="#3B82F6", width=110, corner_radius=8, command=self.action_edit_starter_item_modal).pack(side="left", padx=4)
+        ctk.CTkButton(top, text="🗑 Remove Item", fg_color="#DC2626", hover_color="#B91C1C", width=110, corner_radius=8, command=self.action_delete_starter_item).pack(side="left", padx=4)
+
+        ctk.CTkButton(top, text="📥 Import JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_import_starter_json).pack(side="left", padx=4)
+        ctk.CTkButton(top, text="📤 Export JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_export_starter_json).pack(side="left", padx=4)
+
+        self.lbl_starter_summary = ctk.CTkLabel(top, text="Items: 0", font=ctk.CTkFont(size=12, weight="bold"), text_color="#10B981")
+        self.lbl_starter_summary.pack(side="right", padx=15)
+
+        cols = ("Order", "ItemID", "Name", "Quantity", "Description")
+        self.tree_starters, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
+        col_widths = {
+            "Order": 70,
+            "ItemID": 90,
+            "Name": 250,
+            "Quantity": 100,
+            "Description": 400
+        }
+        for c in cols:
+            self.tree_starters.heading(c, text=c)
+            self.tree_starters.column(c, width=col_widths.get(c, 100), anchor="center" if c not in ("Name", "Description") else "w")
+        self.tree_starters.bind("<Double-1>", lambda _: self.action_edit_starter_item_modal())
+
+        self.action_refresh_starter_items()
+
+    # -------------------------------------------------------------
+    # TAB 12: NPC Resolver & Directory (C# SetupNpcResolverTab)
     # -------------------------------------------------------------
     def _build_npc_resolver_content(self, parent):
         top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
@@ -1527,18 +1930,22 @@ class ModernServerGUI:
         left.pack(side="left", fill="both", expand=True, padx=(0, 6))
 
         cols = ("TID", "NPCName", "Level", "HP", "SP", "Category")
-        self.tree_npc_dir = ttk.Treeview(left, columns=cols, show="headings")
+        self.tree_npc_dir, _, _ = create_scrolled_treeview(left, columns=cols, show="headings", padx=10, pady=10)
         for c in cols:
             self.tree_npc_dir.heading(c, text=c)
             self.tree_npc_dir.column(c, width=70 if c in ("TID", "Level", "HP", "SP") else 140, anchor="center")
-        self.tree_npc_dir.pack(fill="both", expand=True, padx=10, pady=10)
 
         right = ctk.CTkFrame(split, width=360, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         right.pack(side="right", fill="both")
 
         ctk.CTkLabel(right, text="🌍 World Spawn Inspector (eve.Emg)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#38BDF8").pack(anchor="w", padx=12, pady=(10, 4))
-        self.txt_world_spawns = tk.Text(right, bg="#030712", fg="#F1F5F9", font=("JetBrains Mono", 9), relief="flat", padx=12, pady=12, highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#1E293B")
-        self.txt_world_spawns.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        f_spawns_wrap = ctk.CTkFrame(right, fg_color="transparent")
+        f_spawns_wrap.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+        self.txt_world_spawns = tk.Text(f_spawns_wrap, bg="#030712", fg="#F1F5F9", font=("JetBrains Mono", 9), relief="flat", padx=12, pady=12, highlightthickness=1, highlightbackground="#1E293B", highlightcolor="#1E293B")
+        sb_spawns = ctk.CTkScrollbar(f_spawns_wrap, orientation="vertical", command=self.txt_world_spawns.yview) if HAS_CTK else ttk.Scrollbar(f_spawns_wrap, orient="vertical", command=self.txt_world_spawns.yview)
+        self.txt_world_spawns.configure(yscrollcommand=sb_spawns.set)
+        sb_spawns.pack(side="right", fill="y", padx=(2, 0))
+        self.txt_world_spawns.pack(side="left", fill="both", expand=True)
 
         self._populate_npc_directory()
 
@@ -1555,12 +1962,11 @@ class ModernServerGUI:
         ctk.CTkButton(top, text="🔍 Search Dialogues", fg_color="#2563EB", hover_color="#3B82F6", width=140, corner_radius=8, command=self.action_search_talk).pack(side="left", padx=8)
 
         cols = ("TalkID", "DialogueText")
-        self.tree_talk = ttk.Treeview(parent, columns=cols, show="headings")
+        self.tree_talk, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
         self.tree_talk.heading("TalkID", text="Talk ID")
         self.tree_talk.column("TalkID", width=100, anchor="center")
         self.tree_talk.heading("DialogueText", text="Character Speech / Dialogue Text")
         self.tree_talk.column("DialogueText", width=900, anchor="w")
-        self.tree_talk.pack(fill="both", expand=True, padx=10, pady=6)
         self._load_sample_talk_dialogues()
 
     # -------------------------------------------------------------
@@ -1637,11 +2043,17 @@ class ModernServerGUI:
             "10. Vehicles & Mounts", "11. Lucky Draw Wheel", "12. Pet Amity & Foods",
             "13. Reborn Jobs", "14. Sustenance Potions", "15. Morph Items",
             "16. Pet Riding Saddles", "17. Recycle Center", "18. Death & Revive Altars",
-            "19. Dynamic Weather"
+            "19. Dynamic Weather", "20. Starter Items Pack"
         ]
 
-        for s in subsystems:
-            ctk.CTkLabel(right, text=f"  🟢 {s} - ACTIVE", text_color="#10B981", font=ctk.CTkFont(size=10)).pack(anchor="w", padx=15, pady=1)
+        if HAS_CTK:
+            f_sub_scroll = ctk.CTkScrollableFrame(right, fg_color="transparent")
+            f_sub_scroll.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+            for s in subsystems:
+                ctk.CTkLabel(f_sub_scroll, text=f"  🟢 {s} - ACTIVE", text_color="#10B981", font=ctk.CTkFont(size=10)).pack(anchor="w", padx=10, pady=2)
+        else:
+            for s in subsystems:
+                ctk.CTkLabel(right, text=f"  🟢 {s} - ACTIVE", text_color="#10B981", font=ctk.CTkFont(size=10)).pack(anchor="w", padx=15, pady=1)
 
     # -------------------------------------------------------------
     # Helper & Event Handlers
@@ -2396,6 +2808,99 @@ class ModernServerGUI:
             messagebox.showinfo("Export Success", f"Successfully exported Item Mall catalog to {os.path.basename(file_path)}.")
         else:
             messagebox.showerror("Export Failed", "Could not export Item Mall JSON file.")
+
+    # -------------------------------------------------------------
+    # Starter Items Actions
+    # -------------------------------------------------------------
+    def action_refresh_starter_items(self):
+        """Refreshes Starter Items table from dynamic database."""
+        for i in self.tree_starters.get_children():
+            self.tree_starters.delete(i)
+
+        items = GLOBAL_DYNAMIC_DATA.get_starter_items()
+        for it in items:
+            row_vals = (
+                it.get("order_idx", 0),
+                it["item_id"],
+                it.get("item_name", f"Item #{it['item_id']}"),
+                it.get("count", 1),
+                it.get("description", "")
+            )
+            self.tree_starters.insert("", "end", values=row_vals)
+
+        if hasattr(self, "lbl_starter_summary"):
+            self.lbl_starter_summary.configure(text=f"Total Items: {len(items)}")
+
+    def action_add_starter_item_modal(self):
+        """Opens modal to add a new starter gift item."""
+        StarterItemEditorDialog(self.root, item_data=None, on_save_callback=self.action_refresh_starter_items)
+
+    def action_edit_starter_item_modal(self):
+        """Opens modal to edit the selected starter item."""
+        sel = self.tree_starters.selection()
+        if not sel:
+            messagebox.showwarning("Select Item", "Please select a starter item from the table first.")
+            return
+        vals = self.tree_starters.item(sel[0])["values"]
+        item_id = int(vals[1])
+        items = GLOBAL_DYNAMIC_DATA.get_starter_items()
+        found = next((x for x in items if x["item_id"] == item_id), None)
+        if not found:
+            messagebox.showerror("Error", f"Starter item #{item_id} not found in database.")
+            return
+        StarterItemEditorDialog(self.root, item_data=found, on_save_callback=self.action_refresh_starter_items)
+
+    def action_delete_starter_item(self):
+        """Deletes the selected starter item from the database and reloads server cache."""
+        sel = self.tree_starters.selection()
+        if not sel:
+            messagebox.showwarning("Select Item", "Please select a starter item from the table first.")
+            return
+        vals = self.tree_starters.item(sel[0])["values"]
+        item_id = int(vals[1])
+        item_name = str(vals[2])
+
+        confirm = messagebox.askyesno("Confirm Remove", f"Are you sure you want to remove Item #{item_id} '{item_name}' from the starter gifts pack?")
+        if not confirm:
+            return
+
+        GLOBAL_DYNAMIC_DATA.delete_starter_item(item_id)
+        GLOBAL_DYNAMIC_DATA.export_starter_items_json()
+        GLOBAL_STARTER_PACK_MANAGER.reload_from_db(GLOBAL_DYNAMIC_DATA)
+        self.action_refresh_starter_items()
+        messagebox.showinfo("Removed", f"Item #{item_id} '{item_name}' removed from starter pack.")
+
+    def action_import_starter_json(self):
+        """Imports starter items from server/data/starter_items.json into SQLite."""
+        file_path = filedialog.askopenfilename(
+            title="Import Starter Items JSON",
+            initialdir=os.path.join(os.getcwd(), "server", "data"),
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+        success = GLOBAL_DYNAMIC_DATA.import_starter_items_json(file_path)
+        if success:
+            self.action_refresh_starter_items()
+            messagebox.showinfo("Import Success", f"Successfully imported starter items from {os.path.basename(file_path)}.")
+        else:
+            messagebox.showerror("Import Failed", "Could not import starter items JSON file.")
+
+    def action_export_starter_json(self):
+        """Exports starter items from SQLite to server/data/starter_items.json."""
+        file_path = filedialog.asksaveasfilename(
+            title="Export Starter Items JSON",
+            initialdir=os.path.join(os.getcwd(), "server", "data"),
+            initialfile="starter_items.json",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")]
+        )
+        if not file_path:
+            return
+        success = GLOBAL_DYNAMIC_DATA.export_starter_items_json(file_path)
+        if success:
+            messagebox.showinfo("Export Success", f"Successfully exported starter items to {os.path.basename(file_path)}.")
+        else:
+            messagebox.showerror("Export Failed", "Could not export starter items JSON file.")
 
     def _populate_npc_directory(self):
         for i in self.tree_npc_dir.get_children():

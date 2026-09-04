@@ -1,0 +1,72 @@
+[
+  {
+    "item_id": 34038,
+    "item_name": "Starter Gift 1",
+    "count": 1,
+    "order_idx": 1,
+    "description": "Beginner gift package"
+  },
+  {
+    "item_id": 34058,
+    "item_name": "Remote Control",
+    "count": 1,
+    "order_idx": 2,
+    "description": "Auto-combat and assistant remote control"
+  },
+  {
+    "item_id": 34332,
+    "item_name": "Mini Dragonfly",
+    "count": 1,
+    "order_idx": 3,
+    "description": "Starter flying mount vehicle"
+  },
+  {
+    "item_id": 32176,
+    "item_name": "Spicy Hot Pot",
+    "count": 50,
+    "order_idx": 4,
+    "description": "Full recovery food"
+  },
+  {
+    "item_id": 34026,
+    "item_name": "Protective Exp Pill",
+    "count": 1,
+    "order_idx": 5,
+    "description": "Prevents EXP loss upon death"
+  },
+  {
+    "item_id": 34542,
+    "item_name": "Substitute Doll",
+    "count": 1,
+    "order_idx": 6,
+    "description": "Prevents companion amity drop upon death"
+  },
+  {
+    "item_id": 21742,
+    "item_name": "Goddess Robe",
+    "count": 1,
+    "order_idx": 7,
+    "description": "Starter protective equipment"
+  },
+  {
+    "item_id": 34330,
+    "item_name": "Mini HP Potion",
+    "count": 50,
+    "order_idx": 8,
+    "description": "Starter HP healing potions"
+  },
+  {
+    "item_id": 34190,
+    "item_name": "10x Holy EXP Potion",
+    "count": 1,
+    "order_idx": 9,
+    "description": "Boosts experience gain"
+  },
+  {
+    "item_id": 34258,
+    "item_name": "Training Ticket",
+    "count": 1,
+    "order_idx": 10,
+    "description": "Instant training island pass"
+  }
+]

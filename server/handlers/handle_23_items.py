@@ -15,6 +15,7 @@ async def handle(server, session, reader):
         add_item_to_inventory,
         get_equip_slot
     )
+    from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
 
     # General constraints based on client findings
     if sub in (10, 11, 12, 3, 124, 14, 65, 51, 52, 134, 135):
@@ -35,9 +36,15 @@ async def handle(server, session, reader):
             await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't use in bath"))
             return
 
-    from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
+    if sub == 77:  # Client Login Scene ACK / Market Stall Query (AC 23 Sub 77: 0x17 0x4d)
+        logger.info(f"[{session.char_name}] Handled AC 23 Sub 77 (Scene Ready / Stall Query)")
+        session.is_warping = False
+        session.in_map = True
+        # If client sends with no params (len=2), respond with empty stall list if in stall context:
+        await session.send_packet(PacketWriter().write_8(23).write_8(4).write_8(0))
+        await session.send_packet(PacketWriter().write_8(23).write_8(102))
 
-    if sub == 54:
+    elif sub == 54:
         # Client sends this as acknowledgment after receiving the login/warp complete signal (5, 4), or to stop fishing
         if getattr(session, 'is_fishing', False):
             session.is_fishing = False
@@ -61,11 +68,6 @@ async def handle(server, session, reader):
                 count = 1
             await GLOBAL_ITEM_MALL_MANAGER.purchase_item(server, session, item_id, count)
 
-    elif sub == 77:  # Request Player Stall / Market Listings (C# AC23.Recv77)
-        # S->C [23, 4, 0] = stall list (0 active)
-        await session.send_packet(PacketWriter().write_8(23).write_8(4).write_8(0))
-        # S->C [23, 102] = end of stall list
-        await session.send_packet(PacketWriter().write_8(23).write_8(102))
 
     elif sub == 53:  # Start fishing request (23, 53)
         if getattr(session, 'is_stall_active', False):

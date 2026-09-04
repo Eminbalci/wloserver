@@ -277,8 +277,19 @@ class PreEventInterpreter:
                         hide_pkt = PacketWriter().write_8(22).write_8(10).write_16(click_id).write_8(0xFF).write_8(0xFF)
                         await session.send_packet(hide_pkt)
                     else:
-                        show_pkt = PacketWriter().write_8(22).write_8(10).write_16(click_id).write_8(0x00).write_8(0x00)
-                        await session.send_packet(show_pkt)
+                        # Do NOT send show packet (AC 22:10 0,0) to static props/chests already loaded via AC 22:4
+                        # In WLO, AC 22:10 resets sprite frames and causes chests/props to flicker/blink
+                        is_static_prop = False
+                        map_npcs = server.map_npcs.get(map_id, []) if hasattr(server, 'map_npcs') else []
+                        for m_npc in map_npcs:
+                            m_cid = m_npc.click_id if hasattr(m_npc, 'click_id') else (m_npc.get('click_id', 0) if isinstance(m_npc, dict) else 0)
+                            if m_cid == click_id:
+                                if hasattr(m_npc, 'is_static_npc') and m_npc.is_static_npc():
+                                    is_static_prop = True
+                                break
+                        if not is_static_prop:
+                            show_pkt = PacketWriter().write_8(22).write_8(10).write_16(click_id).write_8(0x00).write_8(0x00)
+                            await session.send_packet(show_pkt)
             except Exception as e:
                 logger.warning(f"[PreEventInterpreter] Dynamic DB visibility error: {e}")
 

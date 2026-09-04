@@ -40,10 +40,10 @@ Direct port of the C# 4-column browser with real-time text filter and action but
 
 ### Tab 6: 🧙 Deep Character Data Editor Modal (`CharacterDataEditorDialog`)
 Standalone modal ported from `CharacterDataEditorForm.cs`:
-- **📊 Stats & Attributes**: Level, Element, Reborn Job (Killer, Warrior, Knight, Mage, Priest, Seer), STR, CON, INT, WIS, AGI, Stat Points, Potential Points, HP, SP, EXP, Gold, Bank Gold.
+- **📊 Stats & Attributes**: Level, Element, Reborn Job (Killer, Warrior, Knight, Mage, Priest, Seer), STR, CON, INT, WIS, AGI, Stat Points, Potential Points, HP, SP, EXP, Gold, Bank Gold with live reload from database and active session synchronization (`send_stats_update`).
 - **📜 Quests Manager**: List all quests, Add Quest with ID and State (Not Started, In Progress, Completed), Advance Step, Complete All Quests, Reset All Quests.
 - **🐾 Pets & Companions**: All 4 pet slots. Add Preset Companion (Robinson, S.Monkey, Niss, Xaolan, Elin, Shizune, Cliff, Clive, Sam) or custom Pet ID, edit Level, Loyalty/Amity (100%), HP, SP, Delete Pet.
-- **🎒 Inventory & Equipment**: View 50 inventory slots + 6 equips. Add Item, Delete Item, Repair Item, Clear All 50 Slots.
+- **🎒 Inventory & Equipment**: View 50 inventory slots + 6 equips. Accurately parses JSON schema (`item_id`, `amount`, `damage`, `slot`) with human-readable name resolution via dynamic starter pack manager, `items.json`, and `Item.dat`. Supports Add Item, Delete Item, Repair Item (0 damage), Clear All 50 Slots, with automatic live session packet dispatch (`AC 23 Sub 5`).
 - **✨ Skills & Magic**: View learned skills, Add Skill ID with grade/exp, Learn All Element Skills, Delete Skill, Reset Skills.
 - **👁️ NPC Visibility**: Inspect & override pre-event visibility conditions on maps.
 
@@ -82,3 +82,13 @@ Standalone modal ported from `CharacterDataEditorForm.cs`:
 ### Tab 14: ⚙️ Global Rates & Dynamic Settings (`tabPageSettings`)
 - Multipliers: Base EXP, Monster Drops, Pet EXP, Gold Drop, Alchemy Compound, Forging, Resource Gathering.
 - Hot-Reload button applying changes across all 19 dynamic subsystems.
+- Scrollable subsystems status list (`CTkScrollableFrame`).
+
+---
+
+## 3. Integrated Scrolling Architecture
+All table views (`ttk.Treeview`), list views (`tk.Listbox`), and multiline text consoles (`tk.Text`) feature native vertical scrollbars:
+- **`create_scrolled_treeview(parent, columns, ...)`**: Bundles a `ttk.Treeview` and dock-aligned `ctk.CTkScrollbar` (or `ttk.Scrollbar` fallback) in a transparent frame. Used across Sessions, Accounts, Characters, Portals, Map NPCs, Monster Drops, Chests, Item Mall, Starter Items, NPC Directory, and Talk Dialogues.
+- **Cheats 4-Column Browser**: Each column (Maps, Vehicles, Items, NPCs) packs its listbox alongside an integrated vertical scrollbar.
+- **Console & Inspectors**: Dashboard Console Log, Event Flow Viewer, and World Spawn Inspector each integrate vertical scrollbars.
+- **Character Data Editor Modal**: Full scrollbar coverage on Quests, Pets, Inventory, Skills, and NPC Visibility tables.

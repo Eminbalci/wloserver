@@ -217,12 +217,12 @@ class QuestNpc:
         if map_player_count == 0:
             return
 
+        # Static props and permanent chests never update or broadcast packets
+        if self.is_permanent_chest() or (self.is_static_npc() and not self.is_gathering_node()):
+            return
+
         # Handle Gathering Nodes Respawning (e.g. Coconut, Wood, Ore)
         if self.is_broken:
-            # Permanent chests/crates remain broken/opened and never auto-respawn via server tick
-            if self.is_permanent_chest():
-                return
-
             if self.is_gathering_node() and self.respawn_time > 0 and now >= self.respawn_time:
                 self.is_broken = False
                 self.respawn_time = 0.0

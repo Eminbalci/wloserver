@@ -1490,6 +1490,22 @@ class GameServer:
         # Dispatch Authentic Item Mall Handshake (AC 75:1, AC 75:10, AC 75:8, AC 75:7, AC 75:3)
         from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
         await GLOBAL_ITEM_MALL_MANAGER.send_initial_mall_sync(session)
+
+        # Free Starter Items Delivery for New Characters (Authentic PCAP oyunailkgirisvebedavaitemverilmesi.pcapng)
+        if not getattr(session, "received_starter_pack", False) and len(session.inventory) <= 2:
+            from server.starter_pack_manager import GLOBAL_STARTER_PACK_MANAGER
+            starter_gifts = GLOBAL_STARTER_PACK_MANAGER.get_delivery_tuples()
+            for itm_id, itm_cnt in starter_gifts:
+                add_item_to_inventory(session, itm_id, itm_cnt)
+                delivery_pkt = PacketWriter().write_8(23).write_8(6).write_16(itm_id).write_16(itm_cnt).write_bytes(bytes(27))
+                await session.send_packet(delivery_pkt)
+            session.received_starter_pack = True
+            self.save_player_to_db(session)
+            logger.info(f"[{session.char_name}] Granted authentic starter items pack ({len(starter_gifts)} items) via AC 23 Sub 6.")
+
+        # Always synchronize full inventory packet at the conclusion of login sequence so
+        # the client's inventory bag UI is guaranteed to populate for both new and returning players.
+        await session.send_packet(self.build_inventory_packet(session))
         
         # Send ground items to the player who just joined the map
         await self.send_ground_items(session)
@@ -2101,7 +2117,8 @@ class GameServer:
                 try:
                     from server.chest_system import GLOBAL_CHEST_SYSTEM
                     if hasattr(session, 'char_id') and session.char_id:
-                        is_opened = GLOBAL_CHEST_SYSTEM.is_chest_opened(session.char_id, session.map_id, c_id)
+                        is_perm = hasattr(npc, 'is_permanent_chest') and npc.is_permanent_chest()
+                        is_opened = GLOBAL_CHEST_SYSTEM.is_chest_opened(session.char_id, session.map_id, c_id, is_permanent=is_perm)
                 except Exception:
                     is_opened = False
 
@@ -2124,8 +2141,11 @@ class GameServer:
 
             await session.send_packet(npc_pkt)
 
-            # Send individual hide packets for recruited companions / permanently broken nodes (AC 22:10)
+            # Send individual hide packets for recruited companions (AC 22:10)
             for npc in sorted_npcs:
+                # Static props and permanent chests must never receive AC 22:10 packets (handled natively via AC 22:4 state)
+                if hasattr(npc, 'is_static_npc') and npc.is_static_npc():
+                    continue
                 c_id = npc.click_id if hasattr(npc, 'click_id') else (npc.get('click_id', 0) if isinstance(npc, dict) else 0)
                 t_id = npc.template_id if hasattr(npc, 'template_id') else ((npc.get('npc_id', 0) or npc.get('template_id', 0)) if isinstance(npc, dict) else 0)
                 n_name = npc.name if hasattr(npc, 'name') else (npc.get('name', '') if isinstance(npc, dict) else '')

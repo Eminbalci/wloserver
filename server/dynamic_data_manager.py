@@ -291,6 +291,17 @@ class DynamicDataManager:
                     )
                 """)
 
+                # 21. Starter Items (Free starter gifts for new characters)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS game_starter_items (
+                        item_id INTEGER PRIMARY KEY,
+                        item_name VARCHAR(100) NOT NULL,
+                        count INTEGER NOT NULL DEFAULT 1,
+                        order_idx INTEGER DEFAULT 0,
+                        description VARCHAR(255) DEFAULT ''
+                    )
+                """)
+
                 # Dynamic column migrations
                 for col_name, col_type in [
                     ("original_price", "INTEGER DEFAULT 0"),
@@ -322,7 +333,6 @@ class DynamicDataManager:
                 drop_count = conn.execute("SELECT count(*) FROM game_monster_drops").fetchone()[0]
                 if drop_count == 0:
                     try:
-                        import os
                         from server.dat_loaders import NpcDatLoader
                         npc_file = os.path.join(os.getcwd(), "data", "Npc.dat")
                         if os.path.exists(npc_file):
@@ -381,7 +391,6 @@ class DynamicDataManager:
                 alchemy_count = conn.execute("SELECT count(*) FROM game_alchemy_recipes").fetchone()[0]
                 if alchemy_count == 0:
                     try:
-                        import os
                         from server.dat_loaders import CompoundDatLoader
                         c_file1 = os.path.join(os.getcwd(), "data", "Compound.dat")
                         c_file2 = os.path.join(os.getcwd(), "data", "Compound2.dat")
@@ -427,7 +436,6 @@ class DynamicDataManager:
                 chest_count = conn.execute("SELECT count(*) FROM game_chest_pools").fetchone()[0]
                 if chest_count == 0:
                     try:
-                        import os
                         from server.eve_loader import EveManager
                         eve_file = os.path.join(os.getcwd(), "data", "eve.Emg")
                         if os.path.exists(eve_file):
@@ -727,6 +735,56 @@ class DynamicDataManager:
                             INSERT INTO game_item_mall (item_id, item_name, category, point_cost, original_price, gold_cost, count, is_hot, is_new, on_sale, subcategory_id)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """, mall_data)
+
+                # 20. Seed Starter Items
+                starter_count = conn.execute("SELECT count(*) FROM game_starter_items").fetchone()[0]
+                if starter_count == 0:
+                    loaded_starter_json = False
+                    for json_candidate in [
+                        os.path.join(os.getcwd(), "server", "data", "starter_items.json"),
+                        os.path.join(os.getcwd(), "data", "starter_items.json")
+                    ]:
+                        if os.path.exists(json_candidate):
+                            try:
+                                with open(json_candidate, "r", encoding="utf-8") as f:
+                                    j_items = json.load(f)
+                                st_rows = []
+                                for idx, it in enumerate(j_items):
+                                    st_rows.append((
+                                        int(it["item_id"]),
+                                        str(it.get("item_name", f"Item #{it['item_id']}")),
+                                        int(it.get("count", 1)),
+                                        int(it.get("order_idx", idx + 1)),
+                                        str(it.get("description", ""))
+                                    ))
+                                if st_rows:
+                                    conn.executemany("""
+                                        INSERT INTO game_starter_items (item_id, item_name, count, order_idx, description)
+                                        VALUES (?, ?, ?, ?, ?)
+                                    """, st_rows)
+                                    loaded_starter_json = True
+                                    logger.info(f"[DynamicDataManager] Loaded {len(st_rows)} starter items from {json_candidate}.")
+                                    break
+                            except Exception as je:
+                                logger.warning(f"[DynamicDataManager] Could not load starter_items.json: {je}")
+
+                    if not loaded_starter_json:
+                        default_starters = [
+                            (34038, "Starter Gift 1", 1, 1, "Beginner gift package"),
+                            (34058, "Remote Control", 1, 2, "Auto-combat and assistant remote control"),
+                            (34332, "Mini Dragonfly", 1, 3, "Starter flying mount vehicle"),
+                            (32176, "Spicy Hot Pot", 50, 4, "Full recovery food"),
+                            (34026, "Protective Exp Pill", 1, 5, "Prevents EXP loss upon death"),
+                            (34542, "Substitute Doll", 1, 6, "Prevents companion amity drop upon death"),
+                            (21742, "Goddess Robe", 1, 7, "Starter protective equipment"),
+                            (34330, "Mini HP Potion", 50, 8, "Starter HP healing potions"),
+                            (34190, "10x Holy EXP Potion", 1, 9, "Boosts experience gain"),
+                            (34258, "Training Ticket", 1, 10, "Instant training island pass"),
+                        ]
+                        conn.executemany("""
+                            INSERT INTO game_starter_items (item_id, item_name, count, order_idx, description)
+                            VALUES (?, ?, ?, ?, ?)
+                        """, default_starters)
 
                 conn.commit()
                 logger.info("[DynamicDataManager] Default baseline dynamic configuration seeded successfully.")
@@ -1069,6 +1127,105 @@ class DynamicDataManager:
             logger.error(f"[DynamicDataManager] Error importing Item Mall JSON: {e}")
             return False
 
+    # --- Starter Items Management Methods ---
+
+    def get_starter_items(self) -> List[Dict[str, Any]]:
+        """Retrieves all starter items ordered by order_idx."""
+        try:
+            with self.get_connection() as conn:
+                rows = conn.execute("SELECT * FROM game_starter_items ORDER BY order_idx ASC, item_id ASC").fetchall()
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"[DynamicDataManager] Error getting starter items: {e}")
+            return []
+
+    def add_or_update_starter_item(self, item_id: int, item_name: str, count: int = 1, order_idx: int = 0, description: str = "") -> bool:
+        """Adds or updates a starter item entry."""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO game_starter_items (item_id, item_name, count, order_idx, description)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(item_id) DO UPDATE SET
+                        item_name = excluded.item_name,
+                        count = excluded.count,
+                        order_idx = excluded.order_idx,
+                        description = excluded.description
+                """, (int(item_id), str(item_name), max(1, int(count)), int(order_idx), str(description)))
+                conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"[DynamicDataManager] Error saving starter item: {e}")
+            return False
+
+    def delete_starter_item(self, item_id: int) -> bool:
+        """Deletes a starter item by its item_id."""
+        try:
+            with self.get_connection() as conn:
+                conn.execute("DELETE FROM game_starter_items WHERE item_id = ?", (int(item_id),))
+                conn.commit()
+            return True
+        except Exception as e:
+            logger.error(f"[DynamicDataManager] Error deleting starter item: {e}")
+            return False
+
+    def export_starter_items_json(self, file_path: str = "server/data/starter_items.json") -> bool:
+        """Exports the active SQLite starter items to JSON."""
+        try:
+            items = self.get_starter_items()
+            os.makedirs(os.path.dirname(os.path.abspath(file_path)), exist_ok=True)
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(items, f, indent=2, ensure_ascii=False)
+            logger.info(f"[DynamicDataManager] Exported {len(items)} starter items to {file_path}.")
+            return True
+        except Exception as e:
+            logger.error(f"[DynamicDataManager] Error exporting starter items JSON: {e}")
+            return False
+
+    def import_starter_items_json(self, file_path: str = "server/data/starter_items.json", clear_existing: bool = True) -> bool:
+        """Imports starter items from JSON into the SQLite dynamic database."""
+        try:
+            if not os.path.exists(file_path):
+                logger.warning(f"[DynamicDataManager] Starter items JSON not found: {file_path}")
+                return False
+
+            with open(file_path, "r", encoding="utf-8") as f:
+                items = json.load(f)
+
+            if not isinstance(items, list):
+                logger.error(f"[DynamicDataManager] Invalid JSON format in {file_path}")
+                return False
+
+            with self.get_connection() as conn:
+                if clear_existing:
+                    conn.execute("DELETE FROM game_starter_items")
+
+                for idx, it in enumerate(items):
+                    conn.execute("""
+                        INSERT INTO game_starter_items (item_id, item_name, count, order_idx, description)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(item_id) DO UPDATE SET
+                            item_name = excluded.item_name,
+                            count = excluded.count,
+                            order_idx = excluded.order_idx,
+                            description = excluded.description
+                    """, (
+                        int(it["item_id"]),
+                        str(it.get("item_name", f"Item_{it['item_id']}")),
+                        int(it.get("count", 1) or 1),
+                        int(it.get("order_idx", idx + 1)),
+                        str(it.get("description", ""))
+                    ))
+                conn.commit()
+
+            from server.starter_pack_manager import GLOBAL_STARTER_PACK_MANAGER
+            GLOBAL_STARTER_PACK_MANAGER.reload_from_db(self)
+            logger.info(f"[DynamicDataManager] Successfully imported {len(items)} starter items from {file_path}.")
+            return True
+        except Exception as e:
+            logger.error(f"[DynamicDataManager] Error importing starter items JSON: {e}")
+            return False
+
     # --- Live Hot Reload Method ---
 
     def reload_all_dynamic_data(self):
@@ -1151,7 +1308,11 @@ class DynamicDataManager:
         from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
         GLOBAL_ITEM_MALL_MANAGER.reload_from_db(self)
 
-        logger.info("[DynamicDataManager] Full live reload successfully applied across all 19 subsystems.")
+        # 20. Starter Items Pack
+        from server.starter_pack_manager import GLOBAL_STARTER_PACK_MANAGER
+        GLOBAL_STARTER_PACK_MANAGER.reload_from_db(self)
+
+        logger.info("[DynamicDataManager] Full live reload successfully applied across all 20 subsystems.")
 
 
 GLOBAL_DYNAMIC_DATA = DynamicDataManager()

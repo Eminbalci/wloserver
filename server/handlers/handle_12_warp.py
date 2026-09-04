@@ -117,3 +117,5 @@ async def handle(server, session, reader):
             await session.send_packet(PacketWriter().write_8(5).write_8(4))
             from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
             await GLOBAL_ITEM_MALL_MANAGER.send_point_balance(session)
+            if hasattr(server, "build_inventory_packet"):
+                await session.send_packet(server.build_inventory_packet(session))

@@ -226,7 +226,62 @@ async def handle(server, session, reader):
             await server.send_pet_list(session)
             await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"{pet.get('name', 'Pet')} has successfully reborn!"))
 
+    elif sub == 14:  # Spawn / Place Vehicle on Map (Authentic AC 15 Sub 14)
+        vehicle_item_id = reader.read_16() if reader.remaining_bytes() >= 2 else 0
+        logger.info(f"[{session.char_name}] Spawn vehicle request for item #{vehicle_item_id}")
+        session.active_vehicle_id = vehicle_item_id
+        session.riding_vehicle = False
+        # Server confirms spawn and syncs position to client/map: AC 15 Sub 18
+        # Format: [15, 18, 21, char_id(4), item_id(2), x(4), y(4)]
+        p18 = (
+            PacketWriter()
+            .write_8(15)
+            .write_8(18)
+            .write_8(21)
+            .write_32(session.char_id)
+            .write_16(vehicle_item_id)
+            .write_32(session.x)
+            .write_32(session.y)
+        )
+        await session.send_packet(p18)
+        server.broadcast_to_map(session.map_id, p18, exclude_session=session)
+
+    elif sub == 7:  # Board / Enter Placed Vehicle (Authentic AC 15 Sub 7)
+        vehicle_item_id = reader.read_16() if reader.remaining_bytes() >= 2 else getattr(session, 'active_vehicle_id', 0)
+        logger.info(f"[{session.char_name}] Board placed vehicle #{vehicle_item_id}")
+        session.riding_vehicle = True
+        session.active_vehicle_id = vehicle_item_id
+        # Server confirms boarding: AC 15 Sub 10
+        # Format: [15, 10, 21, char_id(4), item_id(2)]
+        p10 = (
+            PacketWriter()
+            .write_8(15)
+            .write_8(10)
+            .write_8(21)
+            .write_32(session.char_id)
+            .write_16(vehicle_item_id)
+        )
+        await session.send_packet(p10)
+        server.broadcast_to_map(session.map_id, p10, exclude_session=session)
+
+    elif sub == 10:  # Packup / Dismount Placed Vehicle (Authentic AC 15 Sub 10)
+        vehicle_item_id = reader.read_16() if reader.remaining_bytes() >= 2 else getattr(session, 'active_vehicle_id', 0)
+        logger.info(f"[{session.char_name}] Packup/Dismount vehicle #{vehicle_item_id}")
+        session.riding_vehicle = False
+        # Server confirms packup and despawns vehicle: AC 15 Sub 15 followed by Sub 11
+        p15 = PacketWriter().write_8(15).write_8(15).write_32(session.char_id).write_16(vehicle_item_id)
+        await session.send_packet(p15)
+        server.broadcast_to_map(session.map_id, p15, exclude_session=session)
+
+        p11 = PacketWriter().write_8(15).write_8(11).write_8(21).write_32(session.char_id)
+        await session.send_packet(p11)
+        server.broadcast_to_map(session.map_id, p11, exclude_session=session)
+
+    elif sub == 13:  # Vehicle Navigation Orientation / Ping
+        logger.debug(f"[{session.char_name}] Vehicle navigation sync received (AC 15 Sub 13)")
+
     elif sub in [16, 17]:
         logger.info(f"[{session.char_name}] Companion ride action received: sub={sub}")
+
 
 

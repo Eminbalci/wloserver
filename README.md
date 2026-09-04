@@ -42,10 +42,13 @@ This repository contains a custom python-based server implementation for Wonderl
 - `server/death_system.py` - Combat defeat EXP loss, ghost state aura, and sacred altar respawns
 - `server/events_system.py` - Scheduled server events, Double EXP 2.0x multiplier, and festival notices
 - `server/version_validator.py` - Client version validation, Data\\Item.Dat integrity checks, and authentic Opcode 0 disconnect responses (AC 0 0x41 Wrong Version)
-- `server/dynamic_data_manager.py` - Central dynamic configuration manager (drops, crafting, alchemy, chests, gathering, instances)
+- `server/starter_pack_manager.py` - Dynamic starter items pack manager, SQLite persistence, and runtime delivery
+- `server/dynamic_data_manager.py` - Central dynamic configuration manager (drops, crafting, alchemy, chests, gathering, instances, starter items)
 - `server/npc_manager.py` - Authentic NPC & world entity manager, C# QuestNpc parity, scripted waypoint pacing, and blinking prevention
 - `server/eve_loader.py` - Authentic binary parser for 1,119 maps in `data/eve.Emg` (NPCs, portals, chests, mining, bytecode events)
 - `docs/` - Technical Documentation:
+  - [Starter Items Pack Configuration & Administrator GUI Management](docs/starter_items_configuration.md) - Dynamic SQLite starter gift items, GUI management (Tab 11), JSON import/export, and AC 23:6 delivery
+  - [PCAP Integration: First Login, Mini-Games, Lucky Draw & Vehicles](docs/pcap_integration.md) - Reverse-engineered packet flows, starter gift packs, Lucky Draw stop/delivery, vehicle lifecycle, and AC 5/15/23/104/183 handlers
   - [Client Version & File Integrity Validation](docs/client_version_and_integrity_validation.md) - Client build version checking, Data\\Item.Dat integrity checks, and authentic Opcode 0 reason codes (0x41 Wrong Version, 0x45 Item.dat File Error)
   - [aLogin.exe Master Function Index & Reverse Engineering Catalog](docs/alogin_master_function_index.md)
   - [aLogin.exe Binary Architecture & Function Map](docs/alogin_functions_architecture.md)

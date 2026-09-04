@@ -45,8 +45,16 @@ if click_id == 0 or (x == 0 and y == 0) or x > 4000 or y > 4000:
   - Templates `19034` (Treas Che), `19035` (Treas Che), `19037` (Cask), `19038` (Chest/Crate), `12000-12999`, `16000-16999`.
   - Persisted in SQLite `charchests`.
   - Once looted, remains in `state = 0x0001` (open/broken) permanently per character.
-  - `QuestNpc.update()` never broadcasts respawn packets for permanent chests, preventing sprite resetting and flickering.
+  - `QuestNpc.update()` immediately returns for permanent chests and never broadcasts respawn packets.
+  - `is_chest_opened(char_id, map_id, chest_id, is_permanent=True)` guarantees permanent chests never expire after `default_respawn_seconds`.
 - **Gathering Nodes** (`QuestNpc.is_gathering_node()`):
   - Coconuts, ores, clay, wood, herbs, mushrooms.
   - Respawns after cooldown using `AC 22 Sub 10 [clickId, 0x00, 0x00]`.
 
+### 2.6 Blinking & Flickering Root Causes & Fixes
+1. **Redundant AC 22:10 on Map Load (`send_map_info`)**:
+   - `send_map_info` was sending `AC 22:10 [clickId, 0xFF, 0xFF]` immediately following `AC 22:4`. Static props and permanent chests are now excluded from post-`AC 22:4` hide packet iterations.
+2. **PreEvent Visibility Redundant Show Packets (`preevent_interpreter.py`)**:
+   - `sync_per_player_npc_visibility` was broadcasting `AC 22:10 [clickId, 0x00, 0x00]` for visible rules, resetting static prop sprite animations to frame 0 and causing blinking. Static props and chests are now excluded from sending redundant show packets.
+3. **Chest System Respawn Expiration**:
+   - `ChestSystem.is_chest_opened()` was resetting opened chests back to closed state after 60 seconds because `default_respawn_seconds` expired. Added strict `is_permanent` flag to keep world chests open permanently without blinking.
