@@ -16,7 +16,7 @@
   {
     "item_id": 34332,
     "item_name": "Mini Dragonfly",
-    "count": 1,
+    "count": 5,
     "order_idx": 3,
     "description": "Starter flying mount vehicle"
   },
@@ -30,7 +30,7 @@
   {
     "item_id": 34026,
     "item_name": "Protective Exp Pill",
-    "count": 1,
+    "count": 10,
     "order_idx": 5,
     "description": "Prevents EXP loss upon death"
   },
@@ -51,21 +51,21 @@
   {
     "item_id": 34330,
     "item_name": "Mini HP Potion",
-    "count": 50,
+    "count": 1,
     "order_idx": 8,
     "description": "Starter HP healing potions"
   },
   {
     "item_id": 34190,
     "item_name": "10x Holy EXP Potion",
-    "count": 1,
+    "count": 5,
     "order_idx": 9,
     "description": "Boosts experience gain"
   },
   {
     "item_id": 34258,
     "item_name": "Training Ticket",
-    "count": 1,
+    "count": 5,
     "order_idx": 10,
     "description": "Instant training island pass"
   }

@@ -118,7 +118,7 @@ async def handle(server, session, reader):
                         server.save_player_to_db(session)
                         
                         item_pkt = PacketWriter()
-                        item_pkt.write_8(23).write_8(6).write_16(item_id).write_8(amount).write_bytes(bytes(26))
+                        item_pkt.write_8(23).write_8(6).write_16(item_id).write_8(min(255, int(amount))).write_bytes(bytes(28))
                         await session.send_packet(item_pkt)
                             
                         # System chat confirmation
@@ -477,9 +477,101 @@ async def handle(server, session, reader):
                 status = "active" if session.is_remote_control else "inactive"
                 await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Remote control auto-battler is now {status}."))
         else:
-            # Regular chat: broadcast to map
+            # Regular local chat: broadcast to map
             chat_pkt = PacketWriter()
             chat_pkt.write_8(2).write_8(2)
             chat_pkt.write_32(session.char_id)
             chat_pkt.write_string_n(msg)
             server.broadcast_to_map(session.map_id, chat_pkt, exclude_session=session)
+
+    elif sub == 1:  # Whisper / Private Message (AC 2 Sub 1)
+        target_name = reader.read_string()
+        msg = reader.read_string_n()
+        logger.info(f"[{session.char_name}] Whisper to '{target_name}': {msg}")
+
+        target_sess = None
+        for s in server.active_sessions:
+            if getattr(s, "char_name", "").lower() == target_name.lower():
+                target_sess = s
+                break
+
+        if target_sess:
+            # Send whisper to recipient
+            w_pkt = (
+                PacketWriter()
+                .write_8(2)
+                .write_8(1)
+                .write_32(session.char_id)
+                .write_string(session.char_name)
+                .write_string_n(msg)
+            )
+            await target_sess.send_packet(w_pkt)
+            # Echo back to sender
+            echo_pkt = (
+                PacketWriter()
+                .write_8(2)
+                .write_8(1)
+                .write_32(target_sess.char_id)
+                .write_string(target_name)
+                .write_string_n(msg)
+            )
+            await session.send_packet(echo_pkt)
+        else:
+            await session.send_packet(
+                PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Player {target_name} is currently offline.")
+            )
+
+    elif sub == 3:  # Team / Party Chat (AC 2 Sub 3)
+        msg = reader.read_string_n()
+        logger.info(f"[{session.char_name}] Team chat: {msg}")
+        team_pkt = (
+            PacketWriter()
+            .write_8(2)
+            .write_8(3)
+            .write_32(session.char_id)
+            .write_string(session.char_name)
+            .write_string_n(msg)
+        )
+        # Broadcast to party members or local team
+        team_leader = getattr(session, "team_leader", None)
+        team_members = getattr(session, "team_members", [])
+        if team_members:
+            for m_id in team_members:
+                m_sess = server.sessions.get(m_id)
+                if m_sess:
+                    await m_sess.send_packet(team_pkt)
+        else:
+            server.broadcast_to_map(session.map_id, team_pkt)
+
+    elif sub == 4:  # Guild Chat (AC 2 Sub 4)
+        msg = reader.read_string_n()
+        logger.info(f"[{session.char_name}] Guild chat: {msg}")
+        guild_pkt = (
+            PacketWriter()
+            .write_8(2)
+            .write_8(4)
+            .write_32(session.char_id)
+            .write_string(session.char_name)
+            .write_string_n(msg)
+        )
+        guild_id = getattr(session, "guild_id", 0)
+        if guild_id:
+            for s in server.active_sessions:
+                if getattr(s, "guild_id", 0) == guild_id:
+                    await s.send_packet(guild_pkt)
+        else:
+            await session.send_packet(guild_pkt)
+
+    elif sub == 5:  # World / Horn Global Broadcast (AC 2 Sub 5)
+        msg = reader.read_string_n()
+        logger.info(f"[{session.char_name}] World broadcast: {msg}")
+        world_pkt = (
+            PacketWriter()
+            .write_8(2)
+            .write_8(5)
+            .write_32(session.char_id)
+            .write_string(session.char_name)
+            .write_string_n(msg)
+        )
+        for s in server.active_sessions:
+            await s.send_packet(world_pkt)

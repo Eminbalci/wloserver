@@ -9,10 +9,10 @@ async def handle(server, session, reader):
     sub = reader.read_8()
     logger.info(f"[{session.char_name}] handle_combat sub={sub}")
     if sub == 1:
-        # Flee (escape) request
+        # Flee (escape) request (PvE & PvP)
         escape_type = reader.read_8() if reader.remaining_bytes() > 0 else 0
         logger.info(f"[{session.char_name}] Flee request: escape_type={escape_type}")
-        battle_id = getattr(session, 'pvp_battle_id', None)
+        battle_id = getattr(session, 'battle_id', None) or getattr(session, 'pvp_battle_id', None)
         if battle_id and battle_id in server.active_battles:
             battle = server.active_battles[battle_id]
             await server._do_flee(session, battle)
@@ -63,3 +63,30 @@ async def handle(server, session, reader):
                 return
 
         await server._start_pve_battle(session, npc_click_id, npc_id)
+
+    elif sub == 3:  # Combat Target Selection / Target Focus ACK
+        target_grid = reader.read_8() if reader.remaining_bytes() >= 1 else 0
+        logger.debug(f"[{session.char_name}] AC 11:3 Combat target focus grid={target_grid}")
+        from server.network import PacketWriter
+        await session.send_packet(PacketWriter().write_8(11).write_8(3).write_8(target_grid))
+
+    elif sub == 4:  # In-Combat Pet Capture Action (Net item / Skill 10008)
+        target_grid = reader.read_8() if reader.remaining_bytes() >= 1 else 0
+        logger.info(f"[{session.char_name}] AC 11:4 Pet capture attempt on grid={target_grid}")
+        battle_id = getattr(session, 'battle_id', None) or getattr(session, 'pvp_battle_id', None)
+        if battle_id and battle_id in server.active_battles:
+            battle = server.active_battles[battle_id]
+            # Buffer capture action in active battle
+            if 'pending_actions' not in battle:
+                battle['pending_actions'] = {}
+            src_coord = (4, 2)
+            dst_coord = (target_grid % 4, target_grid // 4) if target_grid > 0 else (0, 2)
+            battle['pending_actions'][src_coord] = {
+                'action': 'capture',
+                'skill_id': 10008,
+                'dst_x': dst_coord[0],
+                'dst_y': dst_coord[1]
+            }
+            from server.network import PacketWriter
+            # Immediate AC 53:5 ACK
+            await session.send_packet(PacketWriter().write_8(53).write_8(5).write_8(src_coord[0]).write_8(src_coord[1]))

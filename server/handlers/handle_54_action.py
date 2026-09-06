@@ -26,7 +26,7 @@ async def handle(server, session, reader):
                 server.save_player_to_db(session)
                 await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
                 item_pkt = PacketWriter()
-                item_pkt.write_8(23).write_8(6).write_16(item_id).write_8(amount).write_bytes(bytes(26))
+                item_pkt.write_8(23).write_8(6).write_16(item_id).write_8(min(255, int(amount))).write_bytes(bytes(28))
                 await session.send_packet(item_pkt)
                 buy_confirm = PacketWriter()
                 buy_confirm.write_8(54).write_8(3).write_8(shop_id).write_8(tab_id).write_16(item_id).write_8(amount)

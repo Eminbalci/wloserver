@@ -368,7 +368,7 @@ class TestItemMallSystem(unittest.TestCase):
         self.assertEqual(decrypted_23_6[1], 6)
         self.assertEqual(int.from_bytes(decrypted_23_6[2:4], "little"), 48050)
         self.assertEqual(decrypted_23_6[4], 1)  # Amount must be 1, not 0!
-        self.assertEqual(len(decrypted_23_6), 31)
+        self.assertEqual(len(decrypted_23_6), 33)  # Exact authentic 33-byte AC 23:6 layout
 
         found_23_8 = any(xor_crypt(p[4:])[0] == 23 and xor_crypt(p[4:])[1] == 8 for p in sent_pkts)
         found_23_5 = any(xor_crypt(p[4:])[0] == 23 and xor_crypt(p[4:])[1] == 5 for p in sent_pkts)

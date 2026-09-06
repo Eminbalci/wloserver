@@ -1497,16 +1497,21 @@ class GameServer:
             starter_gifts = GLOBAL_STARTER_PACK_MANAGER.get_delivery_tuples()
             for itm_id, itm_cnt in starter_gifts:
                 add_item_to_inventory(session, itm_id, itm_cnt)
-                delivery_pkt = PacketWriter().write_8(23).write_8(6).write_16(itm_id).write_16(itm_cnt).write_bytes(bytes(27))
+                # Authentic PCAP format: [23, 6, item_id(uint16_LE), count(uint8), padding(28 zeros)] (33 bytes total)
+                delivery_pkt = PacketWriter().write_8(23).write_8(6).write_16(itm_id).write_8(min(255, int(itm_cnt))).write_bytes(bytes(28))
                 await session.send_packet(delivery_pkt)
             session.received_starter_pack = True
             self.save_player_to_db(session)
             logger.info(f"[{session.char_name}] Granted authentic starter items pack ({len(starter_gifts)} items) via AC 23 Sub 6.")
 
         # Always synchronize full inventory packet at the conclusion of login sequence so
-        # the client's inventory bag UI is guaranteed to populate for both new and returning players.
+        # the client's inventory bag UI is guaranteed to cleanly populate for both new and returning players.
         await session.send_packet(self.build_inventory_packet(session))
-        
+
+        # Synchronize already-opened chests on map (AC 22 Sub 10)
+        from server.chest_system import GLOBAL_CHEST_SYSTEM
+        await GLOBAL_CHEST_SYSTEM.sync_opened_chests_on_map(session, session.map_id)
+
         # Send ground items to the player who just joined the map
         await self.send_ground_items(session)
         
@@ -1970,33 +1975,34 @@ class GameServer:
         return p
 
     def build_inventory_packet(self, session: PlayerSession) -> PacketWriter:
-        """Serializes SQLite inventory items to 29-byte blocks (AC 23 Sub 5)."""
+        """
+        Serializes player inventory occupied slots into authentic 31-byte records (AC 23 Sub 5).
+        Layout per slot:
+        [slot: uint8, item_id: uint16 LE, amount: uint16 LE, damage: uint8, padding: 25 zeros]
+        Total packet length = 2 header bytes + (occupied_slots * 31 bytes).
+        Authentic WLO protocol (verified against official PCAP arkadaseklemeveonlinegozukme.pcapng)
+        transmits only occupied slots, allowing the client to replace its inventory state cleanly.
+        """
         p = PacketWriter()
         p.write_8(23).write_8(5)
 
         slots = {}
-        for idx, item in enumerate(session.inventory):
+        for item in session.inventory:
+            if not isinstance(item, dict):
+                continue
             slot = item.get('slot')
-            if slot is None:
-                for s in range(1, 51):
-                    if s not in slots:
-                        slot = s
-                        break
-            if slot and slot <= 50:
+            if slot and 1 <= slot <= 50:
                 slots[slot] = item
 
-        for slot in range(1, 51):
-            item = slots.get(slot)
-            p.write_8(slot)
-            if item:
-                p.write_16(item.get('item_id', 0))
-                p.write_8(item.get('amount', 1))
-                p.write_8(item.get('damage', 0))
-            else:
-                p.write_16(0)
-                p.write_8(0)
-                p.write_8(0)
-            p.write_bytes(bytes(24))
+        for slot in sorted(slots.keys()):
+            item = slots[slot]
+            item_id = int(item.get('item_id', 0) or 0)
+            if item_id > 0:
+                p.write_8(slot)
+                p.write_16(item_id)
+                p.write_16(int(item.get('amount', 1) or 1))
+                p.write_8(int(item.get('damage', 0) or 0))
+                p.write_bytes(bytes(25))
 
         return p
 
@@ -2020,18 +2026,20 @@ class GameServer:
         self.save_player_to_db(session)
 
         # 2. AC 23 Sub 6: Authentic Item Delivery / Acquisition packet (triggers 'Obtain X pcs' client popup)
+        # Authentic PCAP format: [23, 6, item_id(uint16_LE), amount(uint8), padding(28 zeros)] (33 bytes total)
         if send_acquire_notice:
-            # Layout: [23, 6, item_id(uint16_LE), amount(uint16_LE), padding(25 zeros)] (31 bytes total)
-            p6 = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_16(amount).write_bytes(bytes(25))
+            p6 = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_8(min(255, int(amount))).write_bytes(bytes(28))
             await session.send_packet(p6)
 
         # 3. AC 23 Sub 8: Specific slot state update
+        # Layout: [23, 8, slot(uint8), item_id(uint16_LE), count(uint16_LE), damage(uint8), padding(25 zeros)] (33 bytes total)
         item = get_item_at_slot(session, actual_slot)
         cur_amt = item.get("amount", amount) if item else amount
-        p8 = PacketWriter().write_8(23).write_8(8).write_8(actual_slot).write_16(item_id).write_8(cur_amt).write_8(0).write_bytes(bytes(24))
+        damage = item.get("damage", 0) if item else 0
+        p8 = PacketWriter().write_8(23).write_8(8).write_8(actual_slot).write_16(item_id).write_16(cur_amt).write_8(damage).write_bytes(bytes(25))
         await session.send_packet(p8)
 
-        # 4. AC 23 Sub 5: Full 50-slot serialized bag sync
+        # 4. AC 23 Sub 5: Serialized occupied bag sync
         await session.send_packet(self.build_inventory_packet(session))
         logger.info(f"[{getattr(session, 'char_name', 'Player')}] Granted Item #{item_id} x{amount} in Slot {actual_slot}.")
         return True
@@ -2124,12 +2132,23 @@ class GameServer:
 
                 is_hidden = getattr(npc, 'visible', True) is False or (npc.get('visible', True) is False if isinstance(npc, dict) else False)
 
+                is_static = False
+                if hasattr(npc, 'is_static_npc'):
+                    is_static = npc.is_static_npc()
+                elif isinstance(npc, dict):
+                    t_id_check = npc.get('npc_id', 0) or npc.get('template_id', 0)
+                    is_static = (19000 <= t_id_check <= 35000) or (12000 <= t_id_check <= 12999) or (16000 <= t_id_check <= 16999)
+
                 if is_recruited or is_hidden:
                     state = 0xFFFF
-                elif is_opened or is_broken:
-                    state = 0x0001
-                else:
+                elif is_static:
+                    # In authentic WLO protocol (PCAP verified across all captures), all static chests,
+                    # crates, and map props spawn with state 0x0000. State 0x0001 in AC 22:4 is an active
+                    # animation flag that causes the client's sprite renderer to cycle/blink continuously.
                     state = 0x0000
+                else:
+                    # Living NPCs / monsters / companions have normal active state 0x00FF (255)
+                    state = 0x00FF
 
                 npc_pkt.write_16(c_id)
                 npc_pkt.write_16(state)
@@ -2144,7 +2163,7 @@ class GameServer:
             # Send individual hide packets for recruited companions (AC 22:10)
             for npc in sorted_npcs:
                 # Static props and permanent chests must never receive AC 22:10 packets (handled natively via AC 22:4 state)
-                if hasattr(npc, 'is_static_npc') and npc.is_static_npc():
+                if (hasattr(npc, 'is_static_npc') and npc.is_static_npc()) or (isinstance(npc, dict) and ((19000 <= (npc.get('npc_id', 0) or npc.get('template_id', 0)) <= 35000) or (12000 <= (npc.get('npc_id', 0) or npc.get('template_id', 0)) <= 12999))):
                     continue
                 c_id = npc.click_id if hasattr(npc, 'click_id') else (npc.get('click_id', 0) if isinstance(npc, dict) else 0)
                 t_id = npc.template_id if hasattr(npc, 'template_id') else ((npc.get('npc_id', 0) or npc.get('template_id', 0)) if isinstance(npc, dict) else 0)
@@ -2395,6 +2414,10 @@ class GameServer:
         from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
         await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(self, session, dst_map)
         await GLOBAL_PREEVENT_INTERPRETER.replay_actor_visibility(self, session, dst_map)
+
+        # Synchronize already-opened chests on map (AC 22 Sub 10)
+        from server.chest_system import GLOBAL_CHEST_SYSTEM
+        await GLOBAL_CHEST_SYSTEM.sync_opened_chests_on_map(session, dst_map)
 
         # Save to database
         self.save_player_to_db(session)
@@ -4077,7 +4100,7 @@ class GameServer:
                     self.save_player_to_db(session)
                     
                     item_pkt = PacketWriter()
-                    item_pkt.write_8(23).write_8(6).write_16(dropped_item_id).write_8(dropped_amount).write_bytes(bytes(26))
+                    item_pkt.write_8(23).write_8(6).write_16(dropped_item_id).write_8(min(255, int(dropped_amount))).write_bytes(bytes(28))
                     await session.send_packet(item_pkt)
                     
                     fly_pkt = PacketWriter()

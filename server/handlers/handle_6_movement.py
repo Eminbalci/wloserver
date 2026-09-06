@@ -1,3 +1,4 @@
+import time
 import logging
 from server.network import PacketWriter
 
@@ -27,8 +28,11 @@ async def handle(server, session, reader):
             logger.info(f"[{session.char_name}] Stopped fishing due to movement.")
             await session.send_packet(PacketWriter().write_8(23).write_8(54).write_8(0))
         
-        # Save to database on movement
-        server.save_player_to_db(session)
+        # Throttled save to database on movement (at most once every 30s during walking)
+        now = time.time()
+        if now - getattr(session, 'last_move_save_time', 0.0) >= 30.0:
+            session.last_move_save_time = now
+            server.save_player_to_db(session)
         
         # Broadcast movement update to map
         mov = PacketWriter()

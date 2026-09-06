@@ -8,63 +8,6 @@ logger = logging.getLogger("WLO_Server")
 ACTION_CODES = [12]
 
 
-async def run_beach_cutscene_timeline(server, session):
-    """
-    Executes the authentic timed cutscene sequence for Robinson Beach Arrival on Map 10035.
-    Ported directly from C# AC12.cs and verified against ilkgorevinanimasyonlukisimlari.pcapng.
-    """
-    try:
-        # Frame 2408: Camera Pan & Cinema Mode (300ms delay)
-        await asyncio.sleep(0.3)
-        if getattr(session, "map_id", 0) != 10035:
-            return
-
-        await session.send_packet(PacketWriter().write_8(20).write_8(8))
-        await session.send_packet(
-            PacketWriter()
-            .write_8(22)
-            .write_8(11)
-            .write_8(6)
-            .write_8(0)
-            .write_8(0xFF)
-            .write_8(0xFF)
-        )  # Camera Pan
-        await session.send_packet(PacketWriter().write_8(6).write_8(2).write_8(1))  # Cinema lock
-        await session.send_packet(PacketWriter().write_8(20).write_8(11))
-        await session.send_packet(PacketWriter().write_8(20).write_8(10))
-        logger.info(f"[{session.char_name}] Beach Cutscene Timeline: Sent Camera Pan & Cinema Mode")
-
-        # Frame 2414: Robinson approaches & bends over player (1200ms delay)
-        await asyncio.sleep(1.2)
-        if getattr(session, "map_id", 0) != 10035:
-            return
-
-        approach_pkt = (
-            PacketWriter()
-            .write_8(22)
-            .write_8(12)
-            .write_8(2)
-            .write_8(11)
-            .write_8(0)
-            .write_8(5)
-        )
-        await session.send_packet(approach_pkt)
-        server.broadcast_to_map(session.map_id, approach_pkt, exclude_session=session)
-        await session.send_packet(PacketWriter().write_8(20).write_8(10))
-        logger.info(f"[{session.char_name}] Beach Cutscene Timeline: Sent Robinson approach (AC 22:12)")
-
-        # Frame 2436: Trigger Robinson dialogue (1500ms delay)
-        await asyncio.sleep(1.5)
-        if getattr(session, "map_id", 0) == 10035:
-            session.beach_cutscene_active = False
-            from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
-            logger.info(f"[{session.char_name}] Beach Cutscene Timeline: Triggering Robinson rescue dialogue (Map 10035, Event 1)")
-            await GLOBAL_EVE_INTERPRETER.try_execute(server, session, 1)
-    except Exception as e:
-        logger.error(f"Error in beach cutscene timeline: {e}", exc_info=True)
-        session.beach_cutscene_active = False
-
-
 async def handle(server, session, reader):
     """Processes map loading complete response from client (AC 12)."""
     sub = reader.read_8()
@@ -95,21 +38,46 @@ async def handle(server, session, reader):
         if is_beach_landing and not getattr(session, "beach_cutscene_active", False):
             session.pending_beach_cutscene = False
             session.beach_cutscene_active = True
+            session.beach_cutscene_stage = 1
             session.dialogue_queue = []
+            session.emote = 9
 
             logger.info(f"[{session.char_name}] Triggering Beach Arrival Cutscene (Robinson rescue sequence) on Map 10035...")
 
-            # Frame 2405: Player lies unconscious on sand (Emote 9) + immobilize controls (AC 5:30)
-            session.emote = 9
+            # Authentic PCAP Packets 31-35: Scene & Map Setup
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("178a")))
+            await session.send_packet(PacketWriter().write_8(23).write_8(122).write_32(session.char_id))
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("17dd00")))
+
+            # Packet 34: AC 22 Sub 4 Waypoint nodes (114 bytes)
+            wp_hex = (
+                "16040100ff006004a5080100000000000200000041035e07010000000000"
+                "03000000dd032f08010000000000040000000b027105010000000000"
+                "050000007408a807010000000000060000005405c008010000000000"
+                "0700000017055b080100000000000800ff0040048a08010000000000"
+            )
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex(wp_hex)))
+
+            # Packet 35: AC 23 Sub 4 (32 bytes)
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("17040301006aa00000dc06390db400000003020021b40000d608e51000000000")))
+
+            # Packet 36: AC 32 Sub 2 (Player lies unconscious on sand, Emote 9)
             emote_pkt = PacketWriter().write_8(32).write_8(2).write_32(session.char_id).write_8(9)
             await session.send_packet(emote_pkt)
             server.broadcast_to_map(session.map_id, emote_pkt, exclude_session=session)
 
-            immob_pkt = PacketWriter().write_8(5).write_8(30).write_8(1).write_32(session.char_id).write_8(0)
-            await session.send_packet(immob_pkt)
+            # Packets 37-39: Visual sync & immobilize player controls (AC 5:30)
+            await session.send_packet(PacketWriter().write_8(23).write_8(76).write_32(session.char_id))
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("1766")))
+            await session.send_packet(PacketWriter().write_8(5).write_8(30).write_8(1).write_32(session.char_id).write_8(0))
 
-            # Start asynchronous timed timeline task
-            asyncio.create_task(run_beach_cutscene_timeline(server, session))
+            # Packets 41-45: Camera Pan & Cinema Mode
+            await session.send_packet(PacketWriter().write_8(20).write_8(8))
+            await session.send_packet(PacketWriter().write_8(22).write_8(11).write_8(6).write_8(0).write_8(0xFF).write_8(0xFF)) # Camera Pan
+            await session.send_packet(PacketWriter().write_8(6).write_8(2).write_8(1)) # Cinema mode on
+            await session.send_packet(PacketWriter().write_8(20).write_8(11))
+            await session.send_packet(PacketWriter().write_8(20).write_8(10)) # Advance trigger for camera move
+            logger.info(f"[{session.char_name}] Beach Cutscene Stage 1: Dispatched Camera Pan and Cinema Mode.")
             return
         else:
             # Normal map warp: Send warp completion unlock packets immediately

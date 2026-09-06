@@ -772,14 +772,14 @@ class DynamicDataManager:
                         default_starters = [
                             (34038, "Starter Gift 1", 1, 1, "Beginner gift package"),
                             (34058, "Remote Control", 1, 2, "Auto-combat and assistant remote control"),
-                            (34332, "Mini Dragonfly", 1, 3, "Starter flying mount vehicle"),
+                            (34332, "Mini Dragonfly", 5, 3, "Starter flying mount vehicle"),
                             (32176, "Spicy Hot Pot", 50, 4, "Full recovery food"),
-                            (34026, "Protective Exp Pill", 1, 5, "Prevents EXP loss upon death"),
+                            (34026, "Protective Exp Pill", 10, 5, "Prevents EXP loss upon death"),
                             (34542, "Substitute Doll", 1, 6, "Prevents companion amity drop upon death"),
                             (21742, "Goddess Robe", 1, 7, "Starter protective equipment"),
-                            (34330, "Mini HP Potion", 50, 8, "Starter HP healing potions"),
-                            (34190, "10x Holy EXP Potion", 1, 9, "Boosts experience gain"),
-                            (34258, "Training Ticket", 1, 10, "Instant training island pass"),
+                            (34330, "Mini HP Potion", 1, 8, "Starter HP healing potions"),
+                            (34190, "10x Holy EXP Potion", 5, 9, "Boosts experience gain"),
+                            (34258, "Training Ticket", 5, 10, "Instant training island pass"),
                         ]
                         conn.executemany("""
                             INSERT INTO game_starter_items (item_id, item_name, count, order_idx, description)

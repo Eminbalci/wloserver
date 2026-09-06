@@ -79,25 +79,53 @@ async def handle(server, session, reader):
         # Echo success response for fishing activation: [23, 53, 1]
         await session.send_packet(PacketWriter().write_8(23).write_8(53).write_8(1))
         
-    elif sub == 10:  # Move item in inventory
+    elif sub == 10:  # Move, Stack, or Swap item in inventory
         src = reader.read_8()
         ammt = reader.read_8()
         dst = reader.read_8()
         
-        if 1 <= src <= 50 and 1 <= dst <= 50 and ammt > 0:
-            item = get_item_at_slot(session, src)
-            if item:
-                item_id = item['item_id']
-                # Remove from src
-                remove_item_at_slot(session, src, ammt)
-                # Add to dst
-                add_item_to_inventory(session, item_id, amount=ammt, slot=dst)
+        if 1 <= src <= 50 and 1 <= dst <= 50 and ammt > 0 and src != dst:
+            src_item = get_item_at_slot(session, src)
+            dst_item = get_item_at_slot(session, dst)
+            
+            if src_item:
+                actual_ammt = min(ammt, src_item.get('amount', 1))
+                if dst_item is None:
+                    # Case 1: Destination slot is empty
+                    if src_item.get('amount', 1) <= actual_ammt:
+                        src_item['slot'] = dst
+                    else:
+                        src_item['amount'] -= actual_ammt
+                        new_item = dict(src_item)
+                        new_item['amount'] = actual_ammt
+                        new_item['slot'] = dst
+                        session.inventory.append(new_item)
+                elif dst_item.get('item_id') == src_item.get('item_id'):
+                    # Case 2: Destination has same item (Stacking)
+                    dst_item['amount'] = dst_item.get('amount', 1) + actual_ammt
+                    if src_item.get('amount', 1) <= actual_ammt:
+                        session.inventory.remove(src_item)
+                    else:
+                        src_item['amount'] -= actual_ammt
+                else:
+                    # Case 3: Destination has different item (SWAP slots)
+                    src_item['slot'] = dst
+                    dst_item['slot'] = src
                 
                 server.save_player_to_db(session)
                 
                 # Send confirmation: 23, 10, src, ammt, dst
                 move_confirm = PacketWriter().write_8(23).write_8(10).write_8(src).write_8(ammt).write_8(dst)
                 await session.send_packet(move_confirm)
+            else:
+                # Slot desynchronization: client attempted to move from empty slot
+                # Immediately re-synchronize full inventory so client UI matches server DB
+                logger.warning(f"[{session.char_name}] Inventory move desync from slot {src}. Resynchronizing inventory.")
+                if hasattr(server, 'build_inventory_packet'):
+                    await session.send_packet(server.build_inventory_packet(session))
+        elif 1 <= src <= 50 and src == dst:
+            move_confirm = PacketWriter().write_8(23).write_8(10).write_8(src).write_8(ammt).write_8(dst)
+            await session.send_packet(move_confirm)
                 
     elif sub == 11:  # Wear/Equip item
         loc = reader.read_8()  # inventory slot (1-50)
@@ -382,8 +410,8 @@ async def handle(server, session, reader):
                     slot = add_item_to_inventory(session, item_id, amount=qnt)
                     if slot is not None:
                         # Authentic AC 23 Sub 6: Add item to inventory (33 bytes)
-                        # S->C [23, 6, item_id (uint16_LE), count (uint16_LE), 27 zero bytes]
-                        item_pkt = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_16(qnt).write_bytes(bytes(27))
+                        # S->C [23, 6, item_id (uint16_LE), count (uint8), 28 zero bytes]
+                        item_pkt = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_8(min(255, int(qnt))).write_bytes(bytes(28))
                         await session.send_packet(item_pkt)
                         success = True
                         
@@ -573,8 +601,8 @@ async def handle(server, session, reader):
             
         if target_slot is not None:
             # Authentic AC 23 Sub 8: Add Compounded item to slot (33 bytes)
-            # S->C [23, 8, slot (uint8), item_id (uint16_LE), count (uint8), 27 zero bytes]
-            p8 = PacketWriter().write_8(23).write_8(8).write_8(target_slot).write_16(result_item).write_8(min(255, result_amount)).write_bytes(bytes(27))
+            # S->C [23, 8, slot (uint8), item_id (uint16_LE), count (uint16_LE), damage (uint8), 25 zero bytes]
+            p8 = PacketWriter().write_8(23).write_8(8).write_8(target_slot).write_16(result_item).write_16(result_amount).write_8(0).write_bytes(bytes(25))
             await session.send_packet(p8)
             
             # Authentic AC 23 Sub 13: Compounding Success Result Window (6 bytes)

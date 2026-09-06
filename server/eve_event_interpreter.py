@@ -209,13 +209,19 @@ class EveEventInterpreter:
 
             if q_id > 0:
                 current_state = get_session_quest_state(session, q_id)
+                # If this sub sets quest flag to completed (state 2) and quest is already completed, do not repeat
+                is_completion_branch = any(
+                    o.get("dptr") == 5 and o.get("d1") == q_id and o.get("d2") == 2
+                    for o in s.get("opcodes", [])
+                )
+                if is_completion_branch and current_state >= 2:
+                    continue
+
                 # If player already completed this quest step, check if sub matches completed state
                 if req_state == 2 and current_state >= 2:
-                    if s.get("opcodes"):
-                        return s
+                    return s
                 elif req_state == 1 and current_state == 1:
-                    if s.get("opcodes"):
-                        return s
+                    return s
                 elif current_state == 0 and req_state == 0:
                     if s.get("opcodes"):
                         return s
@@ -247,6 +253,38 @@ class EveEventInterpreter:
                 npc = n
                 break
 
+        # Check if clicked entity is a permanent chest or gathering node
+        is_perm_chest = False
+        is_gather_node = False
+        if npc:
+            if hasattr(npc, 'is_permanent_chest') and npc.is_permanent_chest():
+                is_perm_chest = True
+            elif hasattr(npc, 'is_gathering_node') and npc.is_gathering_node():
+                is_gather_node = True
+            elif hasattr(npc, 'is_static_npc') and npc.is_static_npc():
+                is_perm_chest = True
+        else:
+            from server.npc_manager import QuestNpc
+            dummy = QuestNpc(map_id=session.map_id, click_id=click_id, name="", npc_id=0, x=0, y=0)
+            if dummy.is_permanent_chest():
+                is_perm_chest = True
+
+        from server.chest_system import GLOBAL_CHEST_SYSTEM
+        if is_perm_chest:
+            if GLOBAL_CHEST_SYSTEM.is_chest_opened(session.char_id, session.map_id, click_id, is_permanent=True):
+                logger.info(f"[{session.char_name}] Permanent chest #{click_id} on map {session.map_id} is already claimed.")
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("You have already claimed this treasure."))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                await session.send_packet(PacketWriter().write_8(5).write_8(4))
+                return True
+        elif is_gather_node:
+            if getattr(npc, 'is_broken', False) or GLOBAL_CHEST_SYSTEM.is_chest_opened(session.char_id, session.map_id, click_id, is_permanent=False):
+                logger.info(f"[{session.char_name}] Gathering node #{click_id} on map {session.map_id} is currently empty.")
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("This node/chest is currently empty and will respawn soon."))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                await session.send_packet(PacketWriter().write_8(5).write_8(4))
+                return True
+
         event_entry = None
         if npc and npc.get("events"):
             for ev_id in npc["events"]:
@@ -270,6 +308,18 @@ class EveEventInterpreter:
         # Select matching branch
         selected_sub = self.select_matching_branch(session, event_entry)
         if not selected_sub or not selected_sub.get("opcodes"):
+            if is_perm_chest:
+                logger.info(f"[{session.char_name}] Chest #{click_id} on map {session.map_id} is empty / already claimed.")
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("You have already claimed this treasure."))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                await session.send_packet(PacketWriter().write_8(5).write_8(4))
+                return True
+            elif is_gather_node:
+                logger.info(f"[{session.char_name}] Node #{click_id} on map {session.map_id} is currently empty.")
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("This node/chest is currently empty and will respawn soon."))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                await session.send_packet(PacketWriter().write_8(5).write_8(4))
+                return True
             logger.info(f"[EveInterpreter] Map #{session.map_id}, NPC #{click_id} '{npc_name}' -> No executable branch found.")
             return False
 
@@ -347,17 +397,24 @@ class EveEventInterpreter:
                                 if hasattr(server, 'broadcast_to_map'):
                                     server.broadcast_to_map(session.map_id, open_anim, exclude_session=session)
                                 
-                                # Mark NPC object broken on map
+                                # Record opened chest in charchests DB for player persistence
+                                try:
+                                    from server.chest_system import GLOBAL_CHEST_SYSTEM
+                                    if hasattr(session, 'char_id') and session.char_id:
+                                        GLOBAL_CHEST_SYSTEM.record_chest_opened(session.char_id, session.map_id, click_id)
+                                except Exception:
+                                    pass
+
+                                # Mark NPC object broken on map ONLY if it's a gathering node
                                 map_npcs = getattr(server, 'map_npcs', {}).get(session.map_id, [])
                                 for m_npc in map_npcs:
                                     m_cid = m_npc.click_id if hasattr(m_npc, 'click_id') else (m_npc.get('click_id', 0) if isinstance(m_npc, dict) else 0)
                                     if m_cid == click_id:
-                                        if hasattr(m_npc, 'is_broken'):
+                                        is_gather = hasattr(m_npc, 'is_gathering_node') and m_npc.is_gathering_node()
+                                        if is_gather and hasattr(m_npc, 'is_broken'):
                                             m_npc.is_broken = True
                                             import time
                                             m_npc.respawn_time = time.time() + 60.0
-                                        elif isinstance(m_npc, dict):
-                                            m_npc['is_broken'] = True
                                         break
                             
                             executed_any = True
@@ -529,36 +586,27 @@ class EveEventInterpreter:
 
         if step_type == "storm_cutscene":
             import time
-            logger.info(f"[EveInterpreter] Starting Storm Cutscene Video (AC 186:12 & AC 20:1 Step {step_num}) for {session.char_name}")
+            logger.info(f"[EveInterpreter] Starting Storm Cutscene Video (AC 186:9 & AC 20:1 Step {step_num}) for {session.char_name}")
             session.playing_storm_cutscene = True
             session.storm_cutscene_start_time = time.time()
 
-            # 1. AC 186:12 Cutscene Movie Player Init (matching PCAP [012] / C# EveEventInterpreter line 1545)
-            await session.send_packet(
-                PacketWriter()
-                .write_8(186)
-                .write_8(12)
-                .write_8(1)
-                .write_8(0).write_8(0).write_8(0).write_8(0)
-            )
+            # Packets 15-16: Passenger shock animation & scream SFX
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("0a067be203000000")))
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("230c7be2030000")))
 
-            # 2. AC 20:1 Step 3 Event Trigger with Thunder SFX (matching PCAP [018] / C# Tools.FromFormat("bbdbbwwd", 20, 1, 3, 5, 0, 2, 31488, 0))
-            pkt = (
-                PacketWriter()
-                .write_8(20)
-                .write_8(1)
-                .write_8(0).write_8(0).write_8(0).write_8(step_num)  # 4-byte step = 3
-                .write_8(5)      # Type 5: Special Cinematic Event
-                .write_8(0)      # Target = 0
-                .write_16(2)     # Param = 2 (0x0002)
-                .write_16(31488) # Sound ID = 31488 / 0x7B00 (Thunder SFX)
-                .write_32(0)     # 4 zero padding bytes
-            )
-            await session.send_packet(pkt)
+            # Packet 17: Command client to PLAY Movie ID 1 NOW (AC 186 Sub 9)
+            await session.send_packet(PacketWriter().write_8(186).write_8(9).write_16(1).write_8(1).write_32(0))
 
-            # 3. SFX Packets (matching PCAP [020]-[021])
-            await session.send_packet(PacketWriter().write_8(35).write_8(12).write_8(0x16).write_8(0x19).write_8(1).write_8(0).write_8(0))
-            await session.send_packet(PacketWriter().write_8(35).write_8(12).write_8(0xA0).write_8(0xE2).write_8(3).write_8(0).write_8(0))
+            # Packet 18: Authentic 18-byte cinematic screen-shake/thunder event packet (AC 20 Sub 1 Step 3)
+            # Hex: 14010000000305000000027b000000000000
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("14010000000305000000027b000000000000")))
+
+            # Packet 19: Passenger falling/fainting pose (AC 5 Sub 8)
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("05087be2030000")))
+
+            # Packets 20-21: Thunder explosion and ship creaking sounds (AC 35 Sub 12)
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("230c1619010000")))
+            await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("230ca0e2030000")))
         elif step_type == "choice":
             question_id = step_info.get("question_id", 1)
             layout = step_info.get("layout", 1)
@@ -588,6 +636,23 @@ class EveEventInterpreter:
             await server.send_dialogue(session, speaker_id, talk_id, step=step_num, portrait_type=portrait)
             if text:
                 await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(text))
+
+            # Map 10017 Starter Ship Captain Intro Sequence
+            if session.map_id == 10017 and speaker_id == 10:
+                if step_num == 1:
+                    # Packet 02: Lock facing direction
+                    await session.send_packet(PacketWriter().write_8(6).write_8(2).write_8(1))
+                    # Packet 05: Gesture animation (AC 183 Sub 11)
+                    await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("b70b0902")))
+                    # Packet 06: Voice SFX
+                    await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("230cd320020000")))
+                elif step_num == 2:
+                    # Packet 10: Spawn passenger Talia191 (AC 3 Sub 123)
+                    await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("037be2030004025266ea42065f05000400cdb1851a5cbd0d0006bb56cb52ee366c5a5d5e3d62000000000000000854616c696131393100ff0000000001")))
+                    # Packet 11: Talia visual appearance (AC 5 Sub 0)
+                    await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("05007be20300bb56cb52ee366c5a5d5e3d62")))
+                    # Packet 12: Pre-arm Movie 1 in background (AC 186 Sub 12)
+                    await session.send_packet(PacketWriter().write_8(186).write_8(12).write_16(1).write_8(0).write_8(0).write_8(0).write_8(0))
 
     async def handle_choice_selection(self, server: Any, session: Any, choice_val: int) -> bool:
         """
@@ -645,9 +710,12 @@ class EveEventInterpreter:
             await session.send_packet(PacketWriter().write_8(20).write_8(9))
             return True
         elif action_code in (4, 9):
-            # Storage / Props Keeper
+            # Storage / Props Keeper (AC 29 Sub 6)
+            from server.bank_system import GLOBAL_BANK_MANAGER
+            await session.send_packet(PacketWriter().write_8(29).write_8(6))
+            await session.send_packet(GLOBAL_BANK_MANAGER.build_vault_packet(session))
+            await session.send_packet(PacketWriter().write_8(20).write_8(9))
             await session.send_packet(PacketWriter().write_8(20).write_8(8))
-            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Storage opened."))
             await session.send_packet(PacketWriter().write_8(5).write_8(4))
             return True
         elif action_code == 5:

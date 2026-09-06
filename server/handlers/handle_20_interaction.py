@@ -213,10 +213,9 @@ async def handle(server, session, reader):
                     await session.send_packet(anim)
                     server.broadcast_to_map(session.map_id, anim, exclude_session=session)
 
-                    if hasattr(npc, 'is_broken'):
+                    if hasattr(npc, 'is_gathering_node') and npc.is_gathering_node():
                         npc.is_broken = True
-                    elif isinstance(npc, dict):
-                        npc['is_broken'] = True
+                        npc.respawn_time = time.time() + 60.0
 
                     from server.gameserver import add_item_to_inventory
                     item_id = 41066 if "coconut" in name.lower() else (27001 if "wood" in name.lower() else 28014)
@@ -252,6 +251,44 @@ async def handle(server, session, reader):
                 return
 
             # --- 3. NPC SERVICES & INTERACTION ---
+            # Props Keeper & Storage Interaction (AC 29 Sub 6)
+            if (
+                npc_template_id in (13012, 13013, 14134)
+                or "props keeper" in name.lower()
+                or "props keep" in name.lower()
+                or "stock keeper" in name.lower()
+                or "warehouse" in name.lower()
+                or ("keeper" in name.lower() and "pet" not in name.lower() and "reward" not in name.lower())
+            ):
+                logger.info(f"[{session.char_name}] Opening Props Keeper (AC 29 Sub 6) with '{name}' (TID: {npc_template_id})")
+                from server.bank_system import GLOBAL_BANK_MANAGER
+                await session.send_packet(PacketWriter().write_8(29).write_8(6))
+                await session.send_packet(GLOBAL_BANK_MANAGER.build_vault_packet(session))
+                await session.send_packet(PacketWriter().write_8(20).write_8(9))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                return
+
+            # NPC Shop Interaction (AC 27 Sub 3 / 4)
+            if (
+                13000 <= npc_template_id < 14000
+                or "shop" in name.lower()
+                or "vendor" in name.lower()
+                or "merchant" in name.lower()
+                or "store" in name.lower()
+            ) and "pet" not in name.lower():
+                is_weapon = (
+                    npc_template_id in (13000, 13009)
+                    or "weapon" in name.lower()
+                    or "armor" in name.lower()
+                    or "armour" in name.lower()
+                )
+                shop_sub = 4 if is_weapon else 3
+                logger.info(f"[{session.char_name}] Opening NPC Shop (AC 27 Sub {shop_sub}) with '{name}' (TID: {npc_template_id})")
+                await session.send_packet(PacketWriter().write_8(27).write_8(shop_sub))
+                await session.send_packet(PacketWriter().write_8(20).write_8(9))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                return
+
             # ATM / Bank NPC Interaction
             if "bank" in name.lower() or "atm" in name.lower() or npc_template_id in (14181, 14157):
                 dialogue_text = (
@@ -263,19 +300,23 @@ async def handle(server, session, reader):
                 await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(dialogue_text))
                 return
 
-            # Clinic / Doctor NPC Interaction
-            if "doctor" in name.lower() or "clinic" in name.lower() or npc_template_id == 14151:
+            # Clinic / Witch Doctor NPC Interaction (AC 31 Sub 2 / 7)
+            if "doctor" in name.lower() or "clinic" in name.lower() or "witch" in name.lower() or npc_template_id in (14151, 14152):
                 max_hp = getattr(session, 'max_hp', 200)
                 max_sp = getattr(session, 'max_sp', 100)
                 session.hp = max_hp
                 session.sp = max_sp
-                # Send HP / SP full recovery
+                # Send HP / SP full recovery (AC 8:1)
                 await session.send_packet(PacketWriter().write_8(8).write_8(1).write_16(0x0119).write_32(max_hp).write_32(0))
                 await session.send_packet(PacketWriter().write_8(8).write_8(1).write_16(0x011a).write_32(max_sp).write_32(0))
-                dialogue_text = "Welcome to the Clinic! Your HP and SP have been fully restored."
-                logger.info(f"[{session.char_name}] Restored HP/SP at Doctor (Clinic).")
+                # Authentic Witch Doctor Cleanse ACK (AC 31 Sub 2)
+                await session.send_packet(PacketWriter().write_8(31).write_8(2).write_bytes(bytes([0xFF, 0xFF, 0xFF, 0xFF])))
+                await session.send_packet(PacketWriter().write_8(20).write_8(9))
+                dialogue_text = "Welcome to the Clinic! Your HP, SP, and status conditions have been fully restored."
+                logger.info(f"[{session.char_name}] Restored HP/SP and cleansed at Witch Doctor (Clinic).")
                 await server.send_dialogue(session, native_click_id, 51155, step=1, portrait_type=3)
                 await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(dialogue_text))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
                 return
 
             # Pet Hotel / Pet Keeper
@@ -335,10 +376,86 @@ async def handle(server, session, reader):
             await server.warp_player(session, 10035, 1038, 2235)
             return
 
-        # 1. Absorb AC 20:6 during active beach cutscene timeline (Matching C# AC20.cs line 156)
-        if getattr(session, 'beach_cutscene_active', False):
-            logger.debug(f"[{session.char_name}] Absorbed AC 20:6 during BeachCutsceneActive timeline")
-            return
+        # 1. Beach Cutscene State Machine (Map 10035 Robinson Rescue)
+        if getattr(session, 'beach_cutscene_active', False) and getattr(session, 'map_id', 0) == 10035:
+            stage = getattr(session, 'beach_cutscene_stage', 1)
+            logger.info(f"[{session.char_name}] Beach Cutscene progressing at stage {stage} (AC 20:6)")
+
+            if stage == 1:
+                # Stage 1: Camera pan completed -> Robinson approaches player
+                # PCAP Packet 47-48: AC 22:12 [16 0c 02 0b 00 05] + AC 20:10
+                approach_pkt = PacketWriter().write_8(22).write_8(12).write_8(2).write_8(11).write_8(0).write_8(5)
+                await session.send_packet(approach_pkt)
+                server.broadcast_to_map(session.map_id, approach_pkt, exclude_session=session)
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                session.beach_cutscene_stage = 2
+                return
+
+            elif stage == 2:
+                # Stage 2: Robinson arrived -> Robinson speaks TalkID 12008 "(Gurgh? Gurgh?)"
+                # PCAP Packets 50-52: AC 20:1 + Voice SFX
+                talk_pkt = bytes.fromhex("1401000000010500000001e82e0000000000")
+                await session.send_packet(PacketWriter().write_bytes(talk_pkt))
+                await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("230cda80030000")))
+                await session.send_packet(PacketWriter().write_bytes(bytes.fromhex("230c778e030000")))
+                session.beach_cutscene_stage = 3
+                return
+
+            elif stage == 3:
+                # Stage 3: Player clicked Next on "(Gurgh? Gurgh?)" -> Grant Quest 12040 Step 1
+                # PCAP Packets 54-55: AC 24:1 [18 01 08 2f 01] + AC 20:10
+                await session.send_packet(PacketWriter().write_8(24).write_8(1).write_16(12040).write_8(1))
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                session.beach_cutscene_stage = 4
+                return
+
+            elif stage == 4:
+                # Stage 4: Sync step
+                # PCAP Packet 57: AC 20:10
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                session.beach_cutscene_stage = 5
+                return
+
+            elif stage == 5:
+                # Stage 5: Set Quest Flag 97 (Active)
+                # PCAP Packets 59-60: AC 24:5 [18 05 61 00 01] + AC 20:10
+                await session.send_packet(PacketWriter().write_8(24).write_8(5).write_16(97).write_8(1))
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                session.beach_cutscene_stage = 6
+                return
+
+            elif stage == 6:
+                # Stage 6: Robinson stands back up / returns
+                # PCAP Packets 62-63: AC 22:12 [16 0c 01 01 00 06] + AC 20:10
+                stand_pkt = PacketWriter().write_8(22).write_8(12).write_8(1).write_8(1).write_8(0).write_8(6)
+                await session.send_packet(stand_pkt)
+                server.broadcast_to_map(session.map_id, stand_pkt, exclude_session=session)
+                await session.send_packet(PacketWriter().write_8(20).write_8(10))
+                session.beach_cutscene_stage = 7
+                return
+
+            elif stage == 7:
+                # Stage 7: Cutscene completion and controls release
+                # PCAP Packets 65-66: AC 20:8 + AC 5:4
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))  # Close dialogue
+                await session.send_packet(PacketWriter().write_8(5).write_8(4))    # Unlock player movement
+                await session.send_packet(PacketWriter().write_8(6).write_8(2).write_8(0))  # Cinema lock off
+
+                # Player stands up: Reset pose to 0
+                session.emote = 0
+                e_reset = PacketWriter().write_8(32).write_8(2).write_32(session.char_id).write_8(0)
+                await session.send_packet(e_reset)
+                server.broadcast_to_map(session.map_id, e_reset, exclude_session=session)
+
+                # Persist Quest 12040 Step 1 in session & DB
+                from server.eve_event_interpreter import set_session_quest_state
+                set_session_quest_state(session, 12040, 1)
+                server.save_player_to_db(session)
+
+                session.beach_cutscene_active = False
+                session.beach_cutscene_stage = 0
+                logger.info(f"[{session.char_name}] Beach Arrival Cutscene & Robinson rescue completed successfully! Controls restored.")
+                return
 
         # 2. Dialogue Queue Advancement (Multi-step dialogue playback)
         queue = getattr(session, 'dialogue_queue', None)
@@ -348,31 +465,6 @@ async def handle(server, session, reader):
             await GLOBAL_EVE_INTERPRETER._dispatch_step(server, session, next_step)
             return
 
-        # 2b. Map 10035 Robinson Beach Dialogue Completion
-        if getattr(session, 'map_id', 0) == 10035 and getattr(session, 'emote', 0) == 9:
-            session.emote = 0
-            # Frame 2997: Robinson returns to normal standing posture (AC 22:12 [1, 1, 0, 6])
-            stand_pkt = PacketWriter().write_8(22).write_8(12).write_8(1).write_8(1).write_8(0).write_8(6)
-            await session.send_packet(stand_pkt)
-            server.broadcast_to_map(session.map_id, stand_pkt, exclude_session=session)
-
-            # Player stands up (AC 32:2 [char_id, 0])
-            e_reset = PacketWriter().write_8(32).write_8(2).write_32(session.char_id).write_8(0)
-            await session.send_packet(e_reset)
-            server.broadcast_to_map(session.map_id, e_reset, exclude_session=session)
-
-            # Mark Quest 12040 Step 1
-            from server.eve_event_interpreter import set_session_quest_state
-            set_session_quest_state(session, 12040, 1)
-            server.save_player_to_db(session)
-
-            # Unlock Cinema mode, Screen, and Controls
-            await session.send_packet(PacketWriter().write_8(6).write_8(2).write_8(0))
-            await session.send_packet(PacketWriter().write_8(20).write_8(8))
-            await session.send_packet(PacketWriter().write_8(5).write_8(4))
-            logger.info(f"[{session.char_name}] Beach Arrival Cutscene & Robinson dialogue completed. Controls restored.")
-            return
-            
         # 3. Check Defer Scene Transition Warp
         complete_warp = getattr(session, 'on_interaction_complete', None)
         if complete_warp:

@@ -5,6 +5,8 @@ This repository contains a custom python-based server implementation for Wonderl
 ## Structure
 
 - `start.bat` / `start.sh` - Launch scripts for the server
+- `start_gap_analyzer.bat` - One-click live packet sniffer and feature gap analyzer for WLRI live gameplay
+- `start_new_char_quest_recorder.bat` - Dedicated background recorder for character creation and first quest session
 - `server/main.py` - Entry point
 - `server/gameserver.py` - Core game server logic
 - `server/database.py` - Database interactions
@@ -46,7 +48,22 @@ This repository contains a custom python-based server implementation for Wonderl
 - `server/dynamic_data_manager.py` - Central dynamic configuration manager (drops, crafting, alchemy, chests, gathering, instances, starter items)
 - `server/npc_manager.py` - Authentic NPC & world entity manager, C# QuestNpc parity, scripted waypoint pacing, and blinking prevention
 - `server/eve_loader.py` - Authentic binary parser for 1,119 maps in `data/eve.Emg` (NPCs, portals, chests, mining, bytecode events)
+- `server/handlers/handle_10_combat.py` - Combat state broadcasts, encounter heartbeats, and battle auras (AC 10 Sub 6/3)
+- `server/handlers/handle_29_action.py` - Props Keeper warehouse & storage deposit/withdrawal engine (AC 29 Sub 6/1/2)
+- `server/handlers/handle_91_itemmall.py` - Item Mall Bonus reward catalog & redemption protocol (AC 91 Sub 1/2/3)
+- `tools/live_packet_sniffer.py` - Real-time and offline network packet sniffer, XOR-173 decryptor, and Opcode reverse-engineering tool
+- `tools/batch_pcap_learner.py` - Automated batch learner and packet structure excavator across recorded gameplay PCAP files
+- `tools/live_game_gap_analyzer.py` - Live WLRI game traffic gap analyzer matching packets directly against wloserver handlers
+- `data/learned_packets_catalog.json` - Machine-readable database of 1,387 reverse-engineered packet variants with field candidate layouts
 - `docs/` - Technical Documentation:
+  - [New Client Handlers Integration & Technical Specifications](docs/new_handlers_integration_guide.md) - Specifications and parameter mappings for 10 new protocol handlers achieving 100% client opcode coverage
+  - [Client C Code Missing Packets Audit](docs/client_c_code_missing_packets_audit.md) - Exhaustive audit of all 59 client-sent Action Codes from aLogin.exe.1.c vs 37 implemented server handlers, identifying the 20 missing opcodes
+  - [Packet Reading & Protocol Verification Audit](docs/packet_verification_and_correctness_audit.md) - Empirical, mathematical, binary, and decompiled code proof verifying 100% accurate packet parsing and opcode dispatching
+  - [New Character & First Quest Live Analysis](docs/new_character_and_first_quest_flow.md) - Exact byte-by-byte protocol flow from character creation (AC 9), starter gifts (AC 23:6), Captain dialogue (AC 20), quest acceptance (AC 24:1), to Kelan beach shipwreck
+  - [Live Captured Handlers Integration](docs/live_captured_handlers_integration.md) - Technical specifications for AC 10 (combat state), AC 186 (co-op event rooms), AC 35 (currency sync), and AC 62 (tent heartbeat)
+  - [WLRI Live Server Feature Gap Report](docs/live_wlri_feature_gaps.md) - Live gap report detecting missing action codes, unhandled sub-codes, and server response discrepancies
+  - [Learned Packets Protocol Catalog](docs/learned_packets_catalog.md) - Exhaustive catalog of 1,387 packet variants extracted from 37 gameplay sessions (actions, sizes, hex samples, inferred field structures)
+  - [PCAP Handlers & Authentic Inventory Synchronization Protocol](docs/pcap_handlers_and_inventory_sync.md) - Authentic 31-byte occupied-only AC 23 Sub 5 inventory serialization, non-stackable item overflow fix, 33-byte AC 23 Sub 6/8 alignment, Props Keeper (AC 29:6), Props Shop (AC 27:3), Witch Doctor (AC 31:2/7), and Item Mall Bonus (AC 91:2)
   - [Starter Items Pack Configuration & Administrator GUI Management](docs/starter_items_configuration.md) - Dynamic SQLite starter gift items, GUI management (Tab 11), JSON import/export, and AC 23:6 delivery
   - [PCAP Integration: First Login, Mini-Games, Lucky Draw & Vehicles](docs/pcap_integration.md) - Reverse-engineered packet flows, starter gift packs, Lucky Draw stop/delivery, vehicle lifecycle, and AC 5/15/23/104/183 handlers
   - [Client Version & File Integrity Validation](docs/client_version_and_integrity_validation.md) - Client build version checking, Data\\Item.Dat integrity checks, and authentic Opcode 0 reason codes (0x41 Wrong Version, 0x45 Item.dat File Error)
@@ -62,9 +79,7 @@ This repository contains a custom python-based server implementation for Wonderl
   - [Authentic Combat Engine & Action Protocol](docs/authentic_combat_engine.md) - Turn-based combat cycle, immediate AC 53:5 ACK, Defend (60021), Flee (60041), and Pet Capture (10008 + AC 11:4) reverse-engineered from real pcaps
   - [HP/MP Auto-Recovery & Lucky Draw Protocol](docs/hpmp_autofill_and_luckydraw.md) - Quick HP/MP refill button (AC 23:15 / AC 23:208) and Lucky Draw stop & delivery packets (AC 104:1 / AC 23:6) reverse-engineered from real pcaps
   - [Ground Item Pickup & Compounding Protocol](docs/ground_item_and_compounding_protocol.md) - Ground item interaction & despawn broadcast (AC 23:2 / AC 23:6) and compounding/alchemy synthesis cycle (AC 23:14 / AC 23:122 / AC 23:9 / AC 23:8 / AC 23:13) reverse-engineered from real pcaps
-  - [User & IP Ban System & Account Search](docs/user_and_ip_ban_system.md) - Account banning, IP banning with subnet & loopback protection, last login IP tracking, multi-field search (IP, character, username, ID), and Modern Desktop GUI integration
-  - [Dynamic Chests & Gathering Node Loot System](docs/chest_and_gathering_loot_system.md)
-  - [Item Mall Catalog & Customization System](docs/item_mall_configuration.md)
+  - [Dynamic Chests & Gathering Node Loot System](docs/chest_and_gathering_loot_system.md) - Permanent chest re-loot prevention, SQLite charchests persistence, map-entry open sync (AC 22:10), and inventory drag/move/swap (AC 23:10)
   - [NPC Blinking Prevention & AI Waypoint Architecture](docs/npc_blinking_and_ai_system.md)
   - [MOTD & Server Branding System](docs/motd_system.md)
   - [Robinson Beach Rescue Cutscene Protocol](docs/robinson_beach_cutscene.md)
@@ -72,7 +87,8 @@ This repository contains a custom python-based server implementation for Wonderl
   - [Cutscenes & Scene Transition Protocol](docs/cutscene_and_scene_transitions.md)
   - [Character Deletion Protocol & GUI](docs/character_deletion_system.md)
   - [dialogue_queue_and_talk_resolver.md](file:///docs/dialogue_queue_and_talk_resolver.md) - Multi-Step Dialogue Queue, 17,494-entry Talk.dat Resolver, and Action Code 32 Emotes
-  - [administrator_gui_suite.md](file:///docs/administrator_gui_suite.md) - Modern Desktop Administrator Control Suite (13 Tabs, GM Tools, 4-Column Browser, Character Data Editor)
+  - [administrator_gui_suite.md](docs/administrator_gui_suite.md) - Modern Desktop Administrator Control Suite (19 Tabs, GM Tools, 4-Column Browser, Character Data Editor, and ResponsiveFlowFrame Auto-Wrapping Toolbars)
+  - [admin_control_suite_enhancements.md](file:///docs/admin_control_suite_enhancements.md) - Deep technical specifications for Guilds, In-Game Mail, Security & IP Bans, Live Battles Monitor, and Marriage Registry administration tabs
   - [dynamic_data_and_eve_engine.md](file:///docs/dynamic_data_and_eve_engine.md) - Dynamic SQLite data architecture, live hot-reloads, and `eve.Emg` binary map parser
   - [remaining_systems_and_features.md](file:///docs/remaining_systems_and_features.md) - Deep decompiled audit of remaining systems (PvP duels, Morphs, Barber, Bank, Mount speed, Smelting, Death penalty)
   - [missing_systems_and_roadmap.md](file:///docs/missing_systems_and_roadmap.md) - Exhaustive missing systems audit, Action Codes matrix, and development roadmap

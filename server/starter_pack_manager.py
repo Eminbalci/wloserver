@@ -68,14 +68,14 @@ class StarterPackManager:
                 self._items = [
                     StarterItemEntry(34038, "Starter Gift 1", 1, 1, "Beginner gift package"),
                     StarterItemEntry(34058, "Remote Control", 1, 2, "Auto-combat and assistant remote control"),
-                    StarterItemEntry(34332, "Mini Dragonfly", 1, 3, "Starter flying mount vehicle"),
+                    StarterItemEntry(34332, "Mini Dragonfly", 5, 3, "Starter flying mount vehicle"),
                     StarterItemEntry(32176, "Spicy Hot Pot", 50, 4, "Full recovery food"),
-                    StarterItemEntry(34026, "Protective Exp Pill", 1, 5, "Prevents EXP loss upon death"),
+                    StarterItemEntry(34026, "Protective Exp Pill", 10, 5, "Prevents EXP loss upon death"),
                     StarterItemEntry(34542, "Substitute Doll", 1, 6, "Prevents companion amity drop upon death"),
                     StarterItemEntry(21742, "Goddess Robe", 1, 7, "Starter protective equipment"),
-                    StarterItemEntry(34330, "Mini HP Potion", 50, 8, "Starter HP healing potions"),
-                    StarterItemEntry(34190, "10x Holy EXP Potion", 1, 9, "Boosts experience gain"),
-                    StarterItemEntry(34258, "Training Ticket", 1, 10, "Instant training island pass"),
+                    StarterItemEntry(34330, "Mini HP Potion", 1, 8, "Starter HP healing potions"),
+                    StarterItemEntry(34190, "10x Holy EXP Potion", 5, 9, "Boosts experience gain"),
+                    StarterItemEntry(34258, "Training Ticket", 5, 10, "Instant training island pass"),
                 ]
 
     def get_items(self) -> List[StarterItemEntry]:

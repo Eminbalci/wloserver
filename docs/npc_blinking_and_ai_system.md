@@ -34,17 +34,18 @@ if click_id == 0 or (x == 0 and y == 0) or x > 4000 or y > 4000:
 ### 2.4 Authentic Visibility & Respawn Packets
 - **Hide / Despawn**: `AC 22 Sub 10` `[22, 10, clickId (2B), 0xFF, 0xFF]`
 - **Show / Respawn**: `AC 22 Sub 10` `[22, 10, clickId (2B), 0x00, 0x00]`
-- **Chest Open State**: `AC 22 Sub 1` `[22, 1, clickId (2B), 0x01]`
+- **Chest Open State Animation**: `AC 22 Sub 1` `[22, 1, clickId (2B), 0x01]`
 - **Map Load Batch Registration**: `AC 22 Sub 4` `[22, 4, (clickId 2B, state 2B, x 2B, y 2B, 1 1B, 0 1B, 0 4B)...]`
-  - `state = 0x0000`: Closed / Intact / Normal state.
-  - `state = 0x0001`: Opened / Broken / Action state (for looted treasure chests, broken crates, gathered nodes).
+  - `state = 0x0000`: Static props, unopened/opened world treasure chests, crates, casks, gathering nodes. (Authentic PCAP parity across all captures).
+  - `state = 0x00FF`: Living NPCs, townspeople, quest actors, monsters in idle/standing state.
   - `state = 0xFFFF`: Recruited companion or hidden entity.
+  - **CRITICAL**: Sending `state = 0x0001` in `AC 22 Sub 4` triggers the client engine's action loop on entity spawn, resulting in rapid continuous sprite blinking / flickering between frames 0 and 1.
 
 ### 2.5 Permanent Chest vs Gathering Node Classification
 - **Permanent Chests** (`QuestNpc.is_permanent_chest()`):
   - Templates `19034` (Treas Che), `19035` (Treas Che), `19037` (Cask), `19038` (Chest/Crate), `12000-12999`, `16000-16999`.
-  - Persisted in SQLite `charchests`.
-  - Once looted, remains in `state = 0x0001` (open/broken) permanently per character.
+  - Persisted in SQLite `charchests` per player character.
+  - Shared in-memory `QuestNpc` objects in `server.map_npcs` NEVER mutate `is_broken = True` for permanent chests, preventing cross-session corruption and spawn state blinking.
   - `QuestNpc.update()` immediately returns for permanent chests and never broadcasts respawn packets.
   - `is_chest_opened(char_id, map_id, chest_id, is_permanent=True)` guarantees permanent chests never expire after `default_respawn_seconds`.
 - **Gathering Nodes** (`QuestNpc.is_gathering_node()`):
@@ -52,9 +53,13 @@ if click_id == 0 or (x == 0 and y == 0) or x > 4000 or y > 4000:
   - Respawns after cooldown using `AC 22 Sub 10 [clickId, 0x00, 0x00]`.
 
 ### 2.6 Blinking & Flickering Root Causes & Fixes
-1. **Redundant AC 22:10 on Map Load (`send_map_info`)**:
-   - `send_map_info` was sending `AC 22:10 [clickId, 0xFF, 0xFF]` immediately following `AC 22:4`. Static props and permanent chests are now excluded from post-`AC 22:4` hide packet iterations.
-2. **PreEvent Visibility Redundant Show Packets (`preevent_interpreter.py`)**:
-   - `sync_per_player_npc_visibility` was broadcasting `AC 22:10 [clickId, 0x00, 0x00]` for visible rules, resetting static prop sprite animations to frame 0 and causing blinking. Static props and chests are now excluded from sending redundant show packets.
-3. **Chest System Respawn Expiration**:
-   - `ChestSystem.is_chest_opened()` was resetting opened chests back to closed state after 60 seconds because `default_respawn_seconds` expired. Added strict `is_permanent` flag to keep world chests open permanently without blinking.
+1. **Spawn State Mismatch (`send_map_info` / `AC 22:4`)**:
+   - `gameserver.py` previously sent `state = 0x0001` for chests if `is_opened` or `is_broken` was set, and `0x0000` for living NPCs. In authentic WLO client architecture, all static chests/props must be spawned with `0x0000`, while living NPCs must receive `0x00FF`.
+2. **In-Memory Shared Object Corruption**:
+   - Interacting with chests or running opening events previously mutated `m_npc.is_broken = True` on the shared template NPC in `server.map_npcs`, causing subsequent map loads to force `0x0001` for all players. Fixed by isolating permanent chest states exclusively to `charchests` DB table.
+3. **Redundant AC 22:10 on Map Load (`send_map_info`)**:
+   - Static props and permanent chests are strictly excluded from post-`AC 22:4` hide packet iterations.
+4. **PreEvent Visibility Redundant Show Packets (`preevent_interpreter.py`)**:
+   - Static props and chests are excluded from receiving redundant `AC 22:10 0,0` show packets.
+5. **Beach Cutscene Event Trigger Parity**:
+   - Fixed Robinson beach cutscene timeline in `handle_12_warp.py` to trigger Robinson's rescue dialogue (ClickID 1 / Event 8) without erroneously triggering the beach crate.

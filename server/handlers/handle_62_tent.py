@@ -93,6 +93,12 @@ async def handle(server, session, reader):
         GLOBAL_TENT_MANAGER.save_tent_to_db(tent)
         await session.send_packet(PacketWriter().write_8(62).write_8(sub).write_16(color_val))
 
+    elif sub == 45:  # Tent Presence & Furniture Sync Heartbeat
+        char_id = reader.read_32() if reader.remaining_bytes() >= 4 else getattr(session, "char_id", 0)
+        logger.info(f"[{session.char_name}] AC 62 Sub 45 Tent sync for Char #{char_id}")
+        resp = PacketWriter().write_8(62).write_8(45).write_32(char_id)
+        await session.send_packet(resp)
+
     else:
         logger.info(f"Unhandled AC 62 Sub-Code: {sub}, payload: {reader.data.hex()}")
         await session.send_packet(PacketWriter().write_8(20).write_8(8))

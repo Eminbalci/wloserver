@@ -322,12 +322,13 @@ class TalkDatLoader:
             return default
 
         # Clean tags
-        cleaned = re.sub(r'#s[a-zA-Z0-9_-]+/#s', '', raw_text)
+        cleaned = raw_text
+        if player_name:
+            cleaned = cleaned.replace('#n/#n', player_name).replace('#n', player_name)
+        cleaned = re.sub(r'#s[a-zA-Z0-9_-]+/#s', '', cleaned)
         cleaned = re.sub(r'#f[0-9]+/#f', '', cleaned)
         cleaned = re.sub(r'#[RGBYrgby](.*?)/#[RGBYrgby]', r'\1', cleaned)
         cleaned = re.sub(r'#[a-zA-Z0-9]+/[#a-zA-Z0-9]+', '', cleaned)
-        if player_name:
-            cleaned = cleaned.replace('#n', player_name).replace('/#n', '')
         return cleaned.strip()
 
 

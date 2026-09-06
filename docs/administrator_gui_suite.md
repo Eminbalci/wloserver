@@ -35,10 +35,38 @@ Direct port of the C# 4-column browser with real-time text filter and action but
 - Create Account, Delete Account, Change Password, Add IM Points, Ban / Unban.
 
 ### Tab 5: 🧙 Characters Manager (`tabPageCharacters`)
-- Table of all characters across all accounts.
+- Table of all characters across all accounts with instant name/ID search filter.
 - Delete Character, Refresh Characters, Open Full Character Data Editor.
 
-### Tab 6: 🧙 Deep Character Data Editor Modal (`CharacterDataEditorDialog`)
+### Tab 6: 🏰 Guilds Management (`tab_guilds`)
+- Inspect and manage all guilds from `guilds` and `guild_members`.
+- Search filter by guild name or leader ID.
+- Real-time rules & announcement editor with database persistence.
+- Guild roster table, Change Leader (`action_guild_change_leader`), Kick Member (`action_guild_kick_member`), and Disband Guild (`action_disband_guild`).
+
+### Tab 7: 📬 In-Game Mail & System Gift Dispatcher (`tab_mail`)
+- Dispatch gifts and messages to a Single Character, All Online Players, or All Characters in the database.
+- Attached Gold and Items (quantity spinner with live display name preview).
+- Automatic AC 30 Sub 1 network packet dispatch to trigger online players' envelope notification icon.
+- Sent mail inspector and database deletion.
+
+### Tab 8: 🛡️ Security & IP Bans Manager (`tab_security`)
+- Dual-pane layout separating IP ban enforcement from user account status.
+- Banned IP Addresses table (`tree_banned_ips`) with Add IP Ban and Unban IP; automatically kicks active connections via `game_server.kick_ip`.
+- Banned User Accounts table (`tree_banned_users`) with Manual Ban and Unban Account; immediately kicks sessions via `game_server.kick_user`.
+- Built-in loopback/localhost protection.
+
+### Tab 9: ⚔️ Live Battles Monitor (`tab_battles`)
+- Real-time inspection of active PvE and PvP combat instances from `game_server.active_battles`.
+- Combat details console showing turn, elapsed duration, fighter HP/SP, and monster matrix positions.
+- GM battle overrides: Force End / Abort Battle (`action_force_end_battle`) and Grant Instant Victory (`action_force_win_battle`).
+
+### Tab 10: 💍 Marriage Registry (`tab_marriage`)
+- Couples registry from `charmarriage` with real-time search.
+- Administrative Annulment / Divorce (`action_divorce_marriage`) with `GLOBAL_MARRIAGE_MANAGER` sync.
+- Teleport Spouses Together (`action_teleport_spouses`) warping partner directly to spouse coordinates.
+
+### Tab 11: 🧙 Deep Character Data Editor Modal (`CharacterDataEditorDialog`)
 Standalone modal ported from `CharacterDataEditorForm.cs`:
 - **📊 Stats & Attributes**: Level, Element, Reborn Job (Killer, Warrior, Knight, Mage, Priest, Seer), STR, CON, INT, WIS, AGI, Stat Points, Potential Points, HP, SP, EXP, Gold, Bank Gold with live reload from database and active session synchronization (`send_stats_update`).
 - **📜 Quests Manager**: List all quests, Add Quest with ID and State (Not Started, In Progress, Completed), Advance Step, Complete All Quests, Reset All Quests.
@@ -92,3 +120,26 @@ All table views (`ttk.Treeview`), list views (`tk.Listbox`), and multiline text 
 - **Cheats 4-Column Browser**: Each column (Maps, Vehicles, Items, NPCs) packs its listbox alongside an integrated vertical scrollbar.
 - **Console & Inspectors**: Dashboard Console Log, Event Flow Viewer, and World Spawn Inspector each integrate vertical scrollbars.
 - **Character Data Editor Modal**: Full scrollbar coverage on Quests, Pets, Inventory, Skills, and NPC Visibility tables.
+
+---
+
+## 4. Responsive Flow & Dynamic Wrapping Architecture (`ResponsiveFlowFrame`)
+
+To support smaller displays, laptop resolutions, and half-screen snapping without horizontal clipping, button squishing, or truncated text, all toolbars and button strips employ `ResponsiveFlowFrame`:
+
+- **Adaptive Reflow Container (`ResponsiveFlowFrame`)**:
+  - Automatically observes geometry changes via `<Configure>` events with debounced scheduling.
+  - Measures the natural requested width (`winfo_reqwidth()`) plus padding for each child widget.
+  - Flow algorithm calculates `cur_row_width + item_total_w > avail_width` and dynamically breaks overflowing elements into subsequent rows (`cur_row + 1`, `cur_col = 0`).
+  - Container height expands naturally downwards without clipping or hardcoded fixed constraints.
+- **Lifecycle Destruction Safety**:
+  - Automatically captures `<Destroy>` events to cancel pending `after` debounced timers (`after_cancel`).
+  - Guards all layout calculations with `self.winfo_exists()` checks to eliminate dangling Tkinter callbacks during rapid modal destruction.
+- **Optimized Window Minimum Dimensions**:
+  - `ModernServerGUI`: lowered minimum constraint from `(1200, 780)` to `(800, 520)`.
+  - `CharacterDataEditorDialog`: lowered minimum constraint from `(850, 600)` to `(650, 480)`.
+- **Integrated Toolbars & Control Strips**:
+  - **Header Bar**: Server title, live status badge, session count badge, uptime timer badge, Launch Client (F5), Hot-Reload, and Save All buttons.
+  - **Character Editor Dialog**: Stats tab booster strip, Quests toolbar, Pets companion toolbar, Inventory item toolbar, Skills magic toolbar, NPC Visibility toolbar, and dialog bottom action bar.
+  - **ModernServerGUI Tabs**: Live Cheats top target bar & bottom booster strip, Users & Accounts top toolbar, Characters Manager top toolbar, Portals & Warps top toolbar, Map NPC Studio top toolbar, Monster Drops Studio top toolbar, Chest Drops Studio top toolbar, Item Mall Manager top toolbar, Starter Items Pack Manager top toolbar, NPC Resolver top toolbar, Talk Resolver top toolbar, Guilds Manager top toolbar & action strip, Security & IP Bans toolbars & action strips, Live Battles top toolbar, Marriage Registry top toolbar & bottom action strip.
+

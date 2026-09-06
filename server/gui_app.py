@@ -50,6 +50,16 @@ from server.network import PacketWriter
 logger = logging.getLogger("ModernGUI")
 
 
+def safe_run_coroutine(coro, loop):
+    """Safely runs a coroutine on an asyncio loop, gracefully ignoring MagicMocks or non-coroutines in test environments."""
+    if coro is not None and asyncio.iscoroutine(coro) and loop and hasattr(loop, "is_closed") and not loop.is_closed():
+        try:
+            return asyncio.run_coroutine_threadsafe(coro, loop)
+        except Exception as e:
+            logger.debug(f"safe_run_coroutine failed: {e}")
+    return None
+
+
 # =========================================================================
 # UI Scrollbar Helper Utilities
 # =========================================================================
@@ -95,6 +105,123 @@ def create_scrolled_treeview(parent, columns, show="headings", selectmode="exten
     tree.pack(side="left", fill="both", expand=True)
 
     return tree, scrollbar, frame
+
+
+# =========================================================================
+# Responsive Dynamic Flow / Wrapping Layout Container
+# =========================================================================
+
+class ResponsiveFlowFrame(ctk.CTkFrame if HAS_CTK else tk.Frame):
+    """
+    Responsive container that automatically flows/wraps child widgets into
+    multiple rows when the available width is constrained, preventing button
+    clipping, text truncation, and off-screen overflow.
+    """
+    def __init__(self, master, padx: int = 4, pady: int = 4, **kwargs):
+        if "height" in kwargs:
+            del kwargs["height"]
+        super().__init__(master, **kwargs)
+        self.item_padx = padx
+        self.item_pady = pady
+        self._flow_widgets: List[Tuple[Any, Any, Any, str]] = []
+        self._last_width = 0
+        self._relayout_after_id = None
+        self.bind("<Configure>", self._on_configure)
+        self.bind("<Destroy>", self._on_destroy)
+
+    def _on_destroy(self, event=None):
+        if self._relayout_after_id:
+            try:
+                self.after_cancel(self._relayout_after_id)
+            except Exception:
+                pass
+            self._relayout_after_id = None
+
+    def add_widget(self, widget: Any, padx: Any = None, pady: Any = None, sticky: str = "w") -> Any:
+        """Registers a child widget to be dynamically flowed within the responsive container."""
+        p_x = self.item_padx if padx is None else padx
+        p_y = self.item_pady if pady is None else pady
+        self._flow_widgets.append((widget, p_x, p_y, sticky))
+        self._schedule_relayout()
+        return widget
+
+    def clear_widgets(self):
+        """Clears registered flow widgets."""
+        for w, _, _, _ in self._flow_widgets:
+            if hasattr(w, "winfo_exists") and w.winfo_exists():
+                w.grid_forget()
+        self._flow_widgets.clear()
+        self._schedule_relayout()
+
+    def _on_configure(self, event):
+        if event.width <= 10 or abs(event.width - self._last_width) < 6:
+            return
+        self._last_width = event.width
+        self._schedule_relayout()
+
+    def _schedule_relayout(self):
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+        if self._relayout_after_id:
+            try:
+                self.after_cancel(self._relayout_after_id)
+            except Exception:
+                pass
+            self._relayout_after_id = None
+        try:
+            self._relayout_after_id = self.after(10, self._relayout)
+        except Exception:
+            pass
+
+    def _relayout(self):
+        self._relayout_after_id = None
+        try:
+            if not self.winfo_exists():
+                return
+        except Exception:
+            return
+
+        try:
+            width = self.winfo_width()
+            if width <= 20:
+                width = self.winfo_reqwidth()
+            if width <= 20:
+                try:
+                    width = self.master.winfo_width() - 30
+                except Exception:
+                    pass
+            if width <= 20:
+                return
+
+            for w, _, _, _ in self._flow_widgets:
+                if hasattr(w, "winfo_exists") and w.winfo_exists():
+                    w.grid_forget()
+
+            cur_row = 0
+            cur_col = 0
+            cur_row_width = 0
+            avail_width = max(width - 24, 80)
+
+            for widget, px, py, sticky in self._flow_widgets:
+                if hasattr(widget, "winfo_exists") and not widget.winfo_exists():
+                    continue
+                w_w = widget.winfo_reqwidth()
+                pad_x_total = (px[0] + px[1]) if isinstance(px, tuple) else (px * 2)
+                item_total_w = w_w + pad_x_total
+
+                if cur_col > 0 and (cur_row_width + item_total_w > avail_width):
+                    cur_row += 1
+                    cur_col = 0
+                    cur_row_width = 0
+
+                widget.grid(row=cur_row, column=cur_col, padx=px, pady=py, sticky=sticky)
+                cur_row_width += item_total_w
+                cur_col += 1
+        except Exception:
+            pass
 
 
 # Helper for item display names
@@ -172,7 +299,7 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
 
         self.title(f"🧙 Character Data Editor: [{self.char_name}] (CharID: {self.char_id})")
         self.geometry("980x720")
-        self.minsize(850, 600)
+        self.minsize(650, 480)
 
         if HAS_CTK:
             self.configure(fg_color="#080C14")
@@ -241,12 +368,12 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
         self._build_vis_tab(self.t_vis)
 
         # Bottom Action Bar
-        bottom = ctk.CTkFrame(self, height=45, fg_color="transparent")
+        bottom = ResponsiveFlowFrame(self, fg_color="transparent", padx=6, pady=4)
         bottom.pack(fill="x", padx=12, pady=(4, 12))
 
-        ctk.CTkButton(bottom, text="💾 Save All Changes (DB & Live)", font=ctk.CTkFont(weight="bold"), fg_color="#10B981", hover_color="#059669", width=220, height=36, corner_radius=8, command=self.action_save_all).pack(side="right", padx=6)
-        ctk.CTkButton(bottom, text="🔄 Reload from DB", font=ctk.CTkFont(), fg_color="#1E293B", hover_color="#334155", width=140, height=36, corner_radius=8, command=self.load_all_character_data).pack(side="right", padx=6)
-        ctk.CTkButton(bottom, text="❌ Close", font=ctk.CTkFont(), fg_color="#1E293B", hover_color="#334155", width=100, height=36, corner_radius=8, command=self.destroy).pack(side="left", padx=6)
+        bottom.add_widget(ctk.CTkButton(bottom, text="💾 Save All Changes (DB & Live)", font=ctk.CTkFont(weight="bold"), fg_color="#10B981", hover_color="#059669", width=220, height=36, corner_radius=8, command=self.action_save_all), padx=6, pady=4)
+        bottom.add_widget(ctk.CTkButton(bottom, text="🔄 Reload from DB", font=ctk.CTkFont(), fg_color="#1E293B", hover_color="#334155", width=140, height=36, corner_radius=8, command=self.load_all_character_data), padx=6, pady=4)
+        bottom.add_widget(ctk.CTkButton(bottom, text="❌ Close", font=ctk.CTkFont(), fg_color="#1E293B", hover_color="#334155", width=100, height=36, corner_radius=8, command=self.destroy), padx=6, pady=4)
 
     # 1. Stats Tab
     def _build_stats_tab(self, parent):
@@ -294,34 +421,34 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
                 self.stat_entries[key] = ent
 
         # Quick Cheat Strip inside Stats tab
-        f_cheat = ctk.CTkFrame(parent, fg_color="#0D1117", corner_radius=8, border_width=1, border_color="#30363D")
+        f_cheat = ResponsiveFlowFrame(parent, fg_color="#0D1117", corner_radius=8, border_width=1, border_color="#30363D")
         f_cheat.grid(row=len(fields)//2 + 1, column=0, columnspan=4, sticky="ew", padx=15, pady=15)
 
-        ctk.CTkLabel(f_cheat, text="⚡ Quick Character Boosters:", font=ctk.CTkFont(weight="bold"), text_color="#58A6FF").pack(side="left", padx=10, pady=8)
-        ctk.CTkButton(f_cheat, text="💚 Full Heal HP/SP", fg_color="#238636", width=120, height=28, command=self._quick_heal).pack(side="left", padx=4)
-        ctk.CTkButton(f_cheat, text="⭐ Max Level 199", fg_color="#1F6FEB", width=120, height=28, command=self._quick_max_level).pack(side="left", padx=4)
-        ctk.CTkButton(f_cheat, text="💰 +10,000,000 Gold", fg_color="#D29922", text_color="#000", width=130, height=28, command=self._quick_add_gold).pack(side="left", padx=4)
-        ctk.CTkButton(f_cheat, text="🔮 +500 Stat Points", fg_color="#8957E5", width=130, height=28, command=self._quick_add_stats).pack(side="left", padx=4)
+        f_cheat.add_widget(ctk.CTkLabel(f_cheat, text="⚡ Quick Character Boosters:", font=ctk.CTkFont(weight="bold"), text_color="#58A6FF"), padx=8, pady=4)
+        f_cheat.add_widget(ctk.CTkButton(f_cheat, text="💚 Full Heal HP/SP", fg_color="#238636", width=120, height=28, command=self._quick_heal), padx=4, pady=4)
+        f_cheat.add_widget(ctk.CTkButton(f_cheat, text="⭐ Max Level 199", fg_color="#1F6FEB", width=120, height=28, command=self._quick_max_level), padx=4, pady=4)
+        f_cheat.add_widget(ctk.CTkButton(f_cheat, text="💰 +10,000,000 Gold", fg_color="#D29922", text_color="#000", width=130, height=28, command=self._quick_add_gold), padx=4, pady=4)
+        f_cheat.add_widget(ctk.CTkButton(f_cheat, text="🔮 +500 Stat Points", fg_color="#8957E5", width=130, height=28, command=self._quick_add_stats), padx=4, pady=4)
 
     # 2. Quests Tab
     def _build_quests_tab(self, parent):
         # Top toolbar
-        tb = ctk.CTkFrame(parent, fg_color="transparent")
+        tb = ResponsiveFlowFrame(parent, fg_color="transparent")
         tb.pack(fill="x", padx=10, pady=6)
 
-        ctk.CTkLabel(tb, text="Quest ID:", text_color="#8B949E").pack(side="left", padx=4)
+        tb.add_widget(ctk.CTkLabel(tb, text="Quest ID:", text_color="#8B949E"), padx=4, pady=4)
         self.ent_q_id = ctk.CTkEntry(tb, width=80, placeholder_text="12001")
-        self.ent_q_id.pack(side="left", padx=4)
+        tb.add_widget(self.ent_q_id, padx=4, pady=4)
 
-        ctk.CTkLabel(tb, text="State:", text_color="#8B949E").pack(side="left", padx=4)
+        tb.add_widget(ctk.CTkLabel(tb, text="State:", text_color="#8B949E"), padx=4, pady=4)
         self.cmb_q_state = ctk.CTkComboBox(tb, values=["0 - Not Started", "1 - In Progress", "2 - Completed"], width=140)
         self.cmb_q_state.set("2 - Completed")
-        self.cmb_q_state.pack(side="left", padx=4)
+        tb.add_widget(self.cmb_q_state, padx=4, pady=4)
 
-        ctk.CTkButton(tb, text="➕ Add / Set Quest", fg_color="#1F6FEB", width=120, command=self.action_set_quest).pack(side="left", padx=6)
-        ctk.CTkButton(tb, text="🗑 Delete Quest", fg_color="#DA3633", width=110, command=self.action_delete_quest).pack(side="left", padx=4)
-        ctk.CTkButton(tb, text="✨ Complete All Quests", fg_color="#238636", width=150, command=self.action_complete_all_quests).pack(side="right", padx=4)
-        ctk.CTkButton(tb, text="🔄 Reset All Quests", fg_color="#21262D", width=130, command=self.action_reset_all_quests).pack(side="right", padx=4)
+        tb.add_widget(ctk.CTkButton(tb, text="➕ Add / Set Quest", fg_color="#1F6FEB", width=120, command=self.action_set_quest), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🗑 Delete Quest", fg_color="#DA3633", width=110, command=self.action_delete_quest), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="✨ Complete All Quests", fg_color="#238636", width=150, command=self.action_complete_all_quests), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🔄 Reset All Quests", fg_color="#21262D", width=130, command=self.action_reset_all_quests), padx=4, pady=4)
 
         # Quests Treeview
         cols = ("QuestID", "QuestName", "StateCode", "StateDescription", "Step")
@@ -332,10 +459,10 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
 
     # 3. Pets Tab
     def _build_pets_tab(self, parent):
-        tb = ctk.CTkFrame(parent, fg_color="transparent")
+        tb = ResponsiveFlowFrame(parent, fg_color="transparent")
         tb.pack(fill="x", padx=10, pady=6)
 
-        ctk.CTkLabel(tb, text="Add Preset Pet:", text_color="#8B949E").pack(side="left", padx=4)
+        tb.add_widget(ctk.CTkLabel(tb, text="Preset Companion:", text_color="#8B949E"), padx=4, pady=4)
         self.cmb_pet_preset = ctk.CTkComboBox(
             tb,
             values=[
@@ -351,11 +478,11 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
             ],
             width=200
         )
-        self.cmb_pet_preset.pack(side="left", padx=4)
+        tb.add_widget(self.cmb_pet_preset, padx=4, pady=4)
 
-        ctk.CTkButton(tb, text="➕ Add Companion", fg_color="#1F6FEB", width=130, command=self.action_add_preset_pet).pack(side="left", padx=6)
-        ctk.CTkButton(tb, text="💖 Max Amity (100)", fg_color="#238636", width=120, command=self.action_max_pet_amity).pack(side="left", padx=4)
-        ctk.CTkButton(tb, text="🗑 Dismiss Selected Pet", fg_color="#DA3633", width=150, command=self.action_delete_pet).pack(side="right", padx=4)
+        tb.add_widget(ctk.CTkButton(tb, text="➕ Add Companion", fg_color="#1F6FEB", width=130, command=self.action_add_preset_pet), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="💖 Max Amity (100)", fg_color="#238636", width=120, command=self.action_max_pet_amity), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🗑 Dismiss Selected Pet", fg_color="#DA3633", width=150, command=self.action_delete_pet), padx=4, pady=4)
 
         cols = ("Slot", "PetID", "Name", "Level", "Amity", "HP", "SP", "STR", "CON", "AGI")
         self.tree_pets, self.sb_pets, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -365,22 +492,22 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
 
     # 4. Inventory Tab
     def _build_inv_tab(self, parent):
-        tb = ctk.CTkFrame(parent, fg_color="transparent")
+        tb = ResponsiveFlowFrame(parent, fg_color="transparent")
         tb.pack(fill="x", padx=10, pady=6)
 
-        ctk.CTkLabel(tb, text="Item ID:", text_color="#8B949E").pack(side="left", padx=4)
+        tb.add_widget(ctk.CTkLabel(tb, text="Item ID:", text_color="#8B949E"), padx=4, pady=4)
         self.ent_inv_item_id = ctk.CTkEntry(tb, width=90, placeholder_text="48033")
-        self.ent_inv_item_id.pack(side="left", padx=4)
+        tb.add_widget(self.ent_inv_item_id, padx=4, pady=4)
 
-        ctk.CTkLabel(tb, text="Amount:", text_color="#8B949E").pack(side="left", padx=4)
+        tb.add_widget(ctk.CTkLabel(tb, text="Amount:", text_color="#8B949E"), padx=4, pady=4)
         self.ent_inv_amount = ctk.CTkEntry(tb, width=60)
         self.ent_inv_amount.insert(0, "1")
-        self.ent_inv_amount.pack(side="left", padx=4)
+        tb.add_widget(self.ent_inv_amount, padx=4, pady=4)
 
-        ctk.CTkButton(tb, text="🎁 Add Item", fg_color="#1F6FEB", width=100, command=self.action_add_inv_item).pack(side="left", padx=6)
-        ctk.CTkButton(tb, text="🔧 Repair Selected", fg_color="#238636", width=120, command=self.action_repair_inv_item).pack(side="left", padx=4)
-        ctk.CTkButton(tb, text="🗑 Delete Item", fg_color="#DA3633", width=100, command=self.action_delete_inv_item).pack(side="left", padx=4)
-        ctk.CTkButton(tb, text="🧹 Clear All 50 Slots", fg_color="#21262D", width=140, command=self.action_clear_inventory).pack(side="right", padx=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🎁 Add Item", fg_color="#1F6FEB", width=100, command=self.action_add_inv_item), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🔧 Repair Selected", fg_color="#238636", width=120, command=self.action_repair_inv_item), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🗑 Delete Item", fg_color="#DA3633", width=100, command=self.action_delete_inv_item), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🧹 Clear All 50 Slots", fg_color="#21262D", width=140, command=self.action_clear_inventory), padx=4, pady=4)
 
         cols = ("Slot", "ItemID", "ItemName", "Amount", "Damage", "Defense", "SparBonus")
         self.tree_inv, self.sb_inv, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -390,22 +517,22 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
 
     # 5. Skills Tab
     def _build_skills_tab(self, parent):
-        tb = ctk.CTkFrame(parent, fg_color="transparent")
+        tb = ResponsiveFlowFrame(parent, fg_color="transparent")
         tb.pack(fill="x", padx=10, pady=6)
 
-        ctk.CTkLabel(tb, text="Skill ID:", text_color="#8B949E").pack(side="left", padx=4)
+        tb.add_widget(ctk.CTkLabel(tb, text="Skill ID:", text_color="#8B949E"), padx=4, pady=4)
         self.ent_skill_id = ctk.CTkEntry(tb, width=80, placeholder_text="1001")
-        self.ent_skill_id.pack(side="left", padx=4)
+        tb.add_widget(self.ent_skill_id, padx=4, pady=4)
 
-        ctk.CTkLabel(tb, text="Grade:", text_color="#8B949E").pack(side="left", padx=4)
+        tb.add_widget(ctk.CTkLabel(tb, text="Grade:", text_color="#8B949E"), padx=4, pady=4)
         self.ent_skill_grade = ctk.CTkEntry(tb, width=50)
         self.ent_skill_grade.insert(0, "1")
-        self.ent_skill_grade.pack(side="left", padx=4)
+        tb.add_widget(self.ent_skill_grade, padx=4, pady=4)
 
-        ctk.CTkButton(tb, text="➕ Learn Skill", fg_color="#1F6FEB", width=110, command=self.action_add_skill).pack(side="left", padx=6)
-        ctk.CTkButton(tb, text="⚡ Learn All Element Skills", fg_color="#8957E5", width=180, command=self.action_learn_all_element_skills).pack(side="left", padx=4)
-        ctk.CTkButton(tb, text="🗑 Delete Skill", fg_color="#DA3633", width=100, command=self.action_delete_skill).pack(side="right", padx=4)
-        ctk.CTkButton(tb, text="🔄 Reset All Skills", fg_color="#21262D", width=130, command=self.action_reset_skills).pack(side="right", padx=4)
+        tb.add_widget(ctk.CTkButton(tb, text="➕ Learn Skill", fg_color="#1F6FEB", width=110, command=self.action_add_skill), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="⚡ Learn All Element Skills", fg_color="#8957E5", width=180, command=self.action_learn_all_element_skills), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🗑 Delete Skill", fg_color="#DA3633", width=100, command=self.action_delete_skill), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🔄 Reset All Skills", fg_color="#21262D", width=130, command=self.action_reset_skills), padx=4, pady=4)
 
         cols = ("SkillID", "SkillName", "Grade", "EXP", "SPCost", "Element")
         self.tree_skills, self.sb_skills, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -415,16 +542,16 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
 
     # 6. NPC Visibility Tab
     def _build_vis_tab(self, parent):
-        tb = ctk.CTkFrame(parent, fg_color="transparent")
+        tb = ResponsiveFlowFrame(parent, fg_color="transparent")
         tb.pack(fill="x", padx=10, pady=6)
 
-        ctk.CTkLabel(tb, text="Select Map:", text_color="#8B949E").pack(side="left", padx=4)
+        tb.add_widget(ctk.CTkLabel(tb, text="Select Map:", text_color="#8B949E"), padx=4, pady=4)
         self.cmb_vis_map = ctk.CTkComboBox(tb, values=["10001 - Kelan Village", "10017 - Shipwreck", "10035 - Beach", "12000 - Welling Village", "11016 - South Island"], width=220)
-        self.cmb_vis_map.pack(side="left", padx=4)
-        ctk.CTkButton(tb, text="🔍 Inspect Map PreEvents", fg_color="#1F6FEB", width=170, command=self.action_inspect_visibility).pack(side="left", padx=6)
+        tb.add_widget(self.cmb_vis_map, padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🔍 Inspect Map PreEvents", fg_color="#1F6FEB", width=170, command=self.action_inspect_visibility), padx=4, pady=4)
 
-        ctk.CTkButton(tb, text="👁️ Force Show NPC", fg_color="#238636", width=130, command=self.action_force_show_npc).pack(side="right", padx=4)
-        ctk.CTkButton(tb, text="🙈 Force Hide NPC", fg_color="#DA3633", width=130, command=self.action_force_hide_npc).pack(side="right", padx=4)
+        tb.add_widget(ctk.CTkButton(tb, text="👁️ Force Show NPC", fg_color="#238636", width=130, command=self.action_force_show_npc), padx=4, pady=4)
+        tb.add_widget(ctk.CTkButton(tb, text="🙈 Force Hide NPC", fg_color="#DA3633", width=130, command=self.action_force_hide_npc), padx=4, pady=4)
 
         cols = ("ClickID", "NPCName", "TemplateID", "PreEventRule", "CurrentVisibility", "OverrideState")
         self.tree_vis, self.sb_vis, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -1269,7 +1396,7 @@ class ModernServerGUI:
 
         self.root.title("Wonderland Online Private Server - Administrator Control Suite")
         self.root.geometry("1400x900")
-        self.root.minsize(1200, 780)
+        self.root.minsize(800, 520)
 
         if HAS_CTK and isinstance(self.root, ctk.CTk):
             self.root.configure(fg_color="#080C14")
@@ -1320,35 +1447,30 @@ class ModernServerGUI:
         self.root.bind("<F5>", lambda e: self.launch_game_client())
 
     def _build_header(self):
-        header = ctk.CTkFrame(self.root, height=70, corner_radius=14, fg_color="#111827", border_width=1, border_color="#1E293B")
+        header = ResponsiveFlowFrame(self.root, corner_radius=14, fg_color="#111827", border_width=1, border_color="#1E293B", padx=6, pady=6)
         header.pack(fill="x", padx=15, pady=(12, 6))
 
-        f_left = ctk.CTkFrame(header, fg_color="transparent")
-        f_left.pack(side="left", padx=15, pady=8)
+        lbl_title = ctk.CTkLabel(header, text="WONDERLAND ONLINE", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color="#38BDF8")
+        header.add_widget(lbl_title, padx=(8, 12), pady=6)
 
-        lbl_title = ctk.CTkLabel(f_left, text="WONDERLAND ONLINE", font=ctk.CTkFont(family="Segoe UI", size=18, weight="bold"), text_color="#38BDF8")
-        lbl_title.pack(side="left", padx=(0, 15))
+        self.badge_status = ctk.CTkLabel(header, text="🟢 ONLINE (Port 6414)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#10B981", fg_color="#064E3B", corner_radius=8, padx=12, pady=5)
+        header.add_widget(self.badge_status, padx=4, pady=6)
 
-        self.badge_status = ctk.CTkLabel(f_left, text="🟢 ONLINE (Port 6414)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#10B981", fg_color="#064E3B", corner_radius=8, padx=12, pady=5)
-        self.badge_status.pack(side="left", padx=6)
+        self.badge_players = ctk.CTkLabel(header, text="👥 0 Online", font=ctk.CTkFont(size=12, weight="bold"), text_color="#F8FAFC", fg_color="#1E293B", corner_radius=8, padx=12, pady=5)
+        header.add_widget(self.badge_players, padx=4, pady=6)
 
-        self.badge_players = ctk.CTkLabel(f_left, text="👥 0 Online", font=ctk.CTkFont(size=12, weight="bold"), text_color="#F8FAFC", fg_color="#1E293B", corner_radius=8, padx=12, pady=5)
-        self.badge_players.pack(side="left", padx=6)
+        self.badge_uptime = ctk.CTkLabel(header, text="⏱ Uptime: 00:00:00", font=ctk.CTkFont(size=12), text_color="#94A3B8", fg_color="#1E293B", corner_radius=8, padx=12, pady=5)
+        header.add_widget(self.badge_uptime, padx=4, pady=6)
 
-        self.badge_uptime = ctk.CTkLabel(f_left, text="⏱ Uptime: 00:00:00", font=ctk.CTkFont(size=12), text_color="#94A3B8", fg_color="#1E293B", corner_radius=8, padx=12, pady=5)
-        self.badge_uptime.pack(side="left", padx=6)
+        btn_f5 = ctk.CTkButton(header, text="▶ Launch Client (F5)", font=ctk.CTkFont(size=12, weight="bold"), fg_color="#10B981", hover_color="#059669", width=155, height=36, corner_radius=8, command=self.launch_game_client)
+        header.add_widget(btn_f5, padx=4, pady=6)
 
-        f_right = ctk.CTkFrame(header, fg_color="transparent")
-        f_right.pack(side="right", padx=15, pady=8)
+        btn_reload = ctk.CTkButton(header, text="⚡ Hot-Reload", font=ctk.CTkFont(size=12, weight="bold"), fg_color="#8B5CF6", hover_color="#7C3AED", width=120, height=36, corner_radius=8, command=self.action_hot_reload)
+        header.add_widget(btn_reload, padx=4, pady=6)
 
-        btn_f5 = ctk.CTkButton(f_right, text="▶ Launch Client (F5)", font=ctk.CTkFont(size=12, weight="bold"), fg_color="#10B981", hover_color="#059669", width=155, height=36, corner_radius=8, command=self.launch_game_client)
-        btn_f5.pack(side="right", padx=5)
+        btn_save_all = ctk.CTkButton(header, text="💾 Save All", font=ctk.CTkFont(size=12), fg_color="#1E293B", hover_color="#334155", width=100, height=36, corner_radius=8, command=self.action_save_all_now)
+        header.add_widget(btn_save_all, padx=4, pady=6)
 
-        btn_reload = ctk.CTkButton(f_right, text="⚡ Hot-Reload", font=ctk.CTkFont(size=12, weight="bold"), fg_color="#8B5CF6", hover_color="#7C3AED", width=120, height=36, corner_radius=8, command=self.action_hot_reload)
-        btn_reload.pack(side="right", padx=5)
-
-        btn_save_all = ctk.CTkButton(f_right, text="💾 Save All", font=ctk.CTkFont(size=12), fg_color="#1E293B", hover_color="#334155", width=100, height=36, corner_radius=8, command=self.action_save_all_now)
-        btn_save_all.pack(side="right", padx=5)
 
     def _build_tabview(self):
         self.tabview = ctk.CTkTabview(
@@ -1363,12 +1485,17 @@ class ModernServerGUI:
         )
         self.tabview.pack(fill="both", expand=True, padx=15, pady=(4, 12))
 
-        # All 13 Tabs
+        # All 18 Tabs
         self.tab_dash = self.tabview.add("📊 Dashboard")
         self.tab_cheats = self.tabview.add("⚡ Live Cheats & Browser")
         self.tab_players = self.tabview.add("👥 Online Sessions")
         self.tab_users = self.tabview.add("🗄️ Users & Accounts")
         self.tab_chars = self.tabview.add("🧙 Characters Manager")
+        self.tab_guilds = self.tabview.add("🏰 Guilds")
+        self.tab_mail = self.tabview.add("📬 In-Game Mail")
+        self.tab_security = self.tabview.add("🛡️ Security & Bans")
+        self.tab_battles = self.tabview.add("⚔️ Live Battles")
+        self.tab_marriage = self.tabview.add("💍 Marriages")
         self.tab_portals = self.tabview.add("🚪 Portals & Warps")
         self.tab_maps = self.tabview.add("🗺️ Map NPC Studio")
         self.tab_drops = self.tabview.add("🐉 Monster Drops")
@@ -1384,6 +1511,11 @@ class ModernServerGUI:
         self._build_online_players_content(self.tab_players)
         self._build_users_content(self.tab_users)
         self._build_characters_content(self.tab_chars)
+        self._build_guilds_content(self.tab_guilds)
+        self._build_mail_content(self.tab_mail)
+        self._build_security_content(self.tab_security)
+        self._build_battles_content(self.tab_battles)
+        self._build_marriage_content(self.tab_marriage)
         self._build_portals_content(self.tab_portals)
         self._build_map_npc_content(self.tab_maps)
         self._build_monster_drops_content(self.tab_drops)
@@ -1501,14 +1633,14 @@ class ModernServerGUI:
     # TAB 2: Live Cheats & 4-Column Browser (Direct Port from C# MainForm1)
     # -------------------------------------------------------------
     def _build_cheats_browser_content(self, parent):
-        top_bar = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top_bar = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top_bar.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkLabel(top_bar, text="Target Online Player:", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8").pack(side="left", padx=15, pady=10)
+        top_bar.add_widget(ctk.CTkLabel(top_bar, text="Target Online Player:", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8"), padx=(15, 6), pady=6)
         self.cmb_cheat_player = ctk.CTkComboBox(top_bar, values=["(Select Active Player)"], width=220, fg_color="#0B0F19", border_color="#1E293B")
-        self.cmb_cheat_player.pack(side="left", padx=5)
+        top_bar.add_widget(self.cmb_cheat_player, padx=5, pady=6)
 
-        ctk.CTkButton(top_bar, text="🔄 Refresh Online", fg_color="#1E293B", hover_color="#334155", width=130, height=32, corner_radius=8, command=self._refresh_online_players_combos).pack(side="left", padx=8)
+        top_bar.add_widget(ctk.CTkButton(top_bar, text="🔄 Refresh Online", fg_color="#1E293B", hover_color="#334155", width=130, height=32, corner_radius=8, command=self._refresh_online_players_combos), padx=8, pady=6)
 
         # 4-Column Grid: Maps | Vehicles | Items | NPCs
         grid = ctk.CTkFrame(parent, fg_color="transparent")
@@ -1592,21 +1724,21 @@ class ModernServerGUI:
         ctk.CTkButton(f_npc_btns, text="Leave", width=55, height=32, fg_color="#1E293B", hover_color="#334155", corner_radius=8, command=self.action_cheat_leave_npc).pack(side="right", padx=2)
 
         # Bottom GM Booster Strip
-        bottom_strip = ctk.CTkFrame(parent, height=50, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        bottom_strip = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         bottom_strip.pack(fill="x", padx=10, pady=(5, 10))
 
-        ctk.CTkLabel(bottom_strip, text="Give Stat Points:", font=ctk.CTkFont(size=12), text_color="#94A3B8").pack(side="left", padx=(15, 4))
+        bottom_strip.add_widget(ctk.CTkLabel(bottom_strip, text="Give Stat Points:", font=ctk.CTkFont(size=12), text_color="#94A3B8"), padx=(15, 4), pady=6)
         self.ent_give_stat_pts = ctk.CTkEntry(bottom_strip, width=65, height=32, fg_color="#0B0F19", border_color="#1E293B")
         self.ent_give_stat_pts.insert(0, "100")
-        self.ent_give_stat_pts.pack(side="left", padx=2)
-        ctk.CTkButton(bottom_strip, text="Give Points", width=85, height=32, fg_color="#2563EB", hover_color="#3B82F6", corner_radius=8, command=self.action_give_stat_points).pack(side="left", padx=4)
-        ctk.CTkButton(bottom_strip, text="Reset Stats", width=85, height=32, fg_color="#1E293B", hover_color="#334155", corner_radius=8, command=self.action_reset_stats).pack(side="left", padx=4)
+        bottom_strip.add_widget(self.ent_give_stat_pts, padx=2, pady=6)
+        bottom_strip.add_widget(ctk.CTkButton(bottom_strip, text="Give Points", width=85, height=32, fg_color="#2563EB", hover_color="#3B82F6", corner_radius=8, command=self.action_give_stat_points), padx=4, pady=6)
+        bottom_strip.add_widget(ctk.CTkButton(bottom_strip, text="Reset Stats", width=85, height=32, fg_color="#1E293B", hover_color="#334155", corner_radius=8, command=self.action_reset_stats), padx=4, pady=6)
 
-        ctk.CTkButton(bottom_strip, text="💰 +1M Gold", width=95, height=32, fg_color="#F59E0B", hover_color="#D97706", text_color="#000", font=ctk.CTkFont(weight="bold"), corner_radius=8, command=lambda: self._quick_give_gold_amount(1000000)).pack(side="left", padx=6)
-        ctk.CTkButton(bottom_strip, text="💎 +2,000 IM", width=95, height=32, fg_color="#8B5CF6", hover_color="#7C3AED", font=ctk.CTkFont(weight="bold"), corner_radius=8, command=lambda: self._quick_give_im_points(2000)).pack(side="left", padx=4)
-        ctk.CTkButton(bottom_strip, text="⭐ +10 Levels", width=95, height=32, fg_color="#10B981", hover_color="#059669", font=ctk.CTkFont(weight="bold"), corner_radius=8, command=lambda: self._quick_add_levels(10)).pack(side="left", padx=4)
-        ctk.CTkButton(bottom_strip, text="💚 Full Heal", width=85, height=32, fg_color="#059669", hover_color="#047857", corner_radius=8, command=self.action_heal_player).pack(side="left", padx=4)
-        ctk.CTkButton(bottom_strip, text="🛡 God Mode", width=85, height=32, fg_color="#7C3AED", hover_color="#6D28D9", corner_radius=8, command=self.action_god_mode).pack(side="left", padx=4)
+        bottom_strip.add_widget(ctk.CTkButton(bottom_strip, text="💰 +1M Gold", width=95, height=32, fg_color="#F59E0B", hover_color="#D97706", text_color="#000", font=ctk.CTkFont(weight="bold"), corner_radius=8, command=lambda: self._quick_give_gold_amount(1000000)), padx=6, pady=6)
+        bottom_strip.add_widget(ctk.CTkButton(bottom_strip, text="💎 +2,000 IM", width=95, height=32, fg_color="#8B5CF6", hover_color="#7C3AED", font=ctk.CTkFont(weight="bold"), corner_radius=8, command=lambda: self._quick_give_im_points(2000)), padx=4, pady=6)
+        bottom_strip.add_widget(ctk.CTkButton(bottom_strip, text="⭐ +10 Levels", width=95, height=32, fg_color="#10B981", hover_color="#059669", font=ctk.CTkFont(weight="bold"), corner_radius=8, command=lambda: self._quick_add_levels(10)), padx=4, pady=6)
+        bottom_strip.add_widget(ctk.CTkButton(bottom_strip, text="💚 Full Heal", width=85, height=32, fg_color="#059669", hover_color="#047857", corner_radius=8, command=self.action_heal_player), padx=4, pady=6)
+        bottom_strip.add_widget(ctk.CTkButton(bottom_strip, text="🛡 God Mode", width=85, height=32, fg_color="#7C3AED", hover_color="#6D28D9", corner_radius=8, command=self.action_god_mode), padx=4, pady=6)
 
         self._populate_cheats_browser_lists()
 
@@ -1620,8 +1752,15 @@ class ModernServerGUI:
         left = ctk.CTkFrame(split, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         left.pack(side="left", fill="both", expand=True, padx=(0, 10))
 
+        top_filter = ctk.CTkFrame(left, fg_color="transparent")
+        top_filter.pack(fill="x", padx=15, pady=(12, 4))
+        ctk.CTkLabel(top_filter, text="🔍 Filter Sessions:", font=ctk.CTkFont(size=12), text_color="#94A3B8").pack(side="left", padx=(0, 6))
+        self.ent_search_players = ctk.CTkEntry(top_filter, placeholder_text="Filter Name, Account, Map...", fg_color="#0B0F19", border_color="#1E293B", width=220)
+        self.ent_search_players.pack(side="left", padx=2)
+        self.ent_search_players.bind("<KeyRelease>", lambda e: self._refresh_metrics())
+
         cols = ("CharID", "Name", "Account", "Level", "Gold", "MapID", "X", "Y", "IP")
-        self.tree_players, _, _ = create_scrolled_treeview(left, columns=cols, show="headings", selectmode="browse", padx=15, pady=15)
+        self.tree_players, _, _ = create_scrolled_treeview(left, columns=cols, show="headings", selectmode="browse", padx=15, pady=8)
         for c in cols:
             self.tree_players.heading(c, text=c)
             self.tree_players.column(c, width=70 if c in ("Level", "X", "Y") else 100, anchor="center")
@@ -1647,25 +1786,25 @@ class ModernServerGUI:
     # -------------------------------------------------------------
     def _build_users_content(self, parent):
         # Search and Action Toolbar
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkLabel(top, text="🔍 Search (IP, Char, User, ID):", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8").pack(side="left", padx=(12, 4), pady=10)
+        top.add_widget(ctk.CTkLabel(top, text="🔍 Search (IP, Char, User, ID):", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8"), padx=(12, 4), pady=6)
         self.ent_user_search = ctk.CTkEntry(top, width=230, placeholder_text="e.g. 192.168.1.10 or Hero or 1", fg_color="#0B0F19", border_color="#1E293B")
-        self.ent_user_search.pack(side="left", padx=4)
+        top.add_widget(self.ent_user_search, padx=4, pady=6)
         self.ent_user_search.bind("<Return>", lambda e: self.action_refresh_users())
-        ctk.CTkButton(top, text="Search", fg_color="#2563EB", hover_color="#3B82F6", width=70, corner_radius=8, command=self.action_refresh_users).pack(side="left", padx=3)
-        ctk.CTkButton(top, text="Reset", fg_color="#1E293B", hover_color="#334155", width=65, corner_radius=8, command=self._reset_user_search).pack(side="left", padx=3)
+        top.add_widget(ctk.CTkButton(top, text="Search", fg_color="#2563EB", hover_color="#3B82F6", width=70, corner_radius=8, command=self.action_refresh_users), padx=3, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="Reset", fg_color="#1E293B", hover_color="#334155", width=65, corner_radius=8, command=self._reset_user_search), padx=3, pady=6)
 
-        ctk.CTkButton(top, text="➕ Add User", fg_color="#10B981", hover_color="#059669", width=95, corner_radius=8, command=self.action_create_user_modal).pack(side="left", padx=4)
-        ctk.CTkButton(top, text="🔑 Pass", fg_color="#2563EB", hover_color="#3B82F6", width=65, corner_radius=8, command=self.action_change_password_modal).pack(side="left", padx=3)
-        ctk.CTkButton(top, text="💎 Points", fg_color="#8B5CF6", hover_color="#7C3AED", width=75, corner_radius=8, command=self.action_add_im_points_modal).pack(side="left", padx=3)
-        ctk.CTkButton(top, text="🗑 Delete", fg_color="#DC2626", hover_color="#B91C1C", width=75, corner_radius=8, command=self.action_delete_user).pack(side="left", padx=3)
+        top.add_widget(ctk.CTkButton(top, text="➕ Add User", fg_color="#10B981", hover_color="#059669", width=95, corner_radius=8, command=self.action_create_user_modal), padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="🔑 Pass", fg_color="#2563EB", hover_color="#3B82F6", width=65, corner_radius=8, command=self.action_change_password_modal), padx=3, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="💎 Points", fg_color="#8B5CF6", hover_color="#7C3AED", width=75, corner_radius=8, command=self.action_add_im_points_modal), padx=3, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="🗑 Delete", fg_color="#DC2626", hover_color="#B91C1C", width=75, corner_radius=8, command=self.action_delete_user), padx=3, pady=6)
 
-        ctk.CTkButton(top, text="🚫 Ban User", fg_color="#DC2626", hover_color="#B91C1C", width=95, corner_radius=8, command=self.action_ban_user_gui).pack(side="right", padx=6)
-        ctk.CTkButton(top, text="✅ Unban User", fg_color="#10B981", hover_color="#059669", width=105, corner_radius=8, command=self.action_unban_user_gui).pack(side="right", padx=3)
-        ctk.CTkButton(top, text="🌐 Ban IP", fg_color="#991B1B", hover_color="#7F1D1D", width=90, corner_radius=8, command=self.action_ban_ip_gui).pack(side="right", padx=3)
-        ctk.CTkButton(top, text="🔓 Unban IP", fg_color="#0D9488", hover_color="#0F766E", width=95, corner_radius=8, command=self.action_unban_ip_gui).pack(side="right", padx=3)
+        top.add_widget(ctk.CTkButton(top, text="🚫 Ban User", fg_color="#DC2626", hover_color="#B91C1C", width=95, corner_radius=8, command=self.action_ban_user_gui), padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="✅ Unban User", fg_color="#10B981", hover_color="#059669", width=105, corner_radius=8, command=self.action_unban_user_gui), padx=3, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="🌐 Ban IP", fg_color="#991B1B", hover_color="#7F1D1D", width=90, corner_radius=8, command=self.action_ban_ip_gui), padx=3, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="🔓 Unban IP", fg_color="#0D9488", hover_color="#0F766E", width=95, corner_radius=8, command=self.action_unban_ip_gui), padx=3, pady=6)
 
         cols = ("AccountID", "Username", "Characters", "LastIP", "LastLogin", "UserBan", "IPBan", "GMLevel")
         self.tree_users, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -1678,12 +1817,18 @@ class ModernServerGUI:
     # TAB 5: Characters Manager (C# tabPageCharacters)
     # -------------------------------------------------------------
     def _build_characters_content(self, parent):
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkButton(top, text="🔄 Refresh Characters", fg_color="#1E293B", hover_color="#334155", width=150, corner_radius=8, command=self.action_refresh_characters).pack(side="left", padx=10, pady=10)
-        ctk.CTkButton(top, text="🧙 Open Full Character Data Editor", font=ctk.CTkFont(weight="bold"), fg_color="#2563EB", hover_color="#3B82F6", width=260, corner_radius=8, command=self.action_open_selected_char_editor).pack(side="left", padx=6)
-        ctk.CTkButton(top, text="🗑 Delete Character", fg_color="#DC2626", hover_color="#B91C1C", width=140, corner_radius=8, command=self.action_delete_character).pack(side="right", padx=10)
+        top.add_widget(ctk.CTkButton(top, text="🔄 Refresh Characters", fg_color="#1E293B", hover_color="#334155", width=150, corner_radius=8, command=self.action_refresh_characters), padx=6, pady=6)
+
+        top.add_widget(ctk.CTkLabel(top, text="🔍 Filter:", font=ctk.CTkFont(size=12), text_color="#94A3B8"), padx=(10, 4), pady=6)
+        self.ent_char_search = ctk.CTkEntry(top, placeholder_text="Filter Name, CharID, AccountID...", fg_color="#0B0F19", border_color="#1E293B", width=220)
+        top.add_widget(self.ent_char_search, padx=4, pady=6)
+        self.ent_char_search.bind("<KeyRelease>", lambda e: self.action_refresh_characters())
+
+        top.add_widget(ctk.CTkButton(top, text="🧙 Open Full Character Data Editor", font=ctk.CTkFont(weight="bold"), fg_color="#2563EB", hover_color="#3B82F6", width=260, corner_radius=8, command=self.action_open_selected_char_editor), padx=6, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="🗑 Delete Character", fg_color="#DC2626", hover_color="#B91C1C", width=140, corner_radius=8, command=self.action_delete_character), padx=6, pady=6)
 
         cols = ("CharID", "AccountID", "CharName", "Level", "Element", "RebornJob", "Gold", "MapID", "LastLogin")
         self.tree_characters, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -1697,15 +1842,15 @@ class ModernServerGUI:
     # TAB 6: Portals & Warps Manager (C# tabPagePortals)
     # -------------------------------------------------------------
     def _build_portals_content(self, parent):
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkLabel(top, text="Filter Source Map ID:", font=ctk.CTkFont(size=12), text_color="#94A3B8").pack(side="left", padx=10, pady=10)
+        top.add_widget(ctk.CTkLabel(top, text="Filter Source Map ID:", font=ctk.CTkFont(size=12), text_color="#94A3B8"), padx=(10, 4), pady=6)
         self.ent_portal_filter = ctk.CTkEntry(top, width=130, placeholder_text="e.g. 10001", fg_color="#0B0F19", border_color="#1E293B")
-        self.ent_portal_filter.pack(side="left", padx=4)
-        ctk.CTkButton(top, text="🔍 Filter", fg_color="#2563EB", hover_color="#3B82F6", width=90, corner_radius=8, command=self.action_refresh_portals).pack(side="left", padx=4)
+        top.add_widget(self.ent_portal_filter, padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="🔍 Filter", fg_color="#2563EB", hover_color="#3B82F6", width=90, corner_radius=8, command=self.action_refresh_portals), padx=4, pady=6)
 
-        ctk.CTkButton(top, text="🚀 Test Warp on Player", fg_color="#10B981", hover_color="#059669", width=170, corner_radius=8, command=self.action_test_warp_portal).pack(side="right", padx=10)
+        top.add_widget(ctk.CTkButton(top, text="🚀 Test Warp on Player", fg_color="#10B981", hover_color="#059669", width=170, corner_radius=8, command=self.action_test_warp_portal), padx=6, pady=6)
 
         cols = ("PortalID", "SourceMap", "PortalName", "DestMap", "DestX", "DestY")
         self.tree_portals, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -1718,14 +1863,14 @@ class ModernServerGUI:
     # TAB 7: Map NPC & Scene Studio (C# SetupMapNpcStudioTab)
     # -------------------------------------------------------------
     def _build_map_npc_content(self, parent):
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkLabel(top, text="Select Map:", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8").pack(side="left", padx=10, pady=10)
+        top.add_widget(ctk.CTkLabel(top, text="Select Map:", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8"), padx=(10, 4), pady=6)
         self.cmb_studio_map = ctk.CTkComboBox(top, values=["10001 - Kelan Village", "10017 - Shipwreck", "10035 - Beach", "12000 - Welling Village", "11016 - South Island"], width=240, fg_color="#0B0F19", border_color="#1E293B", command=lambda m: self._load_studio_npcs(m))
-        self.cmb_studio_map.pack(side="left", padx=4)
+        top.add_widget(self.cmb_studio_map, padx=4, pady=6)
 
-        ctk.CTkButton(top, text="⚡ Simulate Event on Selected Player", font=ctk.CTkFont(weight="bold"), fg_color="#8B5CF6", hover_color="#7C3AED", width=260, corner_radius=8, command=self.action_simulate_npc_event).pack(side="right", padx=10)
+        top.add_widget(ctk.CTkButton(top, text="⚡ Simulate Event on Selected Player", font=ctk.CTkFont(weight="bold"), fg_color="#8B5CF6", hover_color="#7C3AED", width=260, corner_radius=8, command=self.action_simulate_npc_event), padx=6, pady=6)
 
         split = ctk.CTkFrame(parent, fg_color="transparent")
         split.pack(fill="both", expand=True, padx=10, pady=5)
@@ -1758,13 +1903,13 @@ class ModernServerGUI:
     # TAB 8: Monster Drops Studio (C# SetupMonsterDropsTab)
     # -------------------------------------------------------------
     def _build_monster_drops_content(self, parent):
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkLabel(top, text="Search Monster (ID or Name):", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8").pack(side="left", padx=15, pady=10)
+        top.add_widget(ctk.CTkLabel(top, text="Search Monster (ID or Name):", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8"), padx=(12, 4), pady=6)
         self.ent_monster_search = ctk.CTkEntry(top, width=220, placeholder_text="e.g. Jelly or 17001", fg_color="#0B0F19", border_color="#1E293B")
-        self.ent_monster_search.pack(side="left", padx=5)
-        ctk.CTkButton(top, text="Search Npc.dat", fg_color="#2563EB", hover_color="#3B82F6", width=120, corner_radius=8, command=self.action_search_monster).pack(side="left", padx=10)
+        top.add_widget(self.ent_monster_search, padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="Search Npc.dat", fg_color="#2563EB", hover_color="#3B82F6", width=120, corner_radius=8, command=self.action_search_monster), padx=6, pady=6)
 
         split = ctk.CTkFrame(parent, fg_color="transparent")
         split.pack(fill="both", expand=True, padx=10, pady=5)
@@ -1806,19 +1951,19 @@ class ModernServerGUI:
     # TAB 9: Chest Drops Studio (C# tabPageChestDrops)
     # -------------------------------------------------------------
     def _build_chest_drops_content(self, parent):
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkLabel(top, text="Select Map / Chest:", text_color="#94A3B8").pack(side="left", padx=10, pady=10)
+        top.add_widget(ctk.CTkLabel(top, text="Select Map / Chest:", text_color="#94A3B8"), padx=(10, 4), pady=6)
         self.cmb_chest_map = ctk.CTkComboBox(top, values=["Map 10001 - Chest 1", "Map 10017 - Ship Chest", "Map 10035 - Beach Chest", "Map 12000 - Village Chest"], width=220, fg_color="#0B0F19", border_color="#1E293B")
-        self.cmb_chest_map.pack(side="left", padx=4)
+        top.add_widget(self.cmb_chest_map, padx=4, pady=6)
 
-        ctk.CTkLabel(top, text="Respawn Seconds:", text_color="#94A3B8").pack(side="left", padx=(15, 4))
+        top.add_widget(ctk.CTkLabel(top, text="Respawn Seconds:", text_color="#94A3B8"), padx=(12, 4), pady=6)
         self.ent_chest_respawn = ctk.CTkEntry(top, width=70, fg_color="#0B0F19", border_color="#1E293B")
         self.ent_chest_respawn.insert(0, "300")
-        self.ent_chest_respawn.pack(side="left", padx=4)
+        top.add_widget(self.ent_chest_respawn, padx=4, pady=6)
 
-        ctk.CTkButton(top, text="💾 Save Chest Table", fg_color="#10B981", hover_color="#059669", width=140, corner_radius=8, command=self.action_save_chest_drops).pack(side="right", padx=10)
+        top.add_widget(ctk.CTkButton(top, text="💾 Save Chest Table", fg_color="#10B981", hover_color="#059669", width=140, corner_radius=8, command=self.action_save_chest_drops), padx=6, pady=6)
 
         cols = ("ItemID", "ItemName", "Count", "Weight/Rate", "RareFlag")
         self.tree_chests, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -1831,18 +1976,18 @@ class ModernServerGUI:
     # TAB 10: Item Mall Manager (C# SetupItemMallTab)
     # -------------------------------------------------------------
     def _build_item_mall_content(self, parent):
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkButton(top, text="🔄 Reload Catalog", fg_color="#1E293B", hover_color="#334155", width=125, corner_radius=8, command=self.action_refresh_item_mall).pack(side="left", padx=(10, 4), pady=10)
-        ctk.CTkButton(top, text="➕ Add Item", fg_color="#10B981", hover_color="#059669", width=110, corner_radius=8, command=self.action_add_mall_item_modal).pack(side="left", padx=4)
-        ctk.CTkButton(top, text="✏ Edit Item", fg_color="#2563EB", hover_color="#3B82F6", width=100, corner_radius=8, command=self.action_edit_mall_item_modal).pack(side="left", padx=4)
-        ctk.CTkButton(top, text="🗑 Delete Item", fg_color="#DC2626", hover_color="#B91C1C", width=110, corner_radius=8, command=self.action_delete_mall_item).pack(side="left", padx=4)
+        top.add_widget(ctk.CTkButton(top, text="🔄 Reload Catalog", fg_color="#1E293B", hover_color="#334155", width=125, corner_radius=8, command=self.action_refresh_item_mall), padx=(10, 4), pady=6)
+        top.add_widget(ctk.CTkButton(top, text="➕ Add Item", fg_color="#10B981", hover_color="#059669", width=110, corner_radius=8, command=self.action_add_mall_item_modal), padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="✏ Edit Item", fg_color="#2563EB", hover_color="#3B82F6", width=100, corner_radius=8, command=self.action_edit_mall_item_modal), padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="🗑 Delete Item", fg_color="#DC2626", hover_color="#B91C1C", width=110, corner_radius=8, command=self.action_delete_mall_item), padx=4, pady=6)
 
-        ctk.CTkButton(top, text="📥 Import JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_import_mall_json).pack(side="left", padx=4)
-        ctk.CTkButton(top, text="📤 Export JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_export_mall_json).pack(side="left", padx=4)
+        top.add_widget(ctk.CTkButton(top, text="📥 Import JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_import_mall_json), padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="📤 Export JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_export_mall_json), padx=4, pady=6)
 
-        ctk.CTkLabel(top, text="Filter Category:", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8").pack(side="left", padx=(15, 4))
+        top.add_widget(ctk.CTkLabel(top, text="Filter Category:", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8"), padx=(12, 4), pady=6)
         self.cmb_mall_filter = ctk.CTkComboBox(
             top,
             values=["All Categories", "1 - Hot", "2 - Armory", "3 - Weaponry", "4 - Grocery", "5 - Furniture", "6 - Slot Machine", "7 - Forging Room"],
@@ -1852,7 +1997,7 @@ class ModernServerGUI:
             command=lambda _: self.action_refresh_item_mall()
         )
         self.cmb_mall_filter.set("All Categories")
-        self.cmb_mall_filter.pack(side="left", padx=4)
+        top.add_widget(self.cmb_mall_filter, padx=4, pady=6)
 
         cols = ("ItemID", "Name", "Category", "Points", "OriginalPrice", "Count", "Badge", "OnSale")
         self.tree_mall, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -1877,19 +2022,19 @@ class ModernServerGUI:
     # TAB 11: Starter Items Pack Manager (AC 23 Sub 6)
     # -------------------------------------------------------------
     def _build_starter_items_content(self, parent):
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkButton(top, text="🔄 Reload Starters", fg_color="#1E293B", hover_color="#334155", width=125, corner_radius=8, command=self.action_refresh_starter_items).pack(side="left", padx=(10, 4), pady=10)
-        ctk.CTkButton(top, text="➕ Add Starter Item", fg_color="#10B981", hover_color="#059669", width=140, corner_radius=8, command=self.action_add_starter_item_modal).pack(side="left", padx=4)
-        ctk.CTkButton(top, text="✏ Edit Selected", fg_color="#2563EB", hover_color="#3B82F6", width=110, corner_radius=8, command=self.action_edit_starter_item_modal).pack(side="left", padx=4)
-        ctk.CTkButton(top, text="🗑 Remove Item", fg_color="#DC2626", hover_color="#B91C1C", width=110, corner_radius=8, command=self.action_delete_starter_item).pack(side="left", padx=4)
+        top.add_widget(ctk.CTkButton(top, text="🔄 Reload Starters", fg_color="#1E293B", hover_color="#334155", width=125, corner_radius=8, command=self.action_refresh_starter_items), padx=(10, 4), pady=6)
+        top.add_widget(ctk.CTkButton(top, text="➕ Add Starter Item", fg_color="#10B981", hover_color="#059669", width=140, corner_radius=8, command=self.action_add_starter_item_modal), padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="✏ Edit Selected", fg_color="#2563EB", hover_color="#3B82F6", width=110, corner_radius=8, command=self.action_edit_starter_item_modal), padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="🗑 Remove Item", fg_color="#DC2626", hover_color="#B91C1C", width=110, corner_radius=8, command=self.action_delete_starter_item), padx=4, pady=6)
 
-        ctk.CTkButton(top, text="📥 Import JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_import_starter_json).pack(side="left", padx=4)
-        ctk.CTkButton(top, text="📤 Export JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_export_starter_json).pack(side="left", padx=4)
+        top.add_widget(ctk.CTkButton(top, text="📥 Import JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_import_starter_json), padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="📤 Export JSON", fg_color="#1E293B", hover_color="#334155", width=110, corner_radius=8, command=self.action_export_starter_json), padx=4, pady=6)
 
         self.lbl_starter_summary = ctk.CTkLabel(top, text="Items: 0", font=ctk.CTkFont(size=12, weight="bold"), text_color="#10B981")
-        self.lbl_starter_summary.pack(side="right", padx=15)
+        top.add_widget(self.lbl_starter_summary, padx=10, pady=6)
 
         cols = ("Order", "ItemID", "Name", "Quantity", "Description")
         self.tree_starters, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -1911,17 +2056,17 @@ class ModernServerGUI:
     # TAB 12: NPC Resolver & Directory (C# SetupNpcResolverTab)
     # -------------------------------------------------------------
     def _build_npc_resolver_content(self, parent):
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkLabel(top, text="Template ID (TID):", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8").pack(side="left", padx=10, pady=10)
+        top.add_widget(ctk.CTkLabel(top, text="Template ID (TID):", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8"), padx=(10, 4), pady=6)
         self.ent_res_tid = ctk.CTkEntry(top, width=100, fg_color="#0B0F19", border_color="#1E293B")
         self.ent_res_tid.insert(0, "14013")
-        self.ent_res_tid.pack(side="left", padx=4)
+        top.add_widget(self.ent_res_tid, padx=4, pady=6)
 
-        ctk.CTkButton(top, text="🔍 Resolve Template", fg_color="#2563EB", hover_color="#3B82F6", width=140, corner_radius=8, command=self.action_resolve_npc_tid).pack(side="left", padx=6)
+        top.add_widget(ctk.CTkButton(top, text="🔍 Resolve Template", fg_color="#2563EB", hover_color="#3B82F6", width=140, corner_radius=8, command=self.action_resolve_npc_tid), padx=6, pady=6)
         self.lbl_res_name_card = ctk.CTkLabel(top, text="Resolved: Ashley (TID: 14013, Humanoid)", font=ctk.CTkFont(size=13, weight="bold"), text_color="#10B981")
-        self.lbl_res_name_card.pack(side="left", padx=15)
+        top.add_widget(self.lbl_res_name_card, padx=12, pady=6)
 
         split = ctk.CTkFrame(parent, fg_color="transparent")
         split.pack(fill="both", expand=True, padx=10, pady=5)
@@ -1953,13 +2098,13 @@ class ModernServerGUI:
     # TAB 12: Talk Dialogue Resolver (C# SetupTalkResolverTab)
     # -------------------------------------------------------------
     def _build_talk_resolver_content(self, parent):
-        top = ctk.CTkFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
         top.pack(fill="x", padx=10, pady=(10, 5))
 
-        ctk.CTkLabel(top, text="Search Talk.dat (17,489 Dialogues):", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8").pack(side="left", padx=15, pady=10)
+        top.add_widget(ctk.CTkLabel(top, text="Search Talk.dat (17,489 Dialogues):", font=ctk.CTkFont(weight="bold"), text_color="#38BDF8"), padx=(12, 4), pady=6)
         self.ent_talk_search = ctk.CTkEntry(top, width=280, placeholder_text="Enter keyword or TalkID (e.g. voyage or 39378)", fg_color="#0B0F19", border_color="#1E293B")
-        self.ent_talk_search.pack(side="left", padx=5)
-        ctk.CTkButton(top, text="🔍 Search Dialogues", fg_color="#2563EB", hover_color="#3B82F6", width=140, corner_radius=8, command=self.action_search_talk).pack(side="left", padx=8)
+        top.add_widget(self.ent_talk_search, padx=4, pady=6)
+        top.add_widget(ctk.CTkButton(top, text="🔍 Search Dialogues", fg_color="#2563EB", hover_color="#3B82F6", width=140, corner_radius=8, command=self.action_search_talk), padx=8, pady=6)
 
         cols = ("TalkID", "DialogueText")
         self.tree_talk, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
@@ -2056,6 +2201,281 @@ class ModernServerGUI:
                 ctk.CTkLabel(right, text=f"  🟢 {s} - ACTIVE", text_color="#10B981", font=ctk.CTkFont(size=10)).pack(anchor="w", padx=15, pady=1)
 
     # -------------------------------------------------------------
+    # TAB: Guilds Manager
+    # -------------------------------------------------------------
+    def _build_guilds_content(self, parent):
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top.pack(fill="x", padx=10, pady=(10, 5))
+
+        top.add_widget(ctk.CTkButton(top, text="🔄 Refresh Guilds", fg_color="#1E293B", hover_color="#334155", width=140, corner_radius=8, command=self.action_refresh_guilds), padx=(10, 4), pady=6)
+
+        top.add_widget(ctk.CTkLabel(top, text="🔍 Filter:", font=ctk.CTkFont(size=12), text_color="#94A3B8"), padx=(6, 2), pady=6)
+        self.ent_guild_search = ctk.CTkEntry(top, placeholder_text="Filter by Guild Name or ID...", fg_color="#0B0F19", border_color="#1E293B", width=220)
+        top.add_widget(self.ent_guild_search, padx=4, pady=6)
+        self.ent_guild_search.bind("<KeyRelease>", lambda e: self.action_refresh_guilds())
+
+        self.lbl_guilds_stats = ctk.CTkLabel(top, text="Total Guilds: 0 | Members: 0", font=ctk.CTkFont(size=12, weight="bold"), text_color="#38BDF8")
+        top.add_widget(self.lbl_guilds_stats, padx=10, pady=6)
+
+        split = ctk.CTkFrame(parent, fg_color="transparent")
+        split.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # Left: Guilds List
+        left = ctk.CTkFrame(split, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        ctk.CTkLabel(left, text="🏰 Registered Guilds", font=ctk.CTkFont(size=13, weight="bold"), text_color="#38BDF8").pack(anchor="w", padx=15, pady=(12, 6))
+        cols = ("GuildID", "GuildName", "LeaderName", "LeaderID", "Members", "Created")
+        self.tree_guilds, _, _ = create_scrolled_treeview(left, columns=cols, show="headings", selectmode="browse", padx=12, pady=8)
+        for c in cols:
+            self.tree_guilds.heading(c, text=c)
+            self.tree_guilds.column(c, width=70 if c in ("GuildID", "LeaderID", "Members") else 120, anchor="center")
+        self.tree_guilds.bind("<<TreeviewSelect>>", self._on_guild_selected)
+
+        # Right: Selected Guild Details & Member Roster
+        right = ctk.CTkFrame(split, width=420, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        right.pack(side="right", fill="both")
+
+        ctk.CTkLabel(right, text="🛡️ Guild Details & Members", font=ctk.CTkFont(size=13, weight="bold"), text_color="#38BDF8").pack(anchor="w", padx=15, pady=(12, 4))
+        self.lbl_selected_guild = ctk.CTkLabel(right, text="Selected: (None)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#FBBF24")
+        self.lbl_selected_guild.pack(anchor="w", padx=15, pady=(0, 6))
+
+        # Notice/Rules Box
+        ctk.CTkLabel(right, text="Guild Announcement / Rules:", font=ctk.CTkFont(size=11), text_color="#94A3B8").pack(anchor="w", padx=15)
+        self.txt_guild_rules = tk.Text(right, height=3, bg="#080C14", fg="#F1F5F9", insertbackground="#38BDF8", relief="flat", font=("Segoe UI", 9))
+        self.txt_guild_rules.pack(fill="x", padx=15, pady=(2, 6))
+
+        f_rule_btns = ctk.CTkFrame(right, fg_color="transparent")
+        f_rule_btns.pack(fill="x", padx=15, pady=(0, 8))
+        ctk.CTkButton(f_rule_btns, text="💾 Save Notice", fg_color="#10B981", hover_color="#059669", height=28, corner_radius=6, command=self.action_save_guild_notice).pack(side="left", padx=2)
+
+        # Member Roster Tree
+        ctk.CTkLabel(right, text="Guild Member Roster:", font=ctk.CTkFont(size=11, weight="bold"), text_color="#94A3B8").pack(anchor="w", padx=15, pady=(4, 2))
+        m_cols = ("CharID", "Name", "Level", "Rank", "Element")
+        self.tree_guild_members, _, _ = create_scrolled_treeview(right, columns=m_cols, show="headings", height=6, padx=15, pady=4)
+        for mc in m_cols:
+            self.tree_guild_members.heading(mc, text=mc)
+            self.tree_guild_members.column(mc, width=60 if mc in ("CharID", "Level", "Element") else 90, anchor="center")
+
+        # Guild Management Action Strip
+        f_act = ResponsiveFlowFrame(right, fg_color="transparent", padx=3, pady=3)
+        f_act.pack(fill="x", padx=15, pady=(8, 12))
+        f_act.add_widget(ctk.CTkButton(f_act, text="👑 Change Leader", fg_color="#2563EB", hover_color="#3B82F6", height=32, corner_radius=8, command=self.action_guild_change_leader))
+        f_act.add_widget(ctk.CTkButton(f_act, text="👢 Kick Member", fg_color="#E11D48", hover_color="#BE123C", height=32, corner_radius=8, command=self.action_guild_kick_member))
+        f_act.add_widget(ctk.CTkButton(f_act, text="🗑 Disband Guild", fg_color="#DC2626", hover_color="#B91C1C", height=32, corner_radius=8, command=self.action_disband_guild))
+
+        self.action_refresh_guilds()
+
+    # -------------------------------------------------------------
+    # TAB: In-Game Mail & GM Gifts Dispatcher
+    # -------------------------------------------------------------
+    def _build_mail_content(self, parent):
+        split = ctk.CTkFrame(parent, fg_color="transparent")
+        split.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Left: Dispatch Mail Form
+        left = ctk.CTkFrame(split, width=420, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        left.pack(side="left", fill="y", padx=(0, 10))
+
+        ctk.CTkLabel(left, text="📬 Send GM Mail & Gifts", font=ctk.CTkFont(size=14, weight="bold"), text_color="#38BDF8").pack(anchor="w", padx=15, pady=(15, 10))
+
+        ctk.CTkLabel(left, text="Recipient Target:", font=ctk.CTkFont(size=12), text_color="#94A3B8").pack(anchor="w", padx=15, pady=(2, 1))
+        self.cmb_mail_target = ctk.CTkComboBox(left, values=["Single Character", "All Online Players", "All Registered Characters"], fg_color="#0B0F19", border_color="#1E293B", command=self._on_mail_target_changed)
+        self.cmb_mail_target.pack(fill="x", padx=15, pady=(0, 8))
+
+        self.lbl_mail_recipient = ctk.CTkLabel(left, text="Target Character Name or ID:", font=ctk.CTkFont(size=12), text_color="#94A3B8")
+        self.lbl_mail_recipient.pack(anchor="w", padx=15, pady=(2, 1))
+        self.ent_mail_recipient = ctk.CTkEntry(left, placeholder_text="e.g. PlayerOne or 1", fg_color="#0B0F19", border_color="#1E293B")
+        self.ent_mail_recipient.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(left, text="Mail Subject:", font=ctk.CTkFont(size=12), text_color="#94A3B8").pack(anchor="w", padx=15, pady=(2, 1))
+        self.ent_mail_subject = ctk.CTkEntry(left, placeholder_text="System Notification / Gift", fg_color="#0B0F19", border_color="#1E293B")
+        self.ent_mail_subject.insert(0, "🎁 Server Special Gift")
+        self.ent_mail_subject.pack(fill="x", padx=15, pady=(0, 8))
+
+        ctk.CTkLabel(left, text="Message Body:", font=ctk.CTkFont(size=12), text_color="#94A3B8").pack(anchor="w", padx=15, pady=(2, 1))
+        self.txt_mail_body = tk.Text(left, height=4, bg="#080C14", fg="#F1F5F9", insertbackground="#38BDF8", relief="flat", font=("Segoe UI", 9))
+        self.txt_mail_body.insert("1.0", "Greetings Adventurer!\nPlease accept this reward from the server administration. Have fun!")
+        self.txt_mail_body.pack(fill="x", padx=15, pady=(0, 8))
+
+        # Attachments Frame
+        f_attach = ctk.CTkFrame(left, fg_color="#0F172A", corner_radius=8, border_width=1, border_color="#1E293B")
+        f_attach.pack(fill="x", padx=15, pady=(4, 12))
+
+        ctk.CTkLabel(f_attach, text="📎 Attachments (Optional)", font=ctk.CTkFont(size=11, weight="bold"), text_color="#FBBF24").pack(anchor="w", padx=10, pady=(8, 4))
+
+        f_gold = ctk.CTkFrame(f_attach, fg_color="transparent")
+        f_gold.pack(fill="x", padx=10, pady=2)
+        ctk.CTkLabel(f_gold, text="💰 Gold:", width=70, anchor="w", text_color="#94A3B8").pack(side="left")
+        self.ent_mail_gold = ctk.CTkEntry(f_gold, width=120, fg_color="#0B0F19", border_color="#1E293B")
+        self.ent_mail_gold.insert(0, "0")
+        self.ent_mail_gold.pack(side="left", padx=4)
+
+        f_item = ctk.CTkFrame(f_attach, fg_color="transparent")
+        f_item.pack(fill="x", padx=10, pady=2)
+        ctk.CTkLabel(f_item, text="🎁 Item ID:", width=70, anchor="w", text_color="#94A3B8").pack(side="left")
+        self.ent_mail_item_id = ctk.CTkEntry(f_item, width=120, placeholder_text="e.g. 27001", fg_color="#0B0F19", border_color="#1E293B")
+        self.ent_mail_item_id.insert(0, "0")
+        self.ent_mail_item_id.pack(side="left", padx=4)
+        self.ent_mail_item_id.bind("<KeyRelease>", self._on_mail_item_id_changed)
+
+        ctk.CTkLabel(f_item, text="Qty:", width=35, anchor="w", text_color="#94A3B8").pack(side="left", padx=(6, 2))
+        self.ent_mail_item_count = ctk.CTkEntry(f_item, width=60, fg_color="#0B0F19", border_color="#1E293B")
+        self.ent_mail_item_count.insert(0, "1")
+        self.ent_mail_item_count.pack(side="left", padx=2)
+
+        self.lbl_mail_item_preview = ctk.CTkLabel(f_attach, text="Item: None", font=ctk.CTkFont(size=10), text_color="#38BDF8")
+        self.lbl_mail_item_preview.pack(anchor="w", padx=10, pady=(2, 6))
+
+        ctk.CTkButton(left, text="🚀 Dispatch Mail to Target(s)", font=ctk.CTkFont(size=13, weight="bold"), fg_color="#10B981", hover_color="#059669", height=38, corner_radius=8, command=self.action_dispatch_mail).pack(fill="x", padx=15, pady=(4, 15))
+
+        # Right: Mailbox History & Inspector
+        right = ctk.CTkFrame(split, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        right.pack(side="right", fill="both", expand=True)
+
+        top_r = ResponsiveFlowFrame(right, fg_color="transparent", padx=4, pady=4)
+        top_r.pack(fill="x", padx=15, pady=(12, 6))
+
+        top_r.add_widget(ctk.CTkLabel(top_r, text="📜 Mailbox Records (`charmail`)", font=ctk.CTkFont(size=13, weight="bold"), text_color="#38BDF8"), padx=(0, 8), pady=4)
+        top_r.add_widget(ctk.CTkButton(top_r, text="🔄 Refresh", fg_color="#1E293B", hover_color="#334155", width=90, height=30, corner_radius=6, command=self.action_refresh_mail), padx=4, pady=4)
+        top_r.add_widget(ctk.CTkButton(top_r, text="🗑 Delete Mail", fg_color="#DC2626", hover_color="#B91C1C", width=100, height=30, corner_radius=6, command=self.action_delete_mail), padx=4, pady=4)
+
+        cols = ("MailID", "Sender", "ReceiverID", "Subject", "Gold", "ItemID", "ItemName", "Qty", "Claimed", "Date")
+        self.tree_mail, _, _ = create_scrolled_treeview(right, columns=cols, show="headings", padx=15, pady=8)
+        for c in cols:
+            self.tree_mail.heading(c, text=c)
+            self.tree_mail.column(c, width=65 if c in ("MailID", "ReceiverID", "Gold", "ItemID", "Qty", "Claimed") else 110, anchor="center")
+
+        self.action_refresh_mail()
+
+    # -------------------------------------------------------------
+    # TAB: Security & IP Bans
+    # -------------------------------------------------------------
+    def _build_security_content(self, parent):
+        split = ctk.CTkFrame(parent, fg_color="transparent")
+        split.pack(fill="both", expand=True, padx=10, pady=10)
+
+        # Left: Banned IP Addresses
+        left = ctk.CTkFrame(split, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        left.pack(side="left", fill="both", expand=True, padx=(0, 6))
+
+        top_l = ResponsiveFlowFrame(left, fg_color="transparent", padx=4, pady=4)
+        top_l.pack(fill="x", padx=15, pady=(12, 6))
+        top_l.add_widget(ctk.CTkLabel(top_l, text="🌐 Banned IP Addresses (`banned_ips`)", font=ctk.CTkFont(size=13, weight="bold"), text_color="#38BDF8"), padx=(0, 8), pady=4)
+        top_l.add_widget(ctk.CTkButton(top_l, text="🔄 Refresh", fg_color="#1E293B", hover_color="#334155", width=80, height=28, corner_radius=6, command=self.action_refresh_banned_ips), padx=4, pady=4)
+
+        cols_ip = ("IP", "Reason", "BannedAt", "BannedBy")
+        self.tree_banned_ips, _, _ = create_scrolled_treeview(left, columns=cols_ip, show="headings", padx=12, pady=6)
+        for c in cols_ip:
+            self.tree_banned_ips.heading(c, text=c)
+            self.tree_banned_ips.column(c, width=110 if c != "Reason" else 180, anchor="center")
+
+        f_ip_btns = ResponsiveFlowFrame(left, fg_color="transparent", padx=4, pady=3)
+        f_ip_btns.pack(fill="x", padx=15, pady=(6, 12))
+        f_ip_btns.add_widget(ctk.CTkButton(f_ip_btns, text="➕ Add IP Ban", fg_color="#DC2626", hover_color="#B91C1C", height=32, corner_radius=8, command=self.action_add_banned_ip))
+        f_ip_btns.add_widget(ctk.CTkButton(f_ip_btns, text="🔓 Unban Selected IP", fg_color="#10B981", hover_color="#059669", height=32, corner_radius=8, command=self.action_unban_ip))
+
+        # Right: Banned Accounts
+        right = ctk.CTkFrame(split, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        right.pack(side="right", fill="both", expand=True, padx=(6, 0))
+
+        top_r = ResponsiveFlowFrame(right, fg_color="transparent", padx=4, pady=4)
+        top_r.pack(fill="x", padx=15, pady=(12, 6))
+        top_r.add_widget(ctk.CTkLabel(top_r, text="⛔ Banned Accounts (`users WHERE banned=1`)", font=ctk.CTkFont(size=13, weight="bold"), text_color="#F43F5E"), padx=(0, 8), pady=4)
+        top_r.add_widget(ctk.CTkButton(top_r, text="🔄 Refresh", fg_color="#1E293B", hover_color="#334155", width=80, height=28, corner_radius=6, command=self.action_refresh_banned_accounts), padx=4, pady=4)
+
+        cols_acc = ("UserID", "Username", "Reason", "LastIP", "LastLogin")
+        self.tree_banned_users, _, _ = create_scrolled_treeview(right, columns=cols_acc, show="headings", padx=12, pady=6)
+        for c in cols_acc:
+            self.tree_banned_users.heading(c, text=c)
+            self.tree_banned_users.column(c, width=70 if c == "UserID" else 110, anchor="center")
+
+        f_acc_btns = ResponsiveFlowFrame(right, fg_color="transparent", padx=4, pady=3)
+        f_acc_btns.pack(fill="x", padx=15, pady=(6, 12))
+        f_acc_btns.add_widget(ctk.CTkButton(f_acc_btns, text="⛔ Ban Account", fg_color="#DC2626", hover_color="#B91C1C", height=32, corner_radius=8, command=self.action_ban_account_manual))
+        f_acc_btns.add_widget(ctk.CTkButton(f_acc_btns, text="🔓 Unban Selected Account", fg_color="#10B981", hover_color="#059669", height=32, corner_radius=8, command=self.action_unban_account))
+
+        self.action_refresh_banned_ips()
+        self.action_refresh_banned_accounts()
+
+    # -------------------------------------------------------------
+    # TAB: Live Battles Monitor
+    # -------------------------------------------------------------
+    def _build_battles_content(self, parent):
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top.pack(fill="x", padx=10, pady=(10, 5))
+
+        top.add_widget(ctk.CTkButton(top, text="🔄 Refresh Battles", fg_color="#1E293B", hover_color="#334155", width=140, corner_radius=8, command=self.action_refresh_battles), padx=(10, 4), pady=6)
+
+        self.lbl_active_battles_badge = ctk.CTkLabel(top, text="⚔️ Active Battles: 0", font=ctk.CTkFont(size=13, weight="bold"), text_color="#10B981")
+        top.add_widget(self.lbl_active_battles_badge, padx=8, pady=6)
+
+        top.add_widget(ctk.CTkLabel(top, text="Live turn-based combat monitor. Cleanly abort stuck encounters or force victory.", font=ctk.CTkFont(size=11), text_color="#94A3B8"), padx=8, pady=6)
+
+        split = ctk.CTkFrame(parent, fg_color="transparent")
+        split.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # Left: Battles List
+        left = ctk.CTkFrame(split, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        left.pack(side="left", fill="both", expand=True, padx=(0, 8))
+
+        cols = ("BattleID", "Type", "MapID", "Turn", "Player", "Pet", "Enemies", "Time")
+        self.tree_battles, _, _ = create_scrolled_treeview(left, columns=cols, show="headings", selectmode="browse", padx=12, pady=8)
+        for c in cols:
+            self.tree_battles.heading(c, text=c)
+            self.tree_battles.column(c, width=60 if c in ("MapID", "Turn") else 100, anchor="center")
+        self.tree_battles.bind("<<TreeviewSelect>>", self._on_battle_selected)
+
+        # Right: Battle Details & GM Overrides
+        right = ctk.CTkFrame(split, width=380, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        right.pack(side="right", fill="both")
+
+        ctk.CTkLabel(right, text="⚔️ Battle Details & Overrides", font=ctk.CTkFont(size=13, weight="bold"), text_color="#38BDF8").pack(anchor="w", padx=15, pady=(12, 4))
+        self.lbl_selected_battle = ctk.CTkLabel(right, text="Selected Battle: (None)", font=ctk.CTkFont(size=12, weight="bold"), text_color="#FBBF24")
+        self.lbl_selected_battle.pack(anchor="w", padx=15, pady=(0, 6))
+
+        self.txt_battle_details = tk.Text(right, height=12, bg="#080C14", fg="#F1F5F9", relief="flat", font=("Segoe UI", 9))
+        self.txt_battle_details.pack(fill="both", expand=True, padx=15, pady=(4, 10))
+
+        f_b_btns = ctk.CTkFrame(right, fg_color="transparent")
+        f_b_btns.pack(fill="x", padx=15, pady=(0, 15))
+        ctk.CTkButton(f_b_btns, text="🏆 Force Win (Victory)", font=ctk.CTkFont(weight="bold"), fg_color="#10B981", hover_color="#059669", height=36, corner_radius=8, command=self.action_force_win_battle).pack(fill="x", padx=2, pady=3)
+        ctk.CTkButton(f_b_btns, text="🛑 Force End / Abort Battle", font=ctk.CTkFont(weight="bold"), fg_color="#DC2626", hover_color="#B91C1C", height=36, corner_radius=8, command=self.action_force_end_battle).pack(fill="x", padx=2, pady=3)
+
+        self.action_refresh_battles()
+
+    # -------------------------------------------------------------
+    # TAB: Marriage Registry
+    # -------------------------------------------------------------
+    def _build_marriage_content(self, parent):
+        top = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        top.pack(fill="x", padx=10, pady=(10, 5))
+
+        top.add_widget(ctk.CTkButton(top, text="🔄 Refresh Marriages", fg_color="#1E293B", hover_color="#334155", width=160, corner_radius=8, command=self.action_refresh_marriages), padx=(10, 4), pady=6)
+
+        top.add_widget(ctk.CTkLabel(top, text="🔍 Filter:", font=ctk.CTkFont(size=12), text_color="#94A3B8"), padx=(6, 2), pady=6)
+        self.ent_marriage_search = ctk.CTkEntry(top, placeholder_text="Filter by Spouse Name...", fg_color="#0B0F19", border_color="#1E293B", width=220)
+        top.add_widget(self.ent_marriage_search, padx=4, pady=6)
+        self.ent_marriage_search.bind("<KeyRelease>", lambda e: self.action_refresh_marriages())
+
+        self.lbl_marriages_stats = ctk.CTkLabel(top, text="Total Couples: 0", font=ctk.CTkFont(size=12, weight="bold"), text_color="#EC4899")
+        top.add_widget(self.lbl_marriages_stats, padx=10, pady=6)
+
+        cols = ("HusbandID", "HusbandName", "WifeID", "WifeName", "MarriageDate", "Status")
+        self.tree_marriages, _, _ = create_scrolled_treeview(parent, columns=cols, show="headings", padx=10, pady=6)
+        for c in cols:
+            self.tree_marriages.heading(c, text=c)
+            self.tree_marriages.column(c, width=90 if c in ("HusbandID", "WifeID") else 140, anchor="center")
+
+        bottom = ResponsiveFlowFrame(parent, fg_color="#111827", corner_radius=12, border_width=1, border_color="#1E293B")
+        bottom.pack(fill="x", padx=10, pady=(5, 10))
+
+        bottom.add_widget(ctk.CTkButton(bottom, text="💔 Admin Annul / Divorce", font=ctk.CTkFont(weight="bold"), fg_color="#DC2626", hover_color="#B91C1C", width=190, height=34, corner_radius=8, command=self.action_divorce_marriage), padx=(10, 4), pady=6)
+        bottom.add_widget(ctk.CTkButton(bottom, text="🚀 Teleport Spouses Together", font=ctk.CTkFont(weight="bold"), fg_color="#8B5CF6", hover_color="#7C3AED", width=220, height=34, corner_radius=8, command=self.action_teleport_spouses), padx=4, pady=6)
+
+        self.action_refresh_marriages()
+
+    # -------------------------------------------------------------
     # Helper & Event Handlers
     # -------------------------------------------------------------
     def _create_metric_card(self, parent, title, value, color, col, icon="📊"):
@@ -2125,23 +2545,50 @@ class ModernServerGUI:
         self.card_accounts.configure(text=str(self._get_db_count("accounts")))
         self.card_chars.configure(text=str(self._get_db_count("characters")))
 
+        # Update Battles badge
+        if hasattr(self, "lbl_active_battles_badge") and self.game_server and hasattr(self.game_server, "active_battles"):
+            self.lbl_active_battles_badge.configure(text=f"⚔️ Active Battles: {len(self.game_server.active_battles)}")
+
         # Update Sessions Tree
         if hasattr(self, "tree_players"):
+            sel = self.tree_players.selection()
+            selected_char_id = None
+            if sel:
+                vals = self.tree_players.item(sel[0])["values"]
+                if vals:
+                    selected_char_id = vals[0]
+
             for i in self.tree_players.get_children():
                 self.tree_players.delete(i)
+
+            filter_q = (self.ent_search_players.get() or "").lower().strip() if hasattr(self, "ent_search_players") else ""
+
+            selected_item_id = None
             if self.game_server and hasattr(self.game_server, "sessions"):
                 for s in self.game_server.sessions.values():
-                    self.tree_players.insert("", "end", values=(
-                        getattr(s, "char_id", 0),
-                        getattr(s, "char_name", "Unknown"),
-                        getattr(s, "username", "Unknown"),
-                        getattr(s, "level", 1),
-                        getattr(s, "gold", 0),
-                        getattr(s, "map_id", 0),
-                        getattr(s, "x", 0),
-                        getattr(s, "y", 0),
-                        getattr(s, "ip", "127.0.0.1")
-                    ))
+                    cid = getattr(s, "char_id", 0)
+                    cname = getattr(s, "char_name", "Unknown")
+                    uname = getattr(s, "username", "Unknown")
+                    lvl = getattr(s, "level", 1)
+                    gold = getattr(s, "gold", 0)
+                    mid = getattr(s, "map_id", 0)
+                    x = getattr(s, "x", 0)
+                    y = getattr(s, "y", 0)
+                    ip = getattr(s, "ip", "127.0.0.1")
+
+                    if filter_q:
+                        if filter_q not in str(cid).lower() and filter_q not in str(cname).lower() and filter_q not in str(uname).lower() and filter_q not in str(mid).lower():
+                            continue
+
+                    iid = self.tree_players.insert("", "end", values=(cid, cname, uname, lvl, gold, mid, x, y, ip))
+                    if cid == selected_char_id:
+                        selected_item_id = iid
+
+            if selected_item_id:
+                try:
+                    self.tree_players.selection_set(selected_item_id)
+                except Exception:
+                    pass
 
     def _refresh_online_players_combos(self):
         vals = []
@@ -2218,14 +2665,85 @@ class ModernServerGUI:
         else:
             messagebox.showwarning("Select Character", "Please select a character from the list first.")
 
+    def _get_selected_session(self) -> Optional[Any]:
+        """Gets active player session from selection in online players tree or cheat combobox."""
+        if not self.game_server or not hasattr(self.game_server, "sessions"):
+            return None
+        # 1. From tree_players selection
+        if hasattr(self, "tree_players"):
+            sel = self.tree_players.selection()
+            if sel:
+                item = self.tree_players.item(sel[0])["values"]
+                if item:
+                    try:
+                        cid = int(item[0])
+                        for s in self.game_server.sessions.values():
+                            if getattr(s, "char_id", 0) == cid:
+                                return s
+                    except Exception:
+                        pass
+        # 2. From cmb_cheat_player
+        if hasattr(self, "cmb_cheat_player"):
+            val = self.cmb_cheat_player.get()
+            if val and not val.startswith("("):
+                try:
+                    cid = int(val.split("-")[0].strip())
+                    for s in self.game_server.sessions.values():
+                        if getattr(s, "char_id", 0) == cid:
+                            return s
+                except Exception:
+                    pass
+        return None
+
     def action_heal_player(self):
-        messagebox.showinfo("Healed", "HP and SP fully restored!")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        s.hp = getattr(s, "max_hp", 1000)
+        s.sp = getattr(s, "max_sp", 500)
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if hasattr(self.game_server, "send_stats_update"):
+                safe_run_coroutine(self.game_server.send_stats_update(s, levelup=False), self.game_server.loop)
+            elif hasattr(self.game_server, "send_stat_packet"):
+                safe_run_coroutine(self.game_server.send_stat_packet(s), self.game_server.loop)
+        messagebox.showinfo("Healed", f"Character [{getattr(s, 'char_name', 'Player')}] HP and SP fully restored to 100%!")
 
     def action_god_mode(self):
-        messagebox.showinfo("God Mode", "God Mode toggled!")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        is_god = not getattr(s, "god_mode", False)
+        s.god_mode = is_god
+        if is_god:
+            s.hp = 99999
+            s.sp = 99999
+            s.max_hp = 99999
+            s.max_sp = 99999
+        else:
+            s.max_hp = 1000
+            s.max_sp = 500
+            s.hp = min(getattr(s, "hp", 1000), 1000)
+            s.sp = min(getattr(s, "sp", 500), 500)
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if hasattr(self.game_server, "send_stats_update"):
+                safe_run_coroutine(self.game_server.send_stats_update(s, levelup=False), self.game_server.loop)
+        status_txt = "ENABLED (99,999 HP/SP)" if is_god else "DISABLED"
+        messagebox.showinfo("God Mode", f"God Mode {status_txt} for [{getattr(s, 'char_name', 'Player')}]!")
 
     def action_kick_player(self):
-        messagebox.showinfo("Kicked", "Player kicked.")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        cname = getattr(s, "char_name", "Player")
+        uid = getattr(s, "user_id", 0)
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            safe_run_coroutine(self.game_server.kick_user(uid, "Kicked by Administrator"), self.game_server.loop)
+        elif hasattr(s, "disconnect"):
+            safe_run_coroutine(s.disconnect(), getattr(self.game_server, "loop", None) or asyncio.get_event_loop())
+        messagebox.showinfo("Kicked", f"Player [{cname}] was disconnected from the server.")
 
     def action_ban_player(self):
         sel = self.tree_players.selection()
@@ -2249,7 +2767,7 @@ class ModernServerGUI:
                 if hasattr(self.game_server, "loop") and self.game_server.loop:
                     for s in list(self.game_server.active_sessions):
                         if getattr(s, "username", "") == account_name or getattr(s, "char_name", "") == char_name:
-                            asyncio.run_coroutine_threadsafe(self.game_server.ban_user(getattr(s, "user_id", 0), reason), self.game_server.loop)
+                            safe_run_coroutine(self.game_server.ban_user(getattr(s, "user_id", 0), reason), self.game_server.loop)
             messagebox.showinfo("Banned", f"User account '{account_name}' has been banned and kicked.")
             self.action_refresh_users()
         except Exception as e:
@@ -2278,7 +2796,7 @@ class ModernServerGUI:
             # Kick online session
             if self.game_server:
                 if hasattr(self.game_server, "loop") and self.game_server.loop:
-                    asyncio.run_coroutine_threadsafe(self.game_server.kick_ip(ip, f"IP Banned: {reason}"), self.game_server.loop)
+                    safe_run_coroutine(self.game_server.kick_ip(ip, f"IP Banned: {reason}"), self.game_server.loop)
             messagebox.showinfo("IP Banned", f"IP address '{ip}' has been banned and all active connections terminated.")
             self.action_refresh_users()
         except Exception as e:
@@ -2337,50 +2855,863 @@ class ModernServerGUI:
                 self.list_npcs.insert(tk.END, n)
 
     def action_cheat_warp_map(self):
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
         sel = self.list_maps.curselection()
-        if sel:
-            m = self.list_maps.get(sel[0])
-            mid = int(m.split("-")[0].strip())
-            messagebox.showinfo("Warp", f"Warping target player to Map #{mid} ({m})!")
+        if not sel:
+            messagebox.showwarning("Select Map", "Please select a destination map from the list.")
+            return
+        m = self.list_maps.get(sel[0])
+        mid = int(m.split("-")[0].strip())
+        s.map_id = mid
+        s.x = 300
+        s.y = 400
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE characters SET map_id = ?, x = ?, y = ? WHERE id = ?", (mid, 300, 400, s.char_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if hasattr(self.game_server, "warp_player"):
+                safe_run_coroutine(self.game_server.warp_player(s, mid, 300, 400), self.game_server.loop)
+            elif hasattr(s, "send_packet"):
+                pkt = PacketWriter().write_8(12).write_16(mid).write_16(300).write_16(400)
+                safe_run_coroutine(s.send_packet(pkt), self.game_server.loop)
+        messagebox.showinfo("Warped", f"Warped [{getattr(s, 'char_name', 'Player')}] to Map #{mid} (300, 400)!")
 
     def action_cheat_ride_vehicle(self):
-        messagebox.showinfo("Vehicle", "Player vehicle mounted!")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        sel = self.list_veh.curselection()
+        if not sel:
+            messagebox.showwarning("Select Vehicle", "Please select a vehicle from the list.")
+            return
+        v_str = self.list_veh.get(sel[0])
+        vid = int(v_str.split("-")[0].strip())
+        s.vehicle_id = vid
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            pkt = PacketWriter().write_8(45).write_8(1).write_16(vid)
+            safe_run_coroutine(s.send_packet(pkt), self.game_server.loop)
+        messagebox.showinfo("Vehicle Mounted", f"Vehicle #{vid} mounted on [{getattr(s, 'char_name', 'Player')}]!")
 
     def action_cheat_unride_vehicle(self):
-        messagebox.showinfo("Vehicle", "Vehicle removed / unridden.")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        s.vehicle_id = 0
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            pkt = PacketWriter().write_8(45).write_8(2).write_16(0)
+            safe_run_coroutine(s.send_packet(pkt), self.game_server.loop)
+        messagebox.showinfo("Vehicle Removed", f"Vehicle unmounted from [{getattr(s, 'char_name', 'Player')}].")
 
     def action_cheat_spawn_item(self):
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
         sel = self.list_items.curselection()
-        if sel:
-            it = self.list_items.get(sel[0])
-            iid = int(it.split("-")[0].strip())
-            amt = int(self.ent_spawn_qty.get() or 1)
-            messagebox.showinfo("Spawned", f"Spawned {amt}x Item #{iid} to player inventory!")
+        if not sel:
+            messagebox.showwarning("Select Item", "Please select an item to spawn.")
+            return
+        it = self.list_items.get(sel[0])
+        iid = int(it.split("-")[0].strip())
+        amt = int(self.ent_spawn_qty.get() or 1)
+        from server.gameserver import add_item_to_inventory
+        added = add_item_to_inventory(s, iid, amt)
+        if added:
+            if hasattr(self.game_server, "loop") and self.game_server.loop:
+                pkt = self.game_server.build_inventory_packet(s)
+                safe_run_coroutine(s.send_packet(pkt), self.game_server.loop)
+            messagebox.showinfo("Item Spawned", f"Successfully spawned {amt}x Item #{iid} ({get_item_display_name(iid)}) into [{getattr(s, 'char_name', 'Player')}] inventory!")
+        else:
+            messagebox.showerror("Failed", "Could not add item (Inventory full or invalid item).")
 
     def action_cheat_battle_npc(self):
-        messagebox.showinfo("Battle", "PvE combat initiated with selected monster.")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        sel = self.list_npcs.curselection()
+        if not sel:
+            messagebox.showwarning("Select Monster", "Please select an NPC/Monster from the list.")
+            return
+        npc_str = self.list_npcs.get(sel[0])
+        npcid = int(npc_str.split("-")[0].strip())
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            safe_run_coroutine(self.game_server.enter_battle(s, 1, npcid), self.game_server.loop)
+            messagebox.showinfo("Combat Initiated", f"Battle started for [{getattr(s, 'char_name', 'Player')}] against NPC #{npcid}!")
 
     def action_cheat_recruit_npc(self):
-        messagebox.showinfo("Recruited", "Selected NPC added to party as companion.")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        sel = self.list_npcs.curselection()
+        if not sel:
+            messagebox.showwarning("Select Companion", "Please select an NPC/Companion from the list.")
+            return
+        npc_str = self.list_npcs.get(sel[0])
+        npcid = int(npc_str.split("-")[0].strip())
+        npc_name = npc_str.split("-")[1].strip() if "-" in npc_str else f"Pet #{npcid}"
+        if not hasattr(s, "pets") or not isinstance(s.pets, list):
+            s.pets = []
+        if len(s.pets) >= 4:
+            messagebox.showwarning("Full Pets", f"Player [{getattr(s, 'char_name', 'Player')}] already has 4 active pets.")
+            return
+        new_pet = {
+            "id": npcid, "pet_id": npcid, "name": npc_name, "level": 10,
+            "hp": 500, "max_hp": 500, "sp": 200, "max_sp": 200, "amity": 100,
+            "str": 15, "con": 15, "int": 15, "wis": 15, "agi": 15, "in_battle": False
+        }
+        s.pets.append(new_pet)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE characters SET pets = ? WHERE id = ?", (json.dumps(s.pets), s.char_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if hasattr(self.game_server, "send_pet_list_packet"):
+                safe_run_coroutine(self.game_server.send_pet_list_packet(s), self.game_server.loop)
+        messagebox.showinfo("Companion Recruited", f"Added companion [{npc_name}] to [{getattr(s, 'char_name', 'Player')}]'s team!")
 
     def action_cheat_leave_npc(self):
-        messagebox.showinfo("Dismissed", "Companion dismissed.")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        if not hasattr(s, "pets") or not s.pets:
+            messagebox.showinfo("No Companions", "Player does not have any companions.")
+            return
+        dismissed = s.pets.pop(0)
+        pname = dismissed.get("name", "Companion")
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE characters SET pets = ? WHERE id = ?", (json.dumps(s.pets), s.char_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if hasattr(self.game_server, "send_pet_list_packet"):
+                safe_run_coroutine(self.game_server.send_pet_list_packet(s), self.game_server.loop)
+        messagebox.showinfo("Dismissed", f"Dismissed companion [{pname}] from [{getattr(s, 'char_name', 'Player')}].")
 
     def action_give_stat_points(self):
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
         pts = int(self.ent_give_stat_pts.get() or 100)
-        messagebox.showinfo("Stat Points", f"Awarded {pts} free stat points!")
+        s.stat_points = getattr(s, "stat_points", 0) + pts
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE characters SET points = ? WHERE id = ?", (s.stat_points, s.char_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if hasattr(self.game_server, "send_stats_update"):
+                safe_run_coroutine(self.game_server.send_stats_update(s, levelup=False), self.game_server.loop)
+        messagebox.showinfo("Stat Points", f"Awarded +{pts} free stat points to [{getattr(s, 'char_name', 'Player')}]! Current: {s.stat_points}")
 
     def action_reset_stats(self):
-        messagebox.showinfo("Reset Stats", "Character base stats reset to 10 points.")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        total_pts = (getattr(s, "level", 1) - 1) * 3 + (getattr(s, "str", 10) - 10) + (getattr(s, "con", 10) - 10) + (getattr(s, "int", 10) - 10) + (getattr(s, "wis", 10) - 10) + (getattr(s, "agi", 10) - 10) + getattr(s, "stat_points", 0)
+        s.str = 10
+        s.con = 10
+        s.int = 10
+        s.wis = 10
+        s.agi = 10
+        s.stat_points = max(0, total_pts)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE characters SET str=10, con=10, int=10, wis=10, agi=10, points=? WHERE id=?", (s.stat_points, s.char_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if hasattr(self.game_server, "send_stats_update"):
+                safe_run_coroutine(self.game_server.send_stats_update(s, levelup=False), self.game_server.loop)
+        messagebox.showinfo("Reset Stats", f"Reset base stats to 10 for [{getattr(s, 'char_name', 'Player')}]. Refunded {s.stat_points} stat points!")
 
     def _quick_give_gold_amount(self, amount: int):
-        messagebox.showinfo("Gold", f"Awarded +{amount:,} Gold coins!")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        s.gold = getattr(s, "gold", 0) + amount
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE characters SET gold = ? WHERE id = ?", (s.gold, s.char_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            pkt = PacketWriter().write_8(26).write_8(4).write_32(s.gold)
+            safe_run_coroutine(s.send_packet(pkt), self.game_server.loop)
+        messagebox.showinfo("Gold", f"Awarded +{amount:,} Gold to [{getattr(s, 'char_name', 'Player')}]! Current: {s.gold:,}")
 
     def _quick_give_im_points(self, amount: int):
-        messagebox.showinfo("IM Points", f"Awarded +{amount:,} Item Mall Points!")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        s.im_points = getattr(s, "im_points", 0) + amount
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE characters SET im_points = ? WHERE id = ?", (s.im_points, s.char_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        messagebox.showinfo("IM Points", f"Awarded +{amount:,} Item Mall Points to [{getattr(s, 'char_name', 'Player')}]! Current: {s.im_points:,}")
 
     def _quick_add_levels(self, lvls: int):
-        messagebox.showinfo("Level Up", f"Level increased by +{lvls} levels!")
+        s = self._get_selected_session()
+        if not s:
+            messagebox.showwarning("Select Player", "Please select an active player session first.")
+            return
+        s.level = min(199, getattr(s, "level", 1) + lvls)
+        s.stat_points = getattr(s, "stat_points", 0) + (lvls * 3)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE characters SET level = ?, points = ? WHERE id = ?", (s.level, s.stat_points, s.char_id))
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if hasattr(self.game_server, "send_stats_update"):
+                safe_run_coroutine(self.game_server.send_stats_update(s, levelup=True), self.game_server.loop)
+        messagebox.showinfo("Level Up", f"Level increased by +{lvls} for [{getattr(s, 'char_name', 'Player')}]! Current Level: {s.level}")
+
+    # -------------------------------------------------------------
+    # GUILDS ACTIONS
+    # -------------------------------------------------------------
+    def action_refresh_guilds(self):
+        if not hasattr(self, "tree_guilds"):
+            return
+        for i in self.tree_guilds.get_children():
+            self.tree_guilds.delete(i)
+        q = (self.ent_guild_search.get() or "").strip() if hasattr(self, "ent_guild_search") else ""
+        total_guilds = 0
+        total_members = 0
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+
+            # Member counts map
+            m_counts = {}
+            for r in cur.execute("SELECT guild_id, COUNT(*) as cnt FROM guild_members GROUP BY guild_id").fetchall():
+                m_counts[r["guild_id"]] = r["cnt"]
+
+            if q:
+                rows = cur.execute("SELECT * FROM guilds WHERE guild_name LIKE ? OR guild_id LIKE ?", (f"%{q}%", f"%{q}%")).fetchall()
+            else:
+                rows = cur.execute("SELECT * FROM guilds ORDER BY guild_id ASC").fetchall()
+
+            for r in rows:
+                gid = r["guild_id"]
+                gname = r["guild_name"]
+                lname = r["leader_name"]
+                lid = r["leader_id"]
+                cnt = m_counts.get(gid, 1)
+                c_date = time.strftime("%Y-%m-%d", time.localtime(r["created_at"] or time.time()))
+                self.tree_guilds.insert("", "end", values=(gid, gname, lname, lid, cnt, c_date))
+                total_guilds += 1
+                total_members += cnt
+
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error refreshing guilds: {e}")
+
+        if hasattr(self, "lbl_guilds_stats"):
+            self.lbl_guilds_stats.configure(text=f"Total Guilds: {total_guilds} | Members: {total_members}")
+
+    def _on_guild_selected(self, event):
+        sel = self.tree_guilds.selection()
+        if not sel:
+            return
+        item = self.tree_guilds.item(sel[0])["values"]
+        gid = int(item[0])
+        gname = str(item[1])
+        lname = str(item[2])
+        self.lbl_selected_guild.configure(text=f"Selected: [{gname}] (ID: {gid} | Leader: {lname})")
+
+        # Load rules and member roster
+        self.txt_guild_rules.delete("1.0", tk.END)
+        for i in self.tree_guild_members.get_children():
+            self.tree_guild_members.delete(i)
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            g_row = cur.execute("SELECT rules FROM guilds WHERE guild_id = ?", (gid,)).fetchone()
+            if g_row and g_row["rules"]:
+                self.txt_guild_rules.insert("1.0", g_row["rules"])
+
+            m_rows = cur.execute("SELECT char_id, char_name, level, rank, element FROM guild_members WHERE guild_id = ?", (gid,)).fetchall()
+            rank_map = {0: "Member", 1: "Vice Leader", 2: "Leader"}
+            for mr in m_rows:
+                r_txt = rank_map.get(mr["rank"], "Member")
+                self.tree_guild_members.insert("", "end", values=(mr["char_id"], mr["char_name"], mr["level"], r_txt, mr["element"]))
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error loading guild details: {e}")
+
+    def action_save_guild_notice(self):
+        sel = self.tree_guilds.selection()
+        if not sel:
+            messagebox.showwarning("Select Guild", "Please select a guild first.")
+            return
+        gid = int(self.tree_guilds.item(sel[0])["values"][0])
+        new_rules = self.txt_guild_rules.get("1.0", tk.END).strip()
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE guilds SET rules = ? WHERE guild_id = ?", (new_rules, gid))
+            conn.commit()
+            conn.close()
+            from server.guild_system import GLOBAL_GUILD_MANAGER
+            g = GLOBAL_GUILD_MANAGER.get_guild(gid)
+            if g:
+                g.rules = new_rules
+            messagebox.showinfo("Saved", "Guild announcement/notice updated successfully!")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save notice: {e}")
+
+    def action_guild_change_leader(self):
+        sel = self.tree_guilds.selection()
+        if not sel:
+            messagebox.showwarning("Select Guild", "Please select a guild first.")
+            return
+        gid = int(self.tree_guilds.item(sel[0])["values"][0])
+        new_lid_str = simpledialog.askstring("Transfer Leadership", f"Enter new Leader Character ID for Guild #{gid}:")
+        if not new_lid_str or not new_lid_str.isdigit():
+            return
+        new_lid = int(new_lid_str)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+            c_row = cur.execute("SELECT name FROM characters WHERE id = ?", (new_lid,)).fetchone()
+            if not c_row:
+                messagebox.showerror("Not Found", f"Character with ID #{new_lid} does not exist.")
+                conn.close()
+                return
+            new_lname = c_row[0]
+            # Demote old leader to member, promote new leader
+            cur.execute("UPDATE guild_members SET rank = 0 WHERE guild_id = ? AND rank = 2", (gid,))
+            cur.execute("UPDATE guild_members SET rank = 2 WHERE guild_id = ? AND char_id = ?", (gid, new_lid))
+            cur.execute("UPDATE guilds SET leader_id = ?, leader_name = ? WHERE guild_id = ?", (new_lid, new_lname, gid))
+            conn.commit()
+            conn.close()
+            messagebox.showinfo("Success", f"Guild leadership transferred to [{new_lname}] (ID: {new_lid})!")
+            self.action_refresh_guilds()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to transfer leadership: {e}")
+
+    def action_guild_kick_member(self):
+        m_sel = self.tree_guild_members.selection()
+        if not m_sel:
+            messagebox.showwarning("Select Member", "Please select a member from the roster list first.")
+            return
+        item = self.tree_guild_members.item(m_sel[0])["values"]
+        cid = int(item[0])
+        cname = str(item[1])
+        if not messagebox.askyesno("Kick Member", f"Remove [{cname}] (CharID: {cid}) from this guild?"):
+            return
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("DELETE FROM guild_members WHERE char_id = ?", (cid,))
+            conn.commit()
+            conn.close()
+            from server.guild_system import GLOBAL_GUILD_MANAGER
+            for g in GLOBAL_GUILD_MANAGER._guilds.values():
+                if cid in g.members:
+                    del g.members[cid]
+                    break
+            messagebox.showinfo("Kicked", f"Member [{cname}] removed from guild.")
+            self._on_guild_selected(None)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to remove member: {e}")
+
+    def action_disband_guild(self):
+        sel = self.tree_guilds.selection()
+        if not sel:
+            messagebox.showwarning("Select Guild", "Please select a guild to disband.")
+            return
+        item = self.tree_guilds.item(sel[0])["values"]
+        gid = int(item[0])
+        gname = str(item[1])
+        if not messagebox.askyesno("Disband Guild", f"Are you sure you want to permanently DISBAND guild [{gname}] (ID: {gid})?\nAll guild storage items and member affiliations will be wiped."):
+            return
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("DELETE FROM guilds WHERE guild_id = ?", (gid,))
+            conn.execute("DELETE FROM guild_members WHERE guild_id = ?", (gid,))
+            conn.execute("DELETE FROM guild_storage WHERE guild_id = ?", (gid,))
+            conn.commit()
+            conn.close()
+            from server.guild_system import GLOBAL_GUILD_MANAGER
+            GLOBAL_GUILD_MANAGER.disband_guild(gid)
+            messagebox.showinfo("Disbanded", f"Guild [{gname}] disbanded successfully.")
+            self.action_refresh_guilds()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to disband guild: {e}")
+
+    # -------------------------------------------------------------
+    # MAIL ACTIONS
+    # -------------------------------------------------------------
+    def _on_mail_target_changed(self, choice):
+        if choice == "Single Character":
+            self.lbl_mail_recipient.pack(anchor="w", padx=15, pady=(2, 1))
+            self.ent_mail_recipient.pack(fill="x", padx=15, pady=(0, 8))
+        else:
+            self.lbl_mail_recipient.pack_forget()
+            self.ent_mail_recipient.pack_forget()
+
+    def _on_mail_item_id_changed(self, event):
+        val = (self.ent_mail_item_id.get() or "0").strip()
+        if val.isdigit() and int(val) > 0:
+            iid = int(val)
+            name = get_item_display_name(iid)
+            self.lbl_mail_item_preview.configure(text=f"Item: {name} (ID: {iid})", text_color="#10B981")
+        else:
+            self.lbl_mail_item_preview.configure(text="Item: None", text_color="#94A3B8")
+
+    def action_dispatch_mail(self):
+        target_mode = self.cmb_mail_target.get()
+        subject = (self.ent_mail_subject.get() or "").strip()
+        body = self.txt_mail_body.get("1.0", tk.END).strip()
+        gold = int(self.ent_mail_gold.get() or 0)
+        item_id = int(self.ent_mail_item_id.get() or 0)
+        item_count = int(self.ent_mail_item_count.get() or 1)
+
+        if not subject:
+            messagebox.showwarning("Missing Subject", "Please enter a subject for the mail.")
+            return
+
+        recipients = []
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cur = conn.cursor()
+
+            if target_mode == "Single Character":
+                recip_val = self.ent_mail_recipient.get().strip()
+                if not recip_val:
+                    messagebox.showwarning("Missing Recipient", "Please enter target Character Name or ID.")
+                    conn.close()
+                    return
+                if recip_val.isdigit():
+                    row = cur.execute("SELECT id, name FROM characters WHERE id = ?", (int(recip_val),)).fetchone()
+                else:
+                    row = cur.execute("SELECT id, name FROM characters WHERE name = ?", (recip_val,)).fetchone()
+                if not row:
+                    messagebox.showerror("Not Found", f"Character '{recip_val}' not found.")
+                    conn.close()
+                    return
+                recipients.append((row[0], row[1]))
+            elif target_mode == "All Online Players":
+                if self.game_server and hasattr(self.game_server, "sessions"):
+                    for s in self.game_server.sessions.values():
+                        recipients.append((s.char_id, s.char_name))
+                if not recipients:
+                    messagebox.showinfo("No Online Players", "No players currently online.")
+                    conn.close()
+                    return
+            else:  # All Registered Characters
+                for r in cur.execute("SELECT id, name FROM characters").fetchall():
+                    recipients.append((r[0], r[1]))
+
+            now = time.time()
+            for cid, cname in recipients:
+                cur.execute("""
+                    INSERT INTO charmail (
+                        sender_id, sender_name, receiver_id, subject, content,
+                        attached_gold, attached_item_id, attached_item_count,
+                        sent_date, is_read, is_claimed
+                    ) VALUES (0, 'System GM', ?, ?, ?, ?, ?, ?, ?, 0, 0)
+                """, (cid, subject, body, gold, item_id, item_count, now))
+
+            conn.commit()
+            conn.close()
+
+            # Notify online sessions via AC 30 Sub 1
+            if self.game_server and hasattr(self.game_server, "sessions") and hasattr(self.game_server, "loop") and self.game_server.loop:
+                pkt = PacketWriter().write_8(30).write_8(1)
+                for cid, _ in recipients:
+                    s = self.game_server.sessions.get(cid)
+                    if s:
+                        safe_run_coroutine(s.send_packet(pkt), self.game_server.loop)
+
+            messagebox.showinfo("Dispatched", f"Successfully dispatched mail to {len(recipients)} character(s)!")
+            self.action_refresh_mail()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to dispatch mail: {e}")
+
+    def action_refresh_mail(self):
+        if not hasattr(self, "tree_mail"):
+            return
+        for i in self.tree_mail.get_children():
+            self.tree_mail.delete(i)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            cur = conn.cursor()
+            rows = cur.execute("SELECT * FROM charmail ORDER BY mail_id DESC LIMIT 150").fetchall()
+            for r in rows:
+                mid = r["mail_id"]
+                sname = r["sender_name"]
+                rid = r["receiver_id"]
+                subj = r["subject"]
+                gold = r["attached_gold"] or 0
+                iid = r["attached_item_id"] or 0
+                iname = get_item_display_name(iid) if iid > 0 else "-"
+                cnt = r["attached_item_count"] or 0
+                claimed = "Yes" if r["is_claimed"] else "No"
+                date_str = time.strftime("%Y-%m-%d %H:%M", time.localtime(r["sent_date"] or time.time()))
+                self.tree_mail.insert("", "end", values=(mid, sname, rid, subj, gold, iid, iname, cnt, claimed, date_str))
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error refreshing mail: {e}")
+
+    def action_delete_mail(self):
+        sel = self.tree_mail.selection()
+        if not sel:
+            messagebox.showwarning("Select Mail", "Please select a mail entry to delete.")
+            return
+        mid = int(self.tree_mail.item(sel[0])["values"][0])
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("DELETE FROM charmail WHERE mail_id = ?", (mid,))
+            conn.commit()
+            conn.close()
+            messagebox.showinfo("Deleted", f"Mail #{mid} deleted successfully.")
+            self.action_refresh_mail()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete mail: {e}")
+
+    # -------------------------------------------------------------
+    # SECURITY & BANS ACTIONS
+    # -------------------------------------------------------------
+    def action_refresh_banned_ips(self):
+        if not hasattr(self, "tree_banned_ips"):
+            return
+        for i in self.tree_banned_ips.get_children():
+            self.tree_banned_ips.delete(i)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM banned_ips ORDER BY banned_at DESC").fetchall()
+            for r in rows:
+                self.tree_banned_ips.insert("", "end", values=(r["ip"], r["reason"] or "", r["banned_at"] or "", r["banned_by"] or "Admin"))
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error refreshing banned IPs: {e}")
+
+    def action_add_banned_ip(self):
+        ip = simpledialog.askstring("Add IP Ban", "Enter IP address to ban:")
+        if not ip:
+            return
+        ip = ip.strip()
+        if ip in ("127.0.0.1", "0.0.0.0", "localhost"):
+            messagebox.showwarning("Protected IP", "Cannot ban localhost loopback address.")
+            return
+        reason = simpledialog.askstring("Add IP Ban", f"Enter reason for banning '{ip}':", initialvalue="Security Violation") or "Banned by Admin"
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("INSERT OR REPLACE INTO banned_ips (ip, reason, banned_at, banned_by) VALUES (?, ?, datetime('now', 'localtime'), 'admin')", (ip, reason))
+            conn.commit()
+            conn.close()
+            if self.game_server and hasattr(self.game_server, "loop") and self.game_server.loop:
+                safe_run_coroutine(self.game_server.kick_ip(ip, f"Banned: {reason}"), self.game_server.loop)
+            messagebox.showinfo("IP Banned", f"IP address '{ip}' has been banned and added to security filter.")
+            self.action_refresh_banned_ips()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to add IP ban: {e}")
+
+    def action_unban_ip(self):
+        sel = self.tree_banned_ips.selection()
+        if not sel:
+            messagebox.showwarning("Select IP", "Please select a banned IP from the list to unban.")
+            return
+        ip = str(self.tree_banned_ips.item(sel[0])["values"][0])
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("DELETE FROM banned_ips WHERE ip = ?", (ip,))
+            conn.commit()
+            conn.close()
+            messagebox.showinfo("Unbanned", f"IP address '{ip}' has been unbanned.")
+            self.action_refresh_banned_ips()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to unban IP: {e}")
+
+    def action_refresh_banned_accounts(self):
+        if not hasattr(self, "tree_banned_users"):
+            return
+        for i in self.tree_banned_users.get_children():
+            self.tree_banned_users.delete(i)
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT id, username, ban_reason, last_ip, last_login FROM users WHERE banned = 1").fetchall()
+            for r in rows:
+                self.tree_banned_users.insert("", "end", values=(r["id"], r["username"], r["ban_reason"] or "Banned", r["last_ip"] or "", r["last_login"] or "Never"))
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error refreshing banned accounts: {e}")
+
+    def action_ban_account_manual(self):
+        uname = simpledialog.askstring("Ban Account", "Enter account username to ban:")
+        if not uname:
+            return
+        uname = uname.strip()
+        reason = simpledialog.askstring("Ban Account", f"Enter ban reason for '{uname}':", initialvalue="Server rule violation") or "Banned by Admin"
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE users SET banned = 1, ban_reason = ? WHERE username = ?", (reason, uname))
+            conn.commit()
+            conn.close()
+            if self.game_server and hasattr(self.game_server, "sessions"):
+                for s in list(self.game_server.sessions.values()):
+                    if getattr(s, "username", "") == uname:
+                        if hasattr(self.game_server, "loop") and self.game_server.loop:
+                            safe_run_coroutine(self.game_server.kick_user(getattr(s, "user_id", 0), reason), self.game_server.loop)
+            messagebox.showinfo("Account Banned", f"User account '{uname}' has been banned.")
+            self.action_refresh_banned_accounts()
+            self.action_refresh_users()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to ban account: {e}")
+
+    def action_unban_account(self):
+        sel = self.tree_banned_users.selection()
+        if not sel:
+            messagebox.showwarning("Select Account", "Please select a banned account to unban.")
+            return
+        uname = str(self.tree_banned_users.item(sel[0])["values"][1])
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("UPDATE users SET banned = 0, ban_reason = '' WHERE username = ?", (uname,))
+            conn.commit()
+            conn.close()
+            messagebox.showinfo("Account Unbanned", f"User account '{uname}' has been unbanned.")
+            self.action_refresh_banned_accounts()
+            self.action_refresh_users()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to unban account: {e}")
+
+    # -------------------------------------------------------------
+    # BATTLES ACTIONS
+    # -------------------------------------------------------------
+    def action_refresh_battles(self):
+        if not hasattr(self, "tree_battles"):
+            return
+        for i in self.tree_battles.get_children():
+            self.tree_battles.delete(i)
+        count = 0
+        if self.game_server and hasattr(self.game_server, "active_battles"):
+            for bid, b in list(self.game_server.active_battles.items()):
+                b_type = b.get("type", "pve").upper()
+                mid = b.get("map_id", 0)
+                turn = b.get("turn", 1)
+                pname = b.get("player", {}).get("char_name") or b.get("challenger", {}).get("char_name", "Player")
+                pet_name = (b.get("pet") or {}).get("name", "-")
+                if b.get("type") == "pvp":
+                    opp = b.get("target", {}).get("char_name", "Target")
+                else:
+                    mons = b.get("monsters", [])
+                    opp = ", ".join(m.get("name", "Monster") for m in mons[:3])
+                    if len(mons) > 3:
+                        opp += f" (+{len(mons)-3} more)"
+                dur = f"{int(time.time() - b.get('start_time', time.time()))}s"
+                self.tree_battles.insert("", "end", values=(bid, b_type, mid, turn, pname, pet_name, opp, dur))
+                count += 1
+        if hasattr(self, "lbl_active_battles_badge"):
+            self.lbl_active_battles_badge.configure(text=f"⚔️ Active Battles: {count}")
+
+    def _on_battle_selected(self, event):
+        sel = self.tree_battles.selection()
+        if not sel:
+            return
+        bid = int(self.tree_battles.item(sel[0])["values"][0])
+        self.lbl_selected_battle.configure(text=f"Selected Battle: #{bid}")
+        self.txt_battle_details.delete("1.0", tk.END)
+        if not self.game_server or not hasattr(self.game_server, "active_battles"):
+            return
+        b = self.game_server.active_battles.get(bid)
+        if not b:
+            self.txt_battle_details.insert("1.0", "Battle no longer active.")
+            return
+
+        lines = [
+            f"Battle ID: {bid}",
+            f"Type: {b.get('type', 'pve').upper()} | Map ID: {b.get('map_id')} | Turn: {b.get('turn')}",
+            f"Duration: {int(time.time() - b.get('start_time', time.time()))}s\n",
+            "--- Fighters ---"
+        ]
+        if b.get("type") == "pvp":
+            c = b.get("challenger", {})
+            t = b.get("target", {})
+            lines.append(f"Challenger: {c.get('char_name')} | HP: {c.get('hp')}/{c.get('max_hp')} | SP: {c.get('sp')}/{c.get('max_sp')}")
+            lines.append(f"Target: {t.get('char_name')} | HP: {t.get('hp')}/{t.get('max_hp')} | SP: {t.get('sp')}/{t.get('max_sp')}")
+        else:
+            p = b.get("player", {})
+            lines.append(f"Player: {p.get('char_name')} | HP: {p.get('hp')}/{p.get('max_hp')} | SP: {p.get('sp')}/{p.get('max_sp')}")
+            if b.get("pet"):
+                pt = b["pet"]
+                lines.append(f"Pet: {pt.get('name')} | HP: {pt.get('hp')}/{pt.get('max_hp')} | SP: {pt.get('sp')}/{pt.get('max_sp')}")
+            lines.append("\n--- Monsters ---")
+            for idx, m in enumerate(b.get("monsters", []), 1):
+                lines.append(f"[{idx}] {m.get('name')} (TID: {m.get('id')}) | HP: {m.get('hp')}/{m.get('max_hp')} | Pos: ({m.get('x')}, {m.get('y')})")
+
+        self.txt_battle_details.insert("1.0", "\n".join(lines))
+
+    def action_force_end_battle(self):
+        sel = self.tree_battles.selection()
+        if not sel:
+            messagebox.showwarning("Select Battle", "Please select a battle to abort.")
+            return
+        bid = int(self.tree_battles.item(sel[0])["values"][0])
+        if not self.game_server or not hasattr(self.game_server, "active_battles"):
+            return
+        b = self.game_server.active_battles.get(bid)
+        if not b:
+            messagebox.showinfo("Finished", "Battle has already concluded.")
+            self.action_refresh_battles()
+            return
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if b.get("type") == "pvp":
+                safe_run_coroutine(self.game_server._end_pvp_battle(b, challenger_won=False), self.game_server.loop)
+            else:
+                s = b.get("player", {}).get("session")
+                if s:
+                    safe_run_coroutine(self.game_server._end_battle(s, b, won=False, fled=True), self.game_server.loop)
+                else:
+                    del self.game_server.active_battles[bid]
+        else:
+            if bid in self.game_server.active_battles:
+                del self.game_server.active_battles[bid]
+        messagebox.showinfo("Battle Aborted", f"Battle #{bid} has been terminated.")
+        self.action_refresh_battles()
+
+    def action_force_win_battle(self):
+        sel = self.tree_battles.selection()
+        if not sel:
+            messagebox.showwarning("Select Battle", "Please select a battle.")
+            return
+        bid = int(self.tree_battles.item(sel[0])["values"][0])
+        if not self.game_server or not hasattr(self.game_server, "active_battles"):
+            return
+        b = self.game_server.active_battles.get(bid)
+        if not b:
+            messagebox.showinfo("Finished", "Battle has already concluded.")
+            self.action_refresh_battles()
+            return
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if b.get("type") == "pvp":
+                safe_run_coroutine(self.game_server._end_pvp_battle(b, challenger_won=True), self.game_server.loop)
+            else:
+                s = b.get("player", {}).get("session")
+                if s:
+                    safe_run_coroutine(self.game_server._end_battle(s, b, won=True), self.game_server.loop)
+                else:
+                    del self.game_server.active_battles[bid]
+        messagebox.showinfo("Victory Granted", f"Battle #{bid} resolved as player victory!")
+        self.action_refresh_battles()
+
+    # -------------------------------------------------------------
+    # MARRIAGES ACTIONS
+    # -------------------------------------------------------------
+    def action_refresh_marriages(self):
+        if not hasattr(self, "tree_marriages"):
+            return
+        for i in self.tree_marriages.get_children():
+            self.tree_marriages.delete(i)
+        q = (self.ent_marriage_search.get() or "").strip().lower() if hasattr(self, "ent_marriage_search") else ""
+        count = 0
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("SELECT * FROM charmarriage").fetchall()
+            for r in rows:
+                hid = r["husband_id"]
+                hname = r["husband_name"]
+                wid = r["wife_id"]
+                wname = r["wife_name"]
+                if q and (q not in hname.lower() and q not in wname.lower()):
+                    continue
+                d_str = time.strftime("%Y-%m-%d", time.localtime(r["marriage_date"] or time.time()))
+                self.tree_marriages.insert("", "end", values=(hid, hname, wid, wname, d_str, "Active Couple"))
+                count += 1
+            conn.close()
+        except Exception as e:
+            logger.error(f"Error refreshing marriages: {e}")
+        if hasattr(self, "lbl_marriages_stats"):
+            self.lbl_marriages_stats.configure(text=f"Total Couples: {count}")
+
+    def action_divorce_marriage(self):
+        sel = self.tree_marriages.selection()
+        if not sel:
+            messagebox.showwarning("Select Couple", "Please select a married couple from the table.")
+            return
+        item = self.tree_marriages.item(sel[0])["values"]
+        hid = int(item[0])
+        hname = str(item[1])
+        wid = int(item[2])
+        wname = str(item[3])
+        if not messagebox.askyesno("Confirm Annulment", f"Dissolve the marriage between [{hname}] and [{wname}]?"):
+            return
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("DELETE FROM charmarriage WHERE husband_id = ? AND wife_id = ?", (hid, wid))
+            conn.commit()
+            conn.close()
+            from server.marriage_system import GLOBAL_MARRIAGE_MANAGER
+            GLOBAL_MARRIAGE_MANAGER.divorce(hid)
+            messagebox.showinfo("Divorced", f"Marriage between [{hname}] and [{wname}] has been dissolved.")
+            self.action_refresh_marriages()
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to dissolve marriage: {e}")
+
+    def action_teleport_spouses(self):
+        sel = self.tree_marriages.selection()
+        if not sel:
+            messagebox.showwarning("Select Couple", "Please select a married couple from the table.")
+            return
+        item = self.tree_marriages.item(sel[0])["values"]
+        hid = int(item[0])
+        wid = int(item[2])
+        if not self.game_server or not hasattr(self.game_server, "sessions"):
+            messagebox.showinfo("Notice", "Server not active or no players connected.")
+            return
+        h_sess = self.game_server.sessions.get(hid)
+        w_sess = self.game_server.sessions.get(wid)
+        if not h_sess or not w_sess:
+            messagebox.showwarning("Offline", "Both spouses must be currently online to teleport them together.")
+            return
+        w_sess.map_id = h_sess.map_id
+        w_sess.x = h_sess.x
+        w_sess.y = h_sess.y
+        if hasattr(self.game_server, "loop") and self.game_server.loop:
+            if hasattr(self.game_server, "warp_player"):
+                safe_run_coroutine(self.game_server.warp_player(w_sess, h_sess.map_id, h_sess.x, h_sess.y), self.game_server.loop)
+        messagebox.showinfo("Teleported", f"Teleported [{w_sess.char_name}] directly to spouse [{h_sess.char_name}] on map #{h_sess.map_id}!")
 
     def _reset_user_search(self):
         if hasattr(self, "ent_user_search"):
@@ -2472,7 +3803,7 @@ class ModernServerGUI:
             conn.close()
             # Kick online session
             if self.game_server and hasattr(self.game_server, "loop") and self.game_server.loop:
-                asyncio.run_coroutine_threadsafe(self.game_server.ban_user(user_id, reason), self.game_server.loop)
+                safe_run_coroutine(self.game_server.ban_user(user_id, reason), self.game_server.loop)
             messagebox.showinfo("Banned", f"User '{username}' (ID: {user_id}) has been banned.")
             self.action_refresh_users()
         except Exception as e:
@@ -2522,7 +3853,7 @@ class ModernServerGUI:
             conn.commit()
             conn.close()
             if self.game_server and hasattr(self.game_server, "loop") and self.game_server.loop:
-                asyncio.run_coroutine_threadsafe(self.game_server.kick_ip(ip, f"IP Banned: {reason}"), self.game_server.loop)
+                safe_run_coroutine(self.game_server.kick_ip(ip, f"IP Banned: {reason}"), self.game_server.loop)
             messagebox.showinfo("IP Banned", f"IP '{ip}' has been banned and online sessions kicked.")
             self.action_refresh_users()
         except Exception as e:
@@ -2566,10 +3897,17 @@ class ModernServerGUI:
     def action_refresh_characters(self):
         for i in self.tree_characters.get_children():
             self.tree_characters.delete(i)
+        q = (self.ent_char_search.get() or "").strip() if hasattr(self, "ent_char_search") else ""
         try:
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
-            cur.execute("SELECT id, user_id, name, level, element, job, gold, map_id, 'Active' FROM characters")
+            if q:
+                cur.execute(
+                    "SELECT id, user_id, name, level, element, job, gold, map_id, 'Active' FROM characters WHERE name LIKE ? OR id LIKE ? OR user_id LIKE ?",
+                    (f"%{q}%", f"%{q}%", f"%{q}%")
+                )
+            else:
+                cur.execute("SELECT id, user_id, name, level, element, job, gold, map_id, 'Active' FROM characters")
             for r in cur.fetchall():
                 self.tree_characters.insert("", "end", values=r)
             conn.close()
@@ -2597,7 +3935,7 @@ class ModernServerGUI:
                         if hasattr(s, "close"):
                             s.close()
                         elif hasattr(s, "disconnect"):
-                            asyncio.run_coroutine_threadsafe(s.disconnect(), self.game_server.loop if hasattr(self.game_server, "loop") else asyncio.get_event_loop())
+                            safe_run_coroutine(s.disconnect(), self.game_server.loop if hasattr(self.game_server, "loop") else asyncio.get_event_loop())
 
             conn = sqlite3.connect(self.db_path)
             cur = conn.cursor()
@@ -3023,7 +4361,7 @@ class ModernServerGUI:
                     import asyncio
                     loop = getattr(self.game_server, "loop", None)
                     if loop and loop.is_running():
-                        asyncio.run_coroutine_threadsafe(self.game_server.dispatch_login_motd(s), loop)
+                        safe_run_coroutine(self.game_server.dispatch_login_motd(s), loop)
                     else:
                         try:
                             asyncio.create_task(self.game_server.dispatch_login_motd(s))

@@ -147,20 +147,23 @@ class LuckyDrawManager:
         await player.send_packet(stop_pkt)
 
         # 6. Send authentic Item Delivery Packet (AC 23 Sub 6)
-        # S->C [23, 6, item_id (uint16_LE), count (uint16_LE), 27 zero bytes] (33 bytes total, verified from pcap)
+        # S->C [23, 6, item_id (uint16_LE), count (uint8), 28 zero bytes] (33 bytes total, verified from pcap)
         if item_id > 0:
-            item_delivery_pkt = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_16(count).write_bytes(bytes(27))
+            item_delivery_pkt = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_8(min(255, int(count))).write_bytes(bytes(28))
             await player.send_packet(item_delivery_pkt)
+            await player.send_packet(server.build_inventory_packet(player))
 
         # 7. Play celebration fireworks and map broadcast for jackpot
         if selected.get("is_jackpot") or item_id in (48013, 48033, 23001):
-            firework = PacketWriter().write_8(5).write_8(5).write_32(player.char_id).write_16(60050)
-            server.broadcast_to_map(player.map_id, firework)
+            player_map = getattr(player, "map_id", 0)
+            if player_map and hasattr(server, "broadcast_to_map"):
+                firework = PacketWriter().write_8(5).write_8(5).write_32(getattr(player, "char_id", 0)).write_16(60050)
+                server.broadcast_to_map(player_map, firework)
 
-            broadcast_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
-                f"[Lucky Draw Jackpot] Congratulations to {player.char_name} for winning '{name}' on the Lucky Wheel!"
-            )
-            server.broadcast_to_map(player.map_id, broadcast_msg)
+                broadcast_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
+                    f"[Lucky Draw Jackpot] Congratulations to {getattr(player, 'char_name', 'Player')} for winning '{name}' on the Lucky Wheel!"
+                )
+                server.broadcast_to_map(player_map, broadcast_msg)
 
         sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
             f"[Lucky Draw] You won {count}x {name}!"

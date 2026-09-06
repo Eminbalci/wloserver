@@ -90,8 +90,8 @@ async def handle(server: Any, session: Any, reader: PacketReader):
         # Also send legacy AC 26 Sub 4 for compatibility
         await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
 
-        # 2. Item Delivery (AC 23 Sub 6)
-        item_pkt = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_8(amount).write_bytes(bytes(26))
+        # 2. Item Delivery (AC 23 Sub 6 - authentic 33 bytes)
+        item_pkt = PacketWriter().write_8(23).write_8(6).write_16(item_id).write_8(min(255, int(amount))).write_bytes(bytes(28))
         await session.send_packet(item_pkt)
 
         # 3. Buy Confirmation ACK (AC 27 Sub 1 status 0)

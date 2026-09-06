@@ -284,7 +284,7 @@ class PreEventInterpreter:
                         for m_npc in map_npcs:
                             m_cid = m_npc.click_id if hasattr(m_npc, 'click_id') else (m_npc.get('click_id', 0) if isinstance(m_npc, dict) else 0)
                             if m_cid == click_id:
-                                if hasattr(m_npc, 'is_static_npc') and m_npc.is_static_npc():
+                                if (hasattr(m_npc, 'is_static_npc') and m_npc.is_static_npc()) or (hasattr(m_npc, 'is_permanent_chest') and m_npc.is_permanent_chest()) or (isinstance(m_npc, dict) and ((19000 <= (m_npc.get('npc_id', 0) or m_npc.get('template_id', 0)) <= 35000) or (12000 <= (m_npc.get('npc_id', 0) or m_npc.get('template_id', 0)) <= 12999))):
                                     is_static_prop = True
                                 break
                         if not is_static_prop:

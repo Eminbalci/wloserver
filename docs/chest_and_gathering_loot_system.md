@@ -22,6 +22,20 @@ Provides dynamic world treasure chest looting, gathering node harvesting (coconu
    - Persists updated inventory and character state to SQLite database immediately.
 
 ## Dynamic Respawn & Node Harvesting
-- Nodes and chests store `opened_at` timestamp in SQLite `charchests`.
-- If `(current_time - opened_at) >= default_respawn_seconds` (60s), the node automatically unlocks and becomes harvestable again.
-- Eve Opcode 1 chests executed via `GLOBAL_EVE_INTERPRETER` also utilize `server.grant_item()` for atomic visual and database synchronization.
+- **Permanent Treasure Chests**:
+  - Permanently recorded in SQLite `charchests` with `(char_id, map_id, chest_id)`.
+  - Once looted, clicking the chest returns prompt `AC 23 Sub 57` ("You have already claimed this treasure.") and closes interaction (`AC 20:8`, `AC 5:4`).
+  - No items or animations are ever re-triggered.
+  - On map entry (`handle_login` and `warp_player`), the server calls `GLOBAL_CHEST_SYSTEM.sync_opened_chests_on_map(session, map_id)` to dispatch `AC 22 Sub 10` (`[22, 10, chest_id (2B_LE), 0xFF, 0xFF]`), rendering already-looted chests open/broken immediately on the client's screen.
+- **Recurring Gathering Nodes** (Coconuts, Wood, Ore):
+  - Stored with `opened_at` timestamp.
+  - If `(current_time - opened_at) >= default_respawn_seconds` (60s), the node unlocks and becomes harvestable again.
+  - While broken/empty, clicks prompt "This node/chest is currently empty and will respawn soon." and unlock client without item grants.
+
+## Inventory Drag, Move & Swap Protocol (AC 23 Sub 10)
+- **C2S Request**: `[23, 10, src_slot (1B), amount (1B), dst_slot (1B)]`.
+- **Server Mechanics**:
+  1. **Move to Empty Slot**: Updates `src_item['slot'] = dst` (or splits stack if `amount < total`), confirmed with `[23, 10, src, amount, dst]`.
+  2. **Stack to Same Item**: Increments `dst_item['amount']` and decrements/removes `src_item`, confirmed with `[23, 10, src, amount, dst]`.
+  3. **Slot Swap**: When dragging onto an occupied slot with a different item, swaps `src_item['slot'] = dst` and `dst_item['slot'] = src`, preserving all item data with zero loss, confirmed with `[23, 10, src, amount, dst]`.
+  4. **Desync Auto-Healing**: If `src_item` is empty on the server, server immediately sends full inventory packet `AC 23 Sub 5` to re-sync the client's UI to the database.

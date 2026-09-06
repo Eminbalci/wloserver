@@ -77,14 +77,23 @@ class TestMotdAndBeachCutscene(unittest.TestCase):
         asyncio.run(handle_92_action.handle(self.server, session, reader))
         self.assertTrue(session.motd_sent)
 
-    def test_beach_cutscene_absorption(self):
-        """Verifies AC 20:6 is absorbed when beach_cutscene_active is True."""
+    def test_beach_cutscene_progression(self):
+        """Verifies AC 20:6 advances beach cutscene stages rather than prematurely unlocking controls."""
         session = MockSession(map_id=10035)
         session.beach_cutscene_active = True
+        session.beach_cutscene_stage = 1
         reader = PacketReader(bytes([6]))
         asyncio.run(handle_20_interaction.handle(self.server, session, reader))
-        # Should not have sent any unlock packets while active
-        self.assertEqual(len(session.sent_packets), 0)
+        # Dispatches Robinson approach (AC 22:12) + sync tick (AC 20:10)
+        self.assertEqual(session.beach_cutscene_stage, 2)
+        self.assertEqual(len(session.sent_packets), 2)
+        self.assertEqual(session.sent_packets[0][0], 22)
+        self.assertEqual(session.sent_packets[0][1], 12)
+        self.assertEqual(session.sent_packets[1][0], 20)
+        self.assertEqual(session.sent_packets[1][1], 10)
+        # Verify no premature unlock packets were sent
+        has_unlock = any(p[0] == 5 and p[1] == 4 for p in session.sent_packets)
+        self.assertFalse(has_unlock)
 
 
 if __name__ == "__main__":

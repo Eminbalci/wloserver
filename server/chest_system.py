@@ -201,6 +201,19 @@ class ChestSystem:
         except Exception:
             return False
 
+    def record_chest_opened(self, char_id: int, map_id: int, chest_id: int) -> None:
+        """Records opened chest in charchests SQLite table."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            conn.execute("""
+                INSERT OR REPLACE INTO charchests (char_id, map_id, chest_id, opened_at)
+                VALUES (?, ?, ?, ?)
+            """, (char_id, map_id, chest_id, time.time()))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logger.error(f"[ChestSystem] DB Error recording chest: {e}")
+
     async def open_chest(
         self,
         server,
@@ -213,8 +226,29 @@ class ChestSystem:
         if not player:
             return False
 
-        if self.is_chest_opened(player.char_id, map_id, chest_id):
-            sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("This node/chest is currently empty and will respawn soon.")
+        # Identify target NPC from map
+        map_npcs = getattr(server, 'map_npcs', {}).get(map_id, [])
+        is_perm = False
+        target_npc = None
+        for m_npc in map_npcs:
+            m_cid = m_npc.click_id if hasattr(m_npc, 'click_id') else (m_npc.get('click_id', 0) if isinstance(m_npc, dict) else 0)
+            if m_cid == chest_id:
+                target_npc = m_npc
+                is_perm = hasattr(m_npc, 'is_permanent_chest') and m_npc.is_permanent_chest()
+                break
+
+        if not target_npc:
+            from server.npc_manager import QuestNpc
+            target_npc = QuestNpc(map_id=map_id, click_id=chest_id, name=prop_name, npc_id=0, x=0, y=0)
+            is_perm = target_npc.is_permanent_chest()
+
+        chest_keywords = ("chest", "treas", "crate", "box", "cask", "barrel", "urn", "pot")
+        if not is_perm and prop_name:
+            is_perm = any(k in prop_name.lower() for k in chest_keywords)
+
+        if self.is_chest_opened(player.char_id, map_id, chest_id, is_permanent=is_perm):
+            empty_msg = "You have already claimed this treasure." if is_perm else "This node/chest is currently empty and will respawn soon."
+            sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(empty_msg)
             await player.send_packet(sys_msg)
             await player.send_packet(PacketWriter().write_8(20).write_8(8))
             await player.send_packet(PacketWriter().write_8(5).write_8(4))
@@ -233,10 +267,9 @@ class ChestSystem:
                 await player.send_packet(PacketWriter().write_8(5).write_8(4))
                 return False
 
-            # Consume 1 key
-            for it in list(player.inventory):
+            # Consume key
+            for slot, it in enumerate(player.inventory):
                 if it.get("item_id") == required_key:
-                    slot = it.get("slot")
                     if slot is not None:
                         remove_item_at_slot(player, slot, 1)
                     break
@@ -245,16 +278,7 @@ class ChestSystem:
         selected = self.roll_drop(map_id, prop_name)
 
         # Record in DB
-        try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                INSERT OR REPLACE INTO charchests (char_id, map_id, chest_id, opened_at)
-                VALUES (?, ?, ?, ?)
-            """, (player.char_id, map_id, chest_id, time.time()))
-            conn.commit()
-            conn.close()
-        except Exception as e:
-            logger.error(f"[ChestSystem] DB Error recording chest: {e}")
+        self.record_chest_opened(player.char_id, map_id, chest_id)
 
         # Send opened chest animation (AC 22 Sub 1 [22, 1, click_id, 1])
         open_anim = PacketWriter().write_8(22).write_8(1).write_16(chest_id).write_8(1)
@@ -262,22 +286,12 @@ class ChestSystem:
         if hasattr(server, 'broadcast_to_map'):
             server.broadcast_to_map(map_id, open_anim, exclude_session=player)
 
-        # Mark broken & set respawn on map NPC
-        map_npcs = getattr(server, 'map_npcs', {}).get(map_id, [])
-        for m_npc in map_npcs:
-            m_cid = m_npc.click_id if hasattr(m_npc, 'click_id') else (m_npc.get('click_id', 0) if isinstance(m_npc, dict) else 0)
-            if m_cid == chest_id:
-                if hasattr(m_npc, 'is_broken'):
-                    m_npc.is_broken = True
-                    is_perm = hasattr(m_npc, 'is_permanent_chest') and m_npc.is_permanent_chest()
-                    is_gather = hasattr(m_npc, 'is_gathering_node') and m_npc.is_gathering_node()
-                    if not is_perm and (is_gather or self.default_respawn_seconds > 0):
-                        m_npc.respawn_time = time.time() + self.default_respawn_seconds
-                    else:
-                        m_npc.respawn_time = 0.0
-                elif isinstance(m_npc, dict):
-                    m_npc['is_broken'] = True
-                break
+        # Mark broken & set respawn ONLY on gathering nodes (permanent chests never mutate shared template)
+        if target_npc:
+            is_gather = hasattr(target_npc, 'is_gathering_node') and target_npc.is_gathering_node()
+            if is_gather and hasattr(target_npc, 'is_broken'):
+                target_npc.is_broken = True
+                target_npc.respawn_time = time.time() + (self.default_respawn_seconds or 60.0)
 
         # Award item via atomic server.grant_item (dispatches AC 23:6, AC 23:8, AC 23:5, saves DB)
         if hasattr(server, 'grant_item'):
