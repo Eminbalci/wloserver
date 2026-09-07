@@ -19,5 +19,12 @@ async def handle(server, session, reader):
         status = reader.read_8() if reader.remaining_bytes() >= 1 else 0
         resp = PacketWriter().write_8(183).write_8(17).write_8(status)
         await session.send_packet(resp)
+    elif sub in (7, 8, 9, 11):  # Activity Reward / Progress / Daily List / Titles (C lines 157824, 157921, 157648)
+        logger.info(f"[{session.char_name or session.ip}] AC 183 Activity Sub={sub} query")
+        if sub in (7, 8):
+            await session.send_packet(PacketWriter().write_8(183).write_8(sub).write_8(1))
+        else:
+            await session.send_packet(PacketWriter().write_8(183).write_8(sub).write_8(0))
+        await session.send_packet(PacketWriter().write_8(20).write_8(8))
     else:
         logger.info(f"Unhandled AC 183 Sub: {sub}")

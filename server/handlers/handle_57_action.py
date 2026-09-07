@@ -39,5 +39,11 @@ async def handle(server, session, reader):
         if category_id == 0:
             unfreeze = PacketWriter().write_8(5).write_8(4)
             await session.send_packet(unfreeze)
+    elif sub in (8, 9, 10, 11):  # Minigame / UI Dismiss (C lines 167024, 163682, 167719)
+        logger.info(f"[{getattr(session, 'char_name', 'Player')}] AC 57 Sub {sub} Minigame dismiss/exit")
+        ack = PacketWriter().write_8(57).write_8(sub).write_8(1)
+        await session.send_packet(ack)
+        await session.send_packet(PacketWriter().write_8(5).write_8(4))
+        await session.send_packet(PacketWriter().write_8(20).write_8(8))
     else:
         logger.info(f"[{getattr(session, 'char_name', 'Player')}] Unhandled AC 57 SubCode: {sub}")

@@ -685,20 +685,36 @@ class GameServer:
             except Exception as e:
                 logger.error(f"[NPC] Error in NPC loop: {e}", exc_info=True)
 
-    async def run(self, host: str = "0.0.0.0", port: int = 6414):
-        """Starts the asynchronous TCP server."""
+    async def run(self, host: str = "0.0.0.0", port: int = 6414, additional_ports: list = None):
+        """Starts the asynchronous TCP server on primary port and optional authentic ports."""
         self.loop = asyncio.get_running_loop()
         server = await asyncio.start_server(self.handle_connection, host, port)
         logger.info(f"WLO Private Server successfully started on {host}:{port}")
         
+        extra_servers = []
+        if additional_ports:
+            for extra_port in additional_ports:
+                if extra_port != port:
+                    try:
+                        s_extra = await asyncio.start_server(self.handle_connection, host, extra_port)
+                        extra_servers.append(s_extra)
+                        logger.info(f"WLO Private Server additionally listening on authentic port {host}:{extra_port}")
+                    except Exception as ex:
+                        logger.warning(f"Could not bind additional port {extra_port}: {ex}")
+
         # Auto-save task
         asyncio.create_task(self.auto_save_loop())
 
         # NPC walk task
         asyncio.create_task(self.npc_walk_loop())
         
-        async with server:
-            await server.serve_forever()
+        if extra_servers:
+            all_servers = [server] + extra_servers
+            tasks = [s.serve_forever() for s in all_servers]
+            await asyncio.gather(*tasks)
+        else:
+            async with server:
+                await server.serve_forever()
 
 
     async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):

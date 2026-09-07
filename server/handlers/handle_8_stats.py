@@ -60,3 +60,7 @@ async def handle(server, session, reader):
                     logger.info(f"[AC8] Pet slot {target_slot} allocated stat {stat_id} by {amount}. Remaining potential: {pet['potential']}")
                 else:
                     logger.warning(f"[AC8] Pet tried to allocate {amount} points but only has {pet_potential}")
+
+    elif sub == 2:  # Client stats sync / refresh request (from C code line 363337)
+        logger.info(f"[AC8] Stats sync/refresh requested by {session.char_name}")
+        await server.send_stats_update(session)

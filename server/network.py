@@ -37,6 +37,15 @@ class PacketReader:
     def read_bool(self) -> bool:
         return self.read_8() != 0
 
+    def read_bytes(self, length: int) -> bytes:
+        if self.offset + length > len(self.data):
+            val = self.data[self.offset:]
+            self.offset = len(self.data)
+            return val
+        val = self.data[self.offset : self.offset + length]
+        self.offset += length
+        return val
+
     def read_string(self) -> str:
         length = self.read_8()
         if self.offset + length > len(self.data):

@@ -19,7 +19,12 @@ ACTION_CODES = [61, 69, 70, 74]
 async def handle(server: Any, session: Any, reader: PacketReader) -> None:
     """Processes Map Pin, Target Lock, Tooltip & Focus packets (AC 61, 69, 70, 74)."""
     try:
-        action_code = reader.data[0] if len(reader.data) > 0 else 74
+        if reader.offset == 0 and len(reader.data) > 0 and reader.data[0] in (61, 69, 70, 74):
+            action_code = reader.read_8()
+        elif reader.offset > 0 and len(reader.data) > 0:
+            action_code = reader.data[0]
+        else:
+            action_code = 74
         sub = reader.read_8()
 
         if action_code == 74:  # Minimap Target Pin / Waypoint sync
@@ -30,10 +35,14 @@ async def handle(server: Any, session: Any, reader: PacketReader) -> None:
             resp = PacketWriter().write_8(74).write_8(2).write_16(map_x).write_16(map_y)
             await session.send_packet(resp)
 
-        elif action_code == 70:  # Target Focus / Lock Indicator
+        elif action_code == 70:  # Target Focus / Lock Indicator or Morph Cancel (C line 390104: FUN_002d6994(..., 0x46, 7))
             target_id = reader.read_32() if reader.remaining_bytes() >= 4 else 0
-            logger.debug(f"[{session.char_name}] AC 70:7 Target focus lock on ID {target_id}")
-            resp = PacketWriter().write_8(70).write_8(7).write_32(target_id)
+            if sub == 7:
+                from server.morph_system import GLOBAL_MORPH_MANAGER
+                if GLOBAL_MORPH_MANAGER.is_morphed(session.char_id) or getattr(session, 'morph_npc_id', 0) != 0:
+                    await GLOBAL_MORPH_MANAGER.untransform_player(server, session)
+            logger.debug(f"[{session.char_name}] AC 70:{sub} Target focus lock / Morph cancel (ID: {target_id})")
+            resp = PacketWriter().write_8(70).write_8(sub).write_32(target_id or getattr(session, 'char_id', 0))
             await session.send_packet(resp)
 
         elif action_code == 69:  # Tooltip / Entity Hover Inspection

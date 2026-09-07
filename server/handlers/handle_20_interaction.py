@@ -150,7 +150,17 @@ async def handle(server, session, reader):
                 await session.send_packet(PacketWriter().write_8(20).write_8(8))  # Release client lock
                 return
 
-            npc_template_id = npc.get('npc_id', 0)
+            npc_template_id = npc.get('npc_id', 0) or npc.get('template_id', 0)
+            # Authentic client C code template remapping (FUN_003ab628):
+            NPC_STATIC_REMAP = {
+                36999: 21001,  # 0x908E -> 0x5209
+                37010: 37008,  # 0x9092 -> 0x9090
+                37011: 37009,  # 0x9093 -> 0x9091
+                37012: 37013,  # 0x9094 -> 0x9095
+                37014: 37015,  # 0x9096 -> 0x9097
+            }
+            if npc_template_id in NPC_STATIC_REMAP:
+                npc_template_id = NPC_STATIC_REMAP[npc_template_id]
             
             # Resolve canonical authentic NPC name from eve.Emg, Npc.dat, or SceneDataManager
             name = (npc.get('name') or "").strip('\x00').strip()
@@ -200,7 +210,10 @@ async def handle(server, session, reader):
                     chest_sys = GLOBAL_CHEST_SYSTEM
 
                 if chest_sys:
-                    await chest_sys.open_chest(server, session, session.map_id, native_click_id, prop_name=name)
+                    import inspect
+                    res = chest_sys.open_chest(server, session, session.map_id, native_click_id, prop_name=name)
+                    if inspect.isawaitable(res):
+                        await res
                 else:
                     is_broken = getattr(npc, 'is_broken', False) or (npc.get('is_broken', False) if isinstance(npc, dict) else False)
                     if is_broken:
@@ -326,8 +339,61 @@ async def handle(server, session, reader):
                 await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(dialogue_text))
                 return
 
+            # Mailbox NPC Interaction (Checking charmail)
+            if "mailbox" in name.lower() or npc_template_id == 19196:
+                unclaimed_mails = []
+                with server.db.get_connection() as conn:
+                    rows = conn.execute(
+                        "SELECT * FROM charmail WHERE receiver_id = ? AND is_claimed = 0 ORDER BY sent_date ASC",
+                        (session.char_id,)
+                    ).fetchall()
+                    unclaimed_mails = [dict(r) for r in rows]
+
+                if unclaimed_mails:
+                    total_gold = 0
+                    delivered_items = []
+                    with server.db.get_connection() as conn:
+                        for m in unclaimed_mails:
+                            total_gold += m.get("attached_gold", 0)
+                            it_id = m.get("attached_item_id", 0)
+                            it_cnt = m.get("attached_item_count", 0)
+                            if it_id > 0 and it_cnt > 0:
+                                from server.gameserver import add_item_to_inventory
+                                add_item_to_inventory(session, it_id, amount=it_cnt)
+                                it_name = server.get_item_name(it_id) if hasattr(server, 'get_item_name') else str(it_id)
+                                delivered_items.append(f"{it_name} x{it_cnt}")
+                            conn.execute("UPDATE charmail SET is_claimed = 1, is_read = 1 WHERE mail_id = ?", (m["mail_id"],))
+                        conn.commit()
+
+                    if total_gold > 0:
+                        session.gold = getattr(session, 'gold', 0) + total_gold
+                        await session.send_packet(PacketWriter().write_8(26).write_8(4).write_32(session.gold))
+
+                    server.save_player_to_db(session)
+                    await session.send_packet(server.build_inventory_packet(session))
+
+                    mail_summary = f"Claimed {len(unclaimed_mails)} mail(s)!"
+                    if total_gold > 0:
+                        mail_summary += f" +{total_gold:,} Gold."
+                    if delivered_items:
+                        mail_summary += f" Items: {', '.join(delivered_items)}."
+
+                    await server.send_dialogue(session, native_click_id, 51168, step=1, portrait_type=3)
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(mail_summary))
+                else:
+                    await server.send_dialogue(session, native_click_id, 51168, step=1, portrait_type=3)
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Your Mailbox is empty. No new mail!"))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                return
+
             # Specific character / passenger / story dialogues
             name_lower = (name or "").lower()
+            if npc_template_id in (10022, 10023, 10024) or "barber" in name_lower or "hair" in name_lower:
+                logger.info(f"[{session.char_name}] Barber NPC clicked ({name}). Opening Barber styling UI (AC 21 Sub 1).")
+                await session.send_packet(PacketWriter().write_8(21).write_8(1))
+                await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                return
+
             talk_id = 51168
             if npc_template_id == 14013 or "ashley" in name_lower or "mary lou" in name_lower:
                 talk_id = 39378 if session.map_id == 12000 else 42605

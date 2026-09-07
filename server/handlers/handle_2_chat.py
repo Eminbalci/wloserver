@@ -521,7 +521,7 @@ async def handle(server, session, reader):
                 PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Player {target_name} is currently offline.")
             )
 
-    elif sub == 3:  # Team / Party Chat (AC 2 Sub 3)
+    elif sub in (3, 6):  # Team / Party Chat (AC 2 Sub 3 / Sub 6 from line 250251)
         msg = reader.read_string_n()
         logger.info(f"[{session.char_name}] Team chat: {msg}")
         team_pkt = (
@@ -543,7 +543,7 @@ async def handle(server, session, reader):
         else:
             server.broadcast_to_map(session.map_id, team_pkt)
 
-    elif sub == 4:  # Guild Chat (AC 2 Sub 4)
+    elif sub in (4, 7):  # Guild Chat (AC 2 Sub 4 / Sub 7 from line 250269)
         msg = reader.read_string_n()
         logger.info(f"[{session.char_name}] Guild chat: {msg}")
         guild_pkt = (

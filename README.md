@@ -58,6 +58,7 @@ This repository contains a custom python-based server implementation for Wonderl
 - `tools/live_game_gap_analyzer.py` - Live WLRI game traffic gap analyzer matching packets directly against wloserver handlers
 - `data/learned_packets_catalog.json` - Machine-readable database of 1,387 reverse-engineered packet variants with field candidate layouts
 - `docs/` - Technical Documentation:
+  - [Client C Code Server Requirements & Adjustments](docs/client_c_code_server_requirements.md) - Complete technical specifications of network, port, authentication, scene, combat, constraints, 100% client C decompile opcode/subcode coverage, divorce mechanics, stall alias, and Barber NPC integration
   - [Packet Recording & Session Analysis System](docs/packet_recording_system.md) - Complete guide and specifications for the standalone gameplay packet recorder, proxy bridge, tagging, and JSONL/PCAP export
   - [New Client Handlers Integration & Technical Specifications](docs/new_handlers_integration_guide.md) - Specifications and parameter mappings for 10 new protocol handlers achieving 100% client opcode coverage
   - [Client C Code Missing Packets Audit](docs/client_c_code_missing_packets_audit.md) - Exhaustive audit of all 59 client-sent Action Codes from aLogin.exe.1.c vs 37 implemented server handlers, identifying the 20 missing opcodes

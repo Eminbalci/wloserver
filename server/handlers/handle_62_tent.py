@@ -86,12 +86,39 @@ async def handle(server, session, reader):
     elif sub == 4:  # Special Item Add / Decor
         await session.send_packet(PacketWriter().write_8(62).write_8(4).write_32(session.char_id).write_16(len(tent.items)))
 
-    elif sub in (7, 14, 15):  # Floor / Wallpaper Styling
+    elif sub in (7, 8, 9, 10, 11, 14, 15):  # Floor / Wallpaper Styling
         color_val = reader.read_16() if reader.remaining_bytes() >= 2 else 0
-        if sub == 14: tent.floor1_color = color_val
-        elif sub == 15: tent.floor1_wallpaper = color_val
+        if sub in (7, 14):
+            tent.floor1_color = color_val
+        elif sub in (8, 15):
+            tent.floor1_wallpaper = color_val
+        elif sub == 9:
+            tent.floor2_color = color_val
+        elif sub == 10:
+            tent.floor2_wallpaper = color_val
         GLOBAL_TENT_MANAGER.save_tent_to_db(tent)
         await session.send_packet(PacketWriter().write_8(62).write_8(sub).write_16(color_val))
+
+    elif sub in (31, 34, 41, 43):  # Pack up / Dismantle Furniture Item from Tent
+        item_index = reader.read_16() if reader.remaining_bytes() >= 2 else 0
+        logger.info(f"[{session.char_name}] Packup furniture #{item_index} (AC 62 Sub {sub})")
+        removed_item = None
+        for itm in list(tent.items):
+            if itm.index == item_index:
+                removed_item = itm
+                tent.items.remove(itm)
+                break
+        if removed_item:
+            from server.gameserver import add_item_to_inventory
+            add_item_to_inventory(session, removed_item.item_id, 1)
+            GLOBAL_TENT_MANAGER.save_tent_to_db(tent)
+            await session.send_packet(server.build_inventory_packet(session))
+            await tent.send_tent_items_to_player(session)
+        await session.send_packet(PacketWriter().write_8(62).write_8(sub).write_8(1))
+
+    elif sub in (47, 48, 49, 50, 52, 57, 58, 60, 66):  # Tent Door Permissions & Lock Status
+        logger.info(f"[{session.char_name}] Tent permission toggle (AC 62 Sub {sub})")
+        await session.send_packet(PacketWriter().write_8(62).write_8(sub).write_8(1))
 
     elif sub == 45:  # Tent Presence & Furniture Sync Heartbeat
         char_id = reader.read_32() if reader.remaining_bytes() >= 4 else getattr(session, "char_id", 0)

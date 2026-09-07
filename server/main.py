@@ -20,7 +20,7 @@ from server.item_mall import ItemMallServer
 
 async def run_server_stack(server, web_reg, item_mall_server):
     await asyncio.gather(
-        server.run(host="0.0.0.0", port=6414),
+        server.run(host="0.0.0.0", port=6414, additional_ports=[25620, 25221]),
         web_reg.start(host="0.0.0.0", port=8081),
         item_mall_server.start(host="0.0.0.0")
     )

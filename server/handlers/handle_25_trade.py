@@ -10,12 +10,16 @@ from server.stall_system import GLOBAL_STALL_MANAGER, StallItem
 
 logger = logging.getLogger("WLO_Server")
 
-ACTION_CODES = [25, 40]
+ACTION_CODES = [25, 40, 56]
 
 
 async def handle(server, session, reader):
-    """Handles P2P Trade (AC 25) and Player Stalls (AC 40)."""
-    opcode = reader.data[0] if len(reader.data) > 0 else 25
+    if reader.offset == 0 and len(reader.data) > 0 and reader.data[0] in (25, 40, 56):
+        opcode = reader.read_8()
+    elif reader.offset > 0 and len(reader.data) > 0:
+        opcode = reader.data[0]
+    else:
+        opcode = 25
 
     if opcode == 25:
         sub = reader.read_8()
@@ -27,7 +31,7 @@ async def handle(server, session, reader):
             if target_session:
                 await GLOBAL_TRADE_SYSTEM.request_trade(session, target_session)
 
-        elif sub == 2:  # Accept Trade Request
+        elif sub in (2, 21):  # Accept Trade Request (0x19:2, 0x19:0x15)
             await GLOBAL_TRADE_SYSTEM.accept_trade(server, session)
 
         elif sub == 3:  # Offer Item
@@ -40,18 +44,18 @@ async def handle(server, session, reader):
             gold_amt = reader.read_32() if reader.remaining_bytes() >= 4 else 0
             await GLOBAL_TRADE_SYSTEM.set_gold(session, gold_amt)
 
-        elif sub == 5:  # Lock Offer
+        elif sub in (5, 10):  # Lock Offer (0x19:5, 0x19:10)
             await GLOBAL_TRADE_SYSTEM.lock_trade(session)
 
-        elif sub == 6:  # Confirm / Accept Exchange
+        elif sub in (6, 40):  # Confirm / Accept Exchange (0x19:6, 0x19:0x28)
             await GLOBAL_TRADE_SYSTEM.confirm_trade(server, session)
 
-        elif sub == 7:  # Cancel Trade
+        elif sub in (7, 12, 42):  # Cancel Trade (0x19:7, 0x19:12, 0x19:0x2A)
             await GLOBAL_TRADE_SYSTEM.cancel_trade(session)
 
-    elif opcode == 40:
+    elif opcode in (40, 56):
         sub = reader.read_8()
-        logger.info(f"[{session.char_name}] AC40 Stall Sub={sub}")
+        logger.info(f"[{session.char_name}] AC{opcode} Stall Sub={sub}")
 
         if sub == 1:  # Open Stall
             stall_name = reader.read_string()

@@ -49,6 +49,10 @@ class EquipmentRepairManager:
         if not player:
             return False
 
+        if getattr(player, "in_battle", False):
+            await player.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't fix in battle"))
+            return False
+
         from server.gameserver import remove_item_at_slot
 
         target_item = None
@@ -64,6 +68,13 @@ class EquipmentRepairManager:
             sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
                 "Please select an equipment to repair and a Spanner tool!"
             )
+            await player.send_packet(sys_msg)
+            return False
+
+        max_dura = target_item.get("max_dura", cls.DEFAULT_MAX_DURA)
+        cur_dura = target_item.get("dura", max_dura)
+        if cur_dura >= max_dura:
+            sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Doesn't need repair")
             await player.send_packet(sys_msg)
             return False
 

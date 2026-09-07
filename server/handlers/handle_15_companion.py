@@ -192,6 +192,15 @@ async def handle(server, session, reader):
             except Exception as db_err:
                 logger.error(f"[Pet Rename] Error saving to DB: {db_err}")
 
+    elif sub == 9:  # Pet Mount/Ride Toggle Request (from C line 395444: FUN_002d6994(..., 0xf, 9, 0))
+        slot = reader.read_8() if reader.remaining_bytes() >= 1 else 1
+        logger.info(f"[{session.char_name}] Pet mount/ride toggle (AC 15 Sub 9) slot={slot}")
+        from server.pet_ride_system import GLOBAL_PET_RIDE_MANAGER
+        if getattr(session, 'mounted_pet_slot', 0) == slot:
+            await GLOBAL_PET_RIDE_MANAGER.dismount_companion_pet(server, session)
+        else:
+            await GLOBAL_PET_RIDE_MANAGER.mount_companion_pet(server, session, slot)
+
     elif sub == 15:  # Pet Reborn Request
         slot = reader.read_8()
         logger.info(f"[{session.char_name}] Pet Reborn request for slot {slot}")

@@ -34,6 +34,15 @@ async def handle(server, session, reader):
         if getattr(session, "bathing", False):
             await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Bathing, unable to make"))
             return
+        if getattr(session, "in_battle", False):
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't act in battle"))
+            return
+        if getattr(session, "team", None) or getattr(session, "team_leader", None):
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Can't do in team"))
+            return
+        if getattr(session, "unfinished_crafts_count", 0) >= 5:
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Already 5 semi-finished crafts"))
+            return
 
         unk1 = reader.read_8() if reader.remaining_bytes() >= 1 else 0
         recipe_id_raw = reader.read_16() if reader.remaining_bytes() >= 2 else 0

@@ -66,6 +66,11 @@ async def handle(server: Any, session: Any, reader: PacketReader) -> None:
                     GLOBAL_MARRIAGE_MANAGER._pending_proposals.pop(session.char_id, None)
                     await session.send_packet(PacketWriter().write_8(82).write_8(4).write_8(0))
 
+            elif sub == 5:  # Divorce request
+                logger.info(f"[{session.char_name}] AC 82:5 Divorce request")
+                res = await GLOBAL_MARRIAGE_MANAGER.divorce(server, session)
+                await session.send_packet(PacketWriter().write_8(82).write_8(5).write_8(1 if res else 0))
+
             elif sub == 8:  # Couple Action / Ring exchange ACK
                 logger.info(f"[{session.char_name}] AC 82:8 Couple Action / Ring exchange")
                 await session.send_packet(PacketWriter().write_8(82).write_8(8).write_8(1))

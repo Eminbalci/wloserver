@@ -34,14 +34,20 @@ class MarriageManager:
 
     def __init__(self, db_path: str = "wlo_server.db"):
         self.db_path = db_path
+        self._shared_conn = sqlite3.connect(":memory:") if db_path == ":memory:" else None
         self._marriages: Dict[int, MarriageRecord] = {}  # CharID -> MarriageRecord
         self._pending_proposals: Dict[int, int] = {}    # TargetID -> ProposerID
         self._ensure_tables()
         self._load_from_db()
 
+    def _get_connection(self):
+        if self._shared_conn is not None:
+            return self._shared_conn
+        return sqlite3.connect(self.db_path)
+
     def _ensure_tables(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS charmarriage (
                     husband_id INTEGER PRIMARY KEY,
@@ -52,13 +58,14 @@ class MarriageManager:
                 )
             """)
             conn.commit()
-            conn.close()
+            if self._shared_conn is None:
+                conn.close()
         except Exception as e:
             logger.error(f"[MarriageManager] DB Init Error: {e}")
 
     def _load_from_db(self):
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.row_factory = sqlite3.Row
             rows = conn.execute("SELECT * FROM charmarriage").fetchall()
             for r in rows:
@@ -71,7 +78,8 @@ class MarriageManager:
                 )
                 self._marriages[rec.husband_id] = rec
                 self._marriages[rec.wife_id] = rec
-            conn.close()
+            if self._shared_conn is None:
+                conn.close()
             logger.info(f"[MarriageManager] Loaded {len(rows)} marriage records from DB.")
         except Exception as e:
             logger.error(f"[MarriageManager] Error loading marriages: {e}")
@@ -82,12 +90,77 @@ class MarriageManager:
     def get_marriage(self, char_id: int) -> Optional[MarriageRecord]:
         return self._marriages.get(char_id)
 
+    def get_spouse_id(self, char_id: int) -> Optional[int]:
+        rec = self.get_marriage(char_id)
+        return rec.get_spouse_id(char_id) if rec else None
+
+    async def teleport_to_spouse(self, server, player) -> bool:
+        return await self.couple_teleport(server, player)
+
+    async def divorce(self, server, player) -> bool:
+        if not player:
+            return False
+
+        rec = self.get_marriage(player.char_id)
+        if not rec:
+            await self.send_system_msg(player, "You are not married!")
+            return False
+
+        # Check 7-day cooldown (604800 seconds)
+        divorce_cooldown = 7 * 86400
+        now = time.time()
+        if (now - rec.marriage_date) < divorce_cooldown:
+            await self.send_system_msg(player, "Divorced less than 7 days ago")
+            return False
+
+        cost = 50000
+        if player.gold < cost:
+            await self.send_system_msg(player, "Divorce filing fee requires 50,000 gold!")
+            return False
+
+        player.gold -= cost
+        await player.send_packet(PacketWriter().write_8(26).write_8(4).write_32(player.gold))
+
+        # Delete from DB
+        try:
+            conn = self._get_connection()
+            conn.execute("DELETE FROM charmarriage WHERE husband_id = ? OR wife_id = ?", (player.char_id, player.char_id))
+            conn.commit()
+            if self._shared_conn is None:
+                conn.close()
+
+            spouse_id = rec.get_spouse_id(player.char_id)
+            self._marriages.pop(rec.husband_id, None)
+            self._marriages.pop(rec.wife_id, None)
+
+            await self.send_system_msg(player, "Divorce committed")
+
+            spouse_session = server.sessions.get(spouse_id)
+            if spouse_session:
+                await self.send_system_msg(spouse_session, "Divorced")
+
+            logger.info(f"[MarriageManager] Divorce processed between {rec.husband_name} and {rec.wife_name}.")
+            return True
+        except Exception as e:
+            logger.error(f"[MarriageManager] Error processing divorce: {e}", exc_info=True)
+            return False
+
     async def propose(self, server, proposer, target) -> bool:
         if not proposer or not target or proposer.char_id == target.char_id:
             return False
 
+        if getattr(proposer, "in_battle", False) or getattr(target, "in_battle", False):
+            await self.send_system_msg(proposer, "Can't act in battle")
+            return False
+
         if proposer.level < 30 or target.level < 30:
-            await self.send_system_msg(proposer, "Both players must be at least Level 30 to marry!")
+            await self.send_system_msg(proposer, "Requires LV30 to marry")
+            return False
+
+        p_body = getattr(proposer, "body", 0)
+        t_body = getattr(target, "body", 0)
+        if p_body and t_body and (p_body % 2 == t_body % 2):
+            await self.send_system_msg(proposer, "Can't marry same gender")
             return False
 
         if self.is_married(proposer.char_id) or self.is_married(target.char_id):
@@ -127,13 +200,14 @@ class MarriageManager:
 
         # Save to DB
         try:
-            conn = sqlite3.connect(self.db_path)
+            conn = self._get_connection()
             conn.execute("""
                 INSERT INTO charmarriage (husband_id, husband_name, wife_id, wife_name, marriage_date)
                 VALUES (?, ?, ?, ?, ?)
             """, (proposer.char_id, proposer.char_name, target.char_id, target.char_name, time.time()))
             conn.commit()
-            conn.close()
+            if self._shared_conn is None:
+                conn.close()
 
             rec = MarriageRecord(
                 husband_id=proposer.char_id,

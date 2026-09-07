@@ -75,6 +75,30 @@ async def handle(server, session, reader):
             # Cipher mismatch / Error
             fail_pkt = PacketWriter().write_8(35).write_8(2).write_8(3).write_8(slot)
             await session.send_packet(fail_pkt)
+    elif sub == 3:  # Query deletion code status (Authentic AC 35 Sub 3, line 268777)
+        has_cipher = bool(getattr(session, "cipher", ""))
+        logger.info(f"[{getattr(session, 'username', 'User')}] AC 35 Sub 3 Delete code query: has_cipher={has_cipher}")
+        resp = PacketWriter().write_8(35).write_8(3).write_8(1 if has_cipher else 0)
+        await session.send_packet(resp)
+
+    elif sub == 5:  # Set/Validate deletion code (Authentic AC 35 Sub 5, line 277539: 6-10 chars)
+        code = reader.read_string() if reader.remaining_bytes() >= 1 else ""
+        user_id = getattr(session, "user_id", 0)
+        logger.info(f"[CharDeletion] AC 35 Sub 5 Set delete code request for user #{user_id}")
+        if 6 <= len(code) <= 10 and user_id:
+            try:
+                with server.db.get_connection() as conn:
+                    conn.execute("UPDATE users SET char_delete_code = ? WHERE id = ?", (code, user_id))
+                    conn.commit()
+                session.cipher = code
+                await session.send_packet(PacketWriter().write_8(35).write_8(5).write_8(1))
+            except Exception as e:
+                logger.error(f"[CharDeletion] Failed to update delete code: {e}")
+                await session.send_packet(PacketWriter().write_8(35).write_8(5).write_8(0))
+        else:
+            await session.send_packet(PacketWriter().write_8(35).write_8(5).write_8(0))
+        await session.send_packet(PacketWriter().write_8(20).write_8(8))
+
     elif sub == 12:  # Currency / Gold Balance Sync Handshake
         gold_val = getattr(session, "gold", 0)
         logger.info(f"[{getattr(session, 'char_name', 'Player')}] AC 35 Sub 12 Currency sync (Gold: {gold_val})")

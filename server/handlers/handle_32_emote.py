@@ -5,8 +5,8 @@ from server.network import PacketReader, PacketWriter
 if TYPE_CHECKING:
     from server.gameserver import GameServer, PlayerSession
 
-logger = logging.getLogger("WLO_Server")
 ACTION_CODE = 32
+ACTION_CODES = [32]
 
 
 async def handle(server: 'GameServer', session: 'PlayerSession', reader: PacketReader):

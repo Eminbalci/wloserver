@@ -730,5 +730,80 @@ async def handle(server, session, reader):
         tent = GLOBAL_TENT_MANAGER.get_or_create_tent(session.char_id)
         GLOBAL_TENT_MANAGER.pitch_tent_on_map(server, session, tent.tent_type)
 
+    elif sub == 33:  # Alchemy synthesis / Compounding trigger (Authentic AC 23 Sub 33 from C line 302661)
+        num_items = reader.read_8() if reader.remaining_bytes() >= 1 else 0
+        slots = []
+        for _ in range(num_items):
+            if reader.remaining_bytes() >= 1:
+                slots.append(reader.read_8())
+        if len(slots) < 2:
+            slots = [it['slot'] for it in getattr(session, 'inventory', [])[:2]]
+        if len(slots) >= 2:
+            from server.alchemy_system import GLOBAL_ALCHEMY_MANAGER
+            book_slot = getattr(session, 'alchemy_book_slot', None)
+            await GLOBAL_ALCHEMY_MANAGER.compound_ingredients(server, session, slots, book_slot=book_slot)
+        else:
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Not enough materials"))
+
+    elif sub == 31:  # Alchemy Catalyst / Book slot placement (AC 23 Sub 31)
+        book_slot = reader.read_8() if reader.remaining_bytes() >= 1 else 0
+        session.alchemy_book_slot = book_slot
+        await session.send_packet(PacketWriter().write_8(23).write_8(31).write_8(book_slot))
+
+    elif sub in (15, 82, 208):  # Quick HP/MP refill button (AC 23 Sub 82 / 15 / 208)
+        used = False
+        for item in list(getattr(session, 'inventory', [])):
+            item_id = item.get('item_id', 0)
+            slot = item.get('slot', 0)
+            props = server.item_properties.get(str(item_id), {})
+            hp_rec = props.get('hp', 0)
+            sp_rec = props.get('sp', 0)
+            if (sub == 82 and sp_rec > 0) or (sub != 82 and hp_rec > 0):
+                remove_item_at_slot(session, slot, 1)
+                if sub == 82:
+                    session.sp = min(session.max_sp, session.sp + sp_rec)
+                else:
+                    session.hp = min(session.max_hp, session.hp + hp_rec)
+                await server.send_stats_update(session)
+                await session.send_packet(server.build_inventory_packet(session))
+                used = True
+                break
+        if not used:
+            await server.send_stats_update(session)
+
+    elif sub == 86:  # Inventory expansion bag usage (AC 23 Sub 86)
+        slot = reader.read_8() if reader.remaining_bytes() >= 1 else 0
+        cur_max = getattr(session, 'max_inventory_slots', 50)
+        if cur_max < 75:
+            session.max_inventory_slots = cur_max + 10
+            if slot:
+                remove_item_at_slot(session, slot, 1)
+            server.save_player_to_db(session)
+            await session.send_packet(server.build_inventory_packet(session))
+            await session.send_packet(PacketWriter().write_8(23).write_8(86).write_8(1))
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Inventory capacity expanded!"))
+        else:
+            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Inventory already at max capacity."))
+
+    elif sub == 118:  # Spanner equipment repair request (AC 23 Sub 118)
+        equip_slot = reader.read_8() if reader.remaining_bytes() >= 1 else 0
+        spanner_slot = reader.read_8() if reader.remaining_bytes() >= 1 else 0
+        from server.repair_system import GLOBAL_REPAIR_MANAGER
+        await GLOBAL_REPAIR_MANAGER.repair_item_with_spanner(server, session, equip_slot, spanner_slot)
+
+    elif sub == 128:  # Saddle mount speed toggle (AC 23 Sub 128)
+        saddle_slot = reader.read_8() if reader.remaining_bytes() >= 1 else 0
+        from server.pet_ride_system import GLOBAL_PET_RIDE_MANAGER
+        s_mult = GLOBAL_PET_RIDE_MANAGER.get_saddle_multiplier(38020, session)
+        session.movement_speed_mult = s_mult
+        await session.send_packet(PacketWriter().write_8(23).write_8(128).write_8(1))
+
+    elif sub == 133:  # Title equip / unequip request (AC 23 Sub 133)
+        title_id = reader.read_16() if reader.remaining_bytes() >= 2 else 0
+        session.title = title_id
+        server.save_player_to_db(session)
+        await session.send_packet(PacketWriter().write_8(23).write_8(133).write_16(title_id))
+        server.broadcast_to_map(session.map_id, PacketWriter().write_8(5).write_8(8).write_32(session.char_id).write_8(0))
+
     else:
         logger.info(f"Unhandled AC 23 Sub-Code: {sub}, payload: {reader.data.hex()}")

@@ -54,10 +54,10 @@ async def handle(server, session, reader):
             s2.write_8(43).write_8(2).write_string(inviter.char_name).write_8(1) # joined
             await session.send_packet(s2)
             
-    elif sub == 5:  # Leave Team
-        logger.info(f"[AC43] {session.char_name} is leaving team")
+    elif sub in (4, 5):  # Leave / Disband Team (AC 43 Sub 4 from line 410529, Sub 5)
+        logger.info(f"[AC43] {session.char_name} is leaving team (sub={sub})")
         s = PacketWriter()
-        s.write_8(43).write_8(5).write_string(session.char_name)
+        s.write_8(43).write_8(sub).write_string(session.char_name)
         await session.send_packet(s)
         
     else:

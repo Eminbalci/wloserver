@@ -119,6 +119,30 @@ async def handle(server, session, reader):
         await session.send_packet(list_pkt)
         await session.send_packet(PacketWriter().write_8(35).write_8(11))
 
+    elif sub == 3:  # Cancel Character Creation (C line 226227: FUN_002d6994(..., 0x3f, 3, 0))
+        logger.info(f"[Auth] Username '{getattr(session, 'username', 'User')}' canceled character creation.")
+        list_pkt = PacketWriter().write_8(63).write_8(1)
+        u_data = {}
+        if getattr(session, 'user_id', None):
+            with server.db.get_connection() as conn:
+                u_row = conn.execute("SELECT * FROM users WHERE id = ?", (session.user_id,)).fetchone()
+                if u_row:
+                    u_data = dict(u_row)
+        char1 = server.db.get_character_by_id(u_data.get('character1_id')) if u_data.get('character1_id') else None
+        if char1:
+            list_pkt.write_bytes(server.serialize_character_slot(char1))
+        else:
+            list_pkt.write_8(1).write_8(0)
+
+        char2 = server.db.get_character_by_id(u_data.get('character2_id')) if u_data.get('character2_id') else None
+        if char2:
+            list_pkt.write_bytes(server.serialize_character_slot(char2))
+        else:
+            list_pkt.write_8(2).write_8(0)
+
+        await session.send_packet(list_pkt)
+        await session.send_packet(PacketWriter().write_8(35).write_8(11))
+
     elif sub == 2:  # Selected Character Slot
         slot = reader.read_8()
         if slot not in (1, 2):
