@@ -5,8 +5,10 @@ This repository contains a custom python-based server implementation for Wonderl
 ## Structure
 
 - `start.bat` / `start.sh` - Launch scripts for the server
+- `start_packet_recorder.bat` - 1-Click launcher for the standalone WLO Packet Recorder (GUI / CLI)
 - `start_gap_analyzer.bat` - One-click live packet sniffer and feature gap analyzer for WLRI live gameplay
 - `start_new_char_quest_recorder.bat` - Dedicated background recorder for character creation and first quest session
+- `packet_recorder/` - Standalone network packet recorder suite (transparent proxy bridge, passive sniffer, live in-game tagging, JSONL / LOG / PCAP exporter)
 - `server/main.py` - Entry point
 - `server/gameserver.py` - Core game server logic
 - `server/database.py` - Database interactions
@@ -56,6 +58,7 @@ This repository contains a custom python-based server implementation for Wonderl
 - `tools/live_game_gap_analyzer.py` - Live WLRI game traffic gap analyzer matching packets directly against wloserver handlers
 - `data/learned_packets_catalog.json` - Machine-readable database of 1,387 reverse-engineered packet variants with field candidate layouts
 - `docs/` - Technical Documentation:
+  - [Packet Recording & Session Analysis System](docs/packet_recording_system.md) - Complete guide and specifications for the standalone gameplay packet recorder, proxy bridge, tagging, and JSONL/PCAP export
   - [New Client Handlers Integration & Technical Specifications](docs/new_handlers_integration_guide.md) - Specifications and parameter mappings for 10 new protocol handlers achieving 100% client opcode coverage
   - [Client C Code Missing Packets Audit](docs/client_c_code_missing_packets_audit.md) - Exhaustive audit of all 59 client-sent Action Codes from aLogin.exe.1.c vs 37 implemented server handlers, identifying the 20 missing opcodes
   - [Packet Reading & Protocol Verification Audit](docs/packet_verification_and_correctness_audit.md) - Empirical, mathematical, binary, and decompiled code proof verifying 100% accurate packet parsing and opcode dispatching
