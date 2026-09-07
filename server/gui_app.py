@@ -124,10 +124,16 @@ class ResponsiveFlowFrame(ctk.CTkFrame if HAS_CTK else tk.Frame):
         self.item_padx = padx
         self.item_pady = pady
         self._flow_widgets: List[Tuple[Any, Any, Any, str]] = []
+        self._num_rows: int = 0
         self._last_width = 0
         self._relayout_after_id = None
         self.bind("<Configure>", self._on_configure)
         self.bind("<Destroy>", self._on_destroy)
+
+    @property
+    def _row_frames(self) -> List[int]:
+        """Backward-compatibility property returning virtual row indices."""
+        return list(range(self._num_rows))
 
     def _on_destroy(self, event=None):
         if self._relayout_after_id:
@@ -149,11 +155,19 @@ class ResponsiveFlowFrame(ctk.CTkFrame if HAS_CTK else tk.Frame):
         """Clears registered flow widgets."""
         for w, _, _, _ in self._flow_widgets:
             if hasattr(w, "winfo_exists") and w.winfo_exists():
-                w.grid_forget()
+                try:
+                    w.grid_forget()
+                    w.pack_forget()
+                except Exception:
+                    pass
         self._flow_widgets.clear()
+        self._num_rows = 0
         self._schedule_relayout()
 
     def _on_configure(self, event):
+        target = getattr(self, "_canvas", None)
+        if event.widget != self and (target is None or event.widget != target):
+            return
         if event.width <= 10 or abs(event.width - self._last_width) < 6:
             return
         self._last_width = event.width
@@ -176,6 +190,16 @@ class ResponsiveFlowFrame(ctk.CTkFrame if HAS_CTK else tk.Frame):
         except Exception:
             pass
 
+    def relayout_now(self):
+        """Forces an immediate relayout of flow items."""
+        if self._relayout_after_id:
+            try:
+                self.after_cancel(self._relayout_after_id)
+            except Exception:
+                pass
+            self._relayout_after_id = None
+        self._relayout()
+
     def _relayout(self):
         self._relayout_after_id = None
         try:
@@ -185,30 +209,53 @@ class ResponsiveFlowFrame(ctk.CTkFrame if HAS_CTK else tk.Frame):
             return
 
         try:
-            width = self.winfo_width()
-            if width <= 20:
-                width = self.winfo_reqwidth()
+            width = self._last_width if self._last_width > 20 else self.winfo_width()
+            target = getattr(self, "_canvas", None)
+            if width <= 20 and target and hasattr(target, "winfo_width"):
+                width = target.winfo_width()
             if width <= 20:
                 try:
-                    width = self.master.winfo_width() - 30
+                    width = self.master.winfo_width() - 20
                 except Exception:
                     pass
+            if width <= 20:
+                try:
+                    top = self.winfo_toplevel()
+                    cur_w = getattr(top, "_current_width", None)
+                    if cur_w and cur_w > 50:
+                        width = cur_w - 40
+                except Exception:
+                    pass
+            if width <= 20:
+                width = self.winfo_reqwidth()
             if width <= 20:
                 return
 
             for w, _, _, _ in self._flow_widgets:
                 if hasattr(w, "winfo_exists") and w.winfo_exists():
-                    w.grid_forget()
+                    try:
+                        w.grid_forget()
+                        w.pack_forget()
+                    except Exception:
+                        pass
 
+            avail_width = max(width - 24, 80)
             cur_row = 0
             cur_col = 0
             cur_row_width = 0
-            avail_width = max(width - 24, 80)
 
             for widget, px, py, sticky in self._flow_widgets:
                 if hasattr(widget, "winfo_exists") and not widget.winfo_exists():
                     continue
+
                 w_w = widget.winfo_reqwidth()
+                if hasattr(widget, "_text") and hasattr(widget, "_font") and widget._font:
+                    try:
+                        text_w = widget._font.measure(widget._text)
+                        w_w = max(w_w, text_w + 24)
+                    except Exception:
+                        pass
+
                 pad_x_total = (px[0] + px[1]) if isinstance(px, tuple) else (px * 2)
                 item_total_w = w_w + pad_x_total
 
@@ -220,8 +267,180 @@ class ResponsiveFlowFrame(ctk.CTkFrame if HAS_CTK else tk.Frame):
                 widget.grid(row=cur_row, column=cur_col, padx=px, pady=py, sticky=sticky)
                 cur_row_width += item_total_w
                 cur_col += 1
-        except Exception:
-            pass
+
+            self._num_rows = cur_row + 1 if self._flow_widgets else 0
+        except Exception as e:
+            logger.debug(f"ResponsiveFlowFrame relayout error: {e}")
+
+
+class ResponsiveFlowTabview(ctk.CTkFrame if HAS_CTK else tk.Frame):
+    """
+    Responsive multi-row wrapping Tabview container.
+    Dynamically wraps tab navigation buttons across multiple rows using ResponsiveFlowFrame,
+    preventing button squishing, text clipping, and off-screen truncation when many tabs are present.
+    Provides complete drop-in API parity with ctk.CTkTabview (add, set, get, tab, delete).
+    """
+    def __init__(
+        self,
+        master,
+        fg_color: str = "#0F172A",
+        segmented_button_fg_color: str = "#080C14",
+        segmented_button_selected_color: str = "#2563EB",
+        segmented_button_selected_hover_color: str = "#3B82F6",
+        segmented_button_unselected_color: str = "#1E293B",
+        segmented_button_unselected_hover_color: str = "#334155",
+        border_width: int = 1,
+        border_color: str = "#1E293B",
+        corner_radius: int = 14,
+        **kwargs
+    ):
+        frame_kwargs = {}
+        if HAS_CTK:
+            frame_kwargs = {
+                "fg_color": fg_color,
+                "border_width": border_width,
+                "border_color": border_color,
+                "corner_radius": corner_radius,
+            }
+        else:
+            frame_kwargs = {
+                "bg": fg_color,
+                "highlightbackground": border_color,
+                "highlightthickness": border_width
+            }
+
+        super().__init__(master, **frame_kwargs)
+
+        self._fg_color = fg_color
+        self._tab_bar_bg = segmented_button_fg_color
+        self._selected_color = segmented_button_selected_color
+        self._selected_hover = segmented_button_selected_hover_color
+        self._unselected_color = segmented_button_unselected_color
+        self._unselected_hover = segmented_button_unselected_hover_color
+
+        self._tab_dict: Dict[str, Any] = {}
+        self._tab_buttons: Dict[str, Any] = {}
+        self._tab_order: List[str] = []
+        self._current_tab: Optional[str] = None
+
+        # Tab Navigation Header (Multi-line auto-wrapping ResponsiveFlowFrame)
+        self._tab_bar = ResponsiveFlowFrame(
+            self,
+            fg_color=self._tab_bar_bg,
+            corner_radius=10,
+            border_width=1,
+            border_color="#1E293B",
+            padx=3,
+            pady=3
+        )
+        self._tab_bar.pack(fill="x", padx=10, pady=(10, 8))
+
+        # Main Tab Content Body
+        if HAS_CTK:
+            self._content_container = ctk.CTkFrame(self, fg_color="transparent")
+        else:
+            self._content_container = tk.Frame(self, bg=fg_color)
+        self._content_container.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
+    def add(self, name: str) -> Any:
+        """Adds a tab page and returns its content frame."""
+        if name in self._tab_dict:
+            return self._tab_dict[name]
+
+        if HAS_CTK:
+            tab_frame = ctk.CTkFrame(self._content_container, fg_color="transparent")
+            btn = ctk.CTkButton(
+                self._tab_bar,
+                text=name,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                width=0,
+                height=32,
+                corner_radius=8,
+                fg_color=self._unselected_color,
+                hover_color=self._unselected_hover,
+                text_color="#94A3B8",
+                command=lambda n=name: self.set(n)
+            )
+        else:
+            tab_frame = tk.Frame(self._content_container, bg=self._fg_color)
+            btn = tk.Button(
+                self._tab_bar,
+                text=name,
+                font=("Segoe UI", 10, "bold"),
+                bg=self._unselected_color,
+                fg="#94A3B8",
+                activebackground=self._selected_color,
+                activeforeground="#FFFFFF",
+                relief="flat",
+                padx=8,
+                pady=4,
+                command=lambda n=name: self.set(n)
+            )
+
+        self._tab_bar.add_widget(btn, padx=2, pady=2)
+        self._tab_dict[name] = tab_frame
+        self._tab_buttons[name] = btn
+        self._tab_order.append(name)
+
+        if self._current_tab is None:
+            self.set(name)
+
+        return tab_frame
+
+    def set(self, name: str):
+        """Switches active tab to the specified name."""
+        if name not in self._tab_dict:
+            return
+        self._current_tab = name
+        for t_name, frame in self._tab_dict.items():
+            btn = self._tab_buttons.get(t_name)
+            if t_name == name:
+                if HAS_CTK and isinstance(btn, ctk.CTkButton):
+                    btn.configure(
+                        fg_color=self._selected_color,
+                        hover_color=self._selected_hover,
+                        text_color="#FFFFFF"
+                    )
+                elif isinstance(btn, tk.Button):
+                    btn.configure(bg=self._selected_color, fg="#FFFFFF")
+                frame.pack(fill="both", expand=True)
+            else:
+                if HAS_CTK and isinstance(btn, ctk.CTkButton):
+                    btn.configure(
+                        fg_color=self._unselected_color,
+                        hover_color=self._unselected_hover,
+                        text_color="#94A3B8"
+                    )
+                elif isinstance(btn, tk.Button):
+                    btn.configure(bg=self._unselected_color, fg="#94A3B8")
+                frame.pack_forget()
+
+    def get(self) -> Optional[str]:
+        """Returns the name of the currently active tab."""
+        return self._current_tab
+
+    def tab(self, name: str) -> Any:
+        """Returns the tab frame by name."""
+        return self._tab_dict.get(name)
+
+    def delete(self, name: str):
+        """Removes a tab by name."""
+        if name not in self._tab_dict:
+            return
+        frame = self._tab_dict.pop(name, None)
+        btn = self._tab_buttons.pop(name, None)
+        if name in self._tab_order:
+            self._tab_order.remove(name)
+        if frame:
+            frame.destroy()
+        if btn:
+            btn.destroy()
+        self._tab_bar.relayout_now()
+        if self._current_tab == name:
+            if self._tab_order:
+                self.set(self._tab_order[0])
+            else:
+                self._current_tab = None
 
 
 # Helper for item display names
@@ -341,7 +560,7 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
         self.lbl_live_badge.pack(side="right", padx=15)
 
         # Tabview
-        self.tabview = ctk.CTkTabview(
+        self.tabview = ResponsiveFlowTabview(
             self,
             fg_color="#0F172A",
             segmented_button_fg_color="#080C14",
@@ -1473,7 +1692,7 @@ class ModernServerGUI:
 
 
     def _build_tabview(self):
-        self.tabview = ctk.CTkTabview(
+        self.tabview = ResponsiveFlowTabview(
             self.root,
             fg_color="#0F172A",
             segmented_button_fg_color="#080C14",

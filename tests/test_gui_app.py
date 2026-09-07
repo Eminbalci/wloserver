@@ -126,6 +126,33 @@ class TestServerGUI(unittest.TestCase):
         self.assertTrue(getattr(mock_session, "god_mode", False))
         self.assertEqual(mock_session.hp, 99999)
 
+    def test_responsive_flow_tabview(self):
+        from server.gui_app import ResponsiveFlowTabview
+        tabview = ResponsiveFlowTabview(self.root)
+        tabview.pack(fill="both", expand=True)
+
+        t1 = tabview.add("📊 Tab 1")
+        t2 = tabview.add("⚡ Tab 2")
+        t3 = tabview.add("👥 Tab 3")
+
+        self.assertIsNotNone(t1)
+        self.assertIsNotNone(t2)
+        self.assertIsNotNone(t3)
+        self.assertEqual(tabview.get(), "📊 Tab 1")
+
+        tabview.set("⚡ Tab 2")
+        self.assertEqual(tabview.get(), "⚡ Tab 2")
+        self.assertEqual(tabview.tab("⚡ Tab 2"), t2)
+
+        # Test relayout across widths
+        tabview._tab_bar._last_width = 300
+        tabview._tab_bar.relayout_now()
+        self.assertGreaterEqual(len(tabview._tab_bar._row_frames), 1)
+
+        tabview.delete("⚡ Tab 2")
+        self.assertNotIn("⚡ Tab 2", tabview._tab_dict)
+        tabview.destroy()
+
 
 if __name__ == "__main__":
     unittest.main()

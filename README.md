@@ -87,7 +87,7 @@ This repository contains a custom python-based server implementation for Wonderl
   - [Cutscenes & Scene Transition Protocol](docs/cutscene_and_scene_transitions.md)
   - [Character Deletion Protocol & GUI](docs/character_deletion_system.md)
   - [dialogue_queue_and_talk_resolver.md](file:///docs/dialogue_queue_and_talk_resolver.md) - Multi-Step Dialogue Queue, 17,494-entry Talk.dat Resolver, and Action Code 32 Emotes
-  - [administrator_gui_suite.md](docs/administrator_gui_suite.md) - Modern Desktop Administrator Control Suite (19 Tabs, GM Tools, 4-Column Browser, Character Data Editor, and ResponsiveFlowFrame Auto-Wrapping Toolbars)
+  - [administrator_gui_suite.md](docs/administrator_gui_suite.md) - Modern Desktop Administrator Control Suite (19 Tabs, GM Tools, 4-Column Browser, Character Data Editor, ResponsiveFlowTabview Multi-Row Wrapping Tabs, and ResponsiveFlowFrame Auto-Wrapping Toolbars)
   - [admin_control_suite_enhancements.md](file:///docs/admin_control_suite_enhancements.md) - Deep technical specifications for Guilds, In-Game Mail, Security & IP Bans, Live Battles Monitor, and Marriage Registry administration tabs
   - [dynamic_data_and_eve_engine.md](file:///docs/dynamic_data_and_eve_engine.md) - Dynamic SQLite data architecture, live hot-reloads, and `eve.Emg` binary map parser
   - [remaining_systems_and_features.md](file:///docs/remaining_systems_and_features.md) - Deep decompiled audit of remaining systems (PvP duels, Morphs, Barber, Bank, Mount speed, Smelting, Death penalty)

@@ -129,6 +129,8 @@ To support smaller displays, laptop resolutions, and half-screen snapping withou
 
 - **Adaptive Reflow Container (`ResponsiveFlowFrame`)**:
   - Automatically observes geometry changes via `<Configure>` events with debounced scheduling.
+  - Correctly delegates configure events across CustomTkinter hierarchy (`event.widget in (self, getattr(self, '_canvas', None))`), preventing unhandled event drops on internal `CTkCanvas`.
+  - Employs intelligent pre-mapping width resolution using `winfo_toplevel()._current_width` fallback, ensuring immediate correct multi-row distribution before initial window rendering.
   - Measures the natural requested width (`winfo_reqwidth()`) plus padding for each child widget.
   - Flow algorithm calculates `cur_row_width + item_total_w > avail_width` and dynamically breaks overflowing elements into subsequent rows (`cur_row + 1`, `cur_col = 0`).
   - Container height expands naturally downwards without clipping or hardcoded fixed constraints.
@@ -142,4 +144,25 @@ To support smaller displays, laptop resolutions, and half-screen snapping withou
   - **Header Bar**: Server title, live status badge, session count badge, uptime timer badge, Launch Client (F5), Hot-Reload, and Save All buttons.
   - **Character Editor Dialog**: Stats tab booster strip, Quests toolbar, Pets companion toolbar, Inventory item toolbar, Skills magic toolbar, NPC Visibility toolbar, and dialog bottom action bar.
   - **ModernServerGUI Tabs**: Live Cheats top target bar & bottom booster strip, Users & Accounts top toolbar, Characters Manager top toolbar, Portals & Warps top toolbar, Map NPC Studio top toolbar, Monster Drops Studio top toolbar, Chest Drops Studio top toolbar, Item Mall Manager top toolbar, Starter Items Pack Manager top toolbar, NPC Resolver top toolbar, Talk Resolver top toolbar, Guilds Manager top toolbar & action strip, Security & IP Bans toolbars & action strips, Live Battles top toolbar, Marriage Registry top toolbar & bottom action strip.
+
+---
+
+## 5. Multi-Row Wrapping Tab System (`ResponsiveFlowTabview`)
+
+To resolve tab squishing, text clipping, and off-screen truncation across the 19 administration tabs, the GUI replaces standard 1-line `ctk.CTkTabview` segmented buttons with `ResponsiveFlowTabview`:
+
+- **Dynamic Multi-Row Tab Bar**:
+  - Employs an internal `ResponsiveFlowFrame` header that dynamically measures button text widths via `font.measure()`.
+  - Distributes all 19 tabs across 2 to 5 neat horizontal rows depending on viewport width (e.g. 2 rows at 1200px+, 3 rows at 900px, 5 rows at 600px).
+  - Uses direct native grid layout (`grid(row=cur_row, column=cur_col, ...)`) on the parent container, completely eliminating intermediate frame canvas occlusion and Tkinter z-order stacking conflicts.
+- **Drop-in API Parity**:
+  - `add(name)`: Registers a tab and returns its dedicated content container frame.
+  - `set(name)`: Activates the specified tab, applying `#2563EB` highlight to the active button and switching content frames.
+  - `get()`: Returns the currently selected tab name.
+  - `tab(name)`: Retrieves the tab frame for direct widget injection.
+  - `delete(name)`: Safely removes a tab, cleans up button bindings, and auto-reflows remaining tabs.
+- **Modern Dark Visuals**:
+  - Selected tab: `#2563EB` primary blue, bold `#FFFFFF` text.
+  - Inactive tabs: `#1E293B` slate, `#94A3B8` muted text, hover highlighting to `#334155`.
+
 
