@@ -8,63 +8,8 @@ logger = logging.getLogger("WLO_Server")
 ACTION_CODES = [20]
 
 
-import re
+from server.npc_manager import is_wild_monster
 
-def is_wild_monster(npc_template_id: int, name: str, map_id: int = 0) -> bool:
-    """
-    Accurately identifies whether an NPC is a wild hostile mob or a peaceful NPC/townsperson/prop.
-    Ported from authentic WLO C# QuestNpc.IsWildMonster logic:
-    - 10000-12999: Story characters, Companions, Sailors (Never wild monsters)
-    - 13000-13999: Shops (Props, Weapon, Armor)
-    - 14000-14999: Human Villagers, Townspeople, Passengers, Guards, Elders (e.g. Ashley 14013)
-    - 15000-16999: Story / Quest Actors
-    - 17000-17999: Authentic wild roaming monsters (e.g. Jellyfish, Spiders, Wolves)
-    - 19000-24999: Props, Gathering nodes, Chests, Furniture
-    - 25000+: Story cutscene actors
-    """
-    if not npc_template_id:
-        return False
-
-    name_lower = (name or "").lower().strip()
-
-    # 1. Peaceful / Human / Service NPC keywords
-    peaceful_keywords = [
-        "shop", "store", "market", "keep", "storage", "bank", "vault", "atm", "exchanger",
-        "doctor", "witch", "clinic", "hotel", "inn", "guidepost", "signpost", "statue",
-        "villager", "citizen", "resident", "grandma", "grandmother", "grandfather",
-        "elder", "mayor", "chief", "guard", "soldier", "knight", "merchant",
-        "vendor", "trader", "peddler", "innkeeper", "waitress", "nurse", "priest",
-        "monk", "clerk", "sailor", "captain", "chef", "cook", "maid", "blacksmith",
-        "carpenter", "hunter", "miner", "guide", "girl", "boy", "kid", "child",
-        "man", "woman", "lady", "sir", "passenger", "traveler", "tourist", "guest",
-        "friend", "robinson", "ashley", "daniel", "iris", "vanessa", "breillat",
-        "jessica", "konno", "maria", "karin", "sid", "more", "kurogane", "nina",
-        "betty", "rocco", "niss", "elin", "cliff", "sam", "shizune", "clive", "xaolan",
-        "chest", "box", "crate", "barrel", "pot", "wood", "stone", "ore", "tree", "mine"
-    ]
-    for k in peaceful_keywords:
-        if len(k) <= 3:
-            if re.search(r'\b' + re.escape(k) + r'\b', name_lower):
-                return False
-        else:
-            if k in name_lower:
-                return False
-
-    # 2. Template ID Ranges in WLO:
-    if npc_template_id < 17000 or npc_template_id >= 18000:
-        return False
-
-    # 3. Kelan Village Pigs or domestic animals in 17000-17999 range
-    if npc_template_id == 17400 or "pig" in name_lower:
-        return False
-
-    # 4. In peaceful town / interior / cabin maps, no roaming hostile monsters
-    if map_id in [10000, 10010, 60001] or (10001 <= map_id <= 10036) or (12000 <= map_id <= 12030) or (14000 <= map_id <= 14030):
-        monster_names = ["spider", "wolf", "troll", "gelly", "jelly", "wasp", "snake", "boar", "shark", "dinosaur"]
-        if not any(m in name_lower for m in monster_names):
-            return False
-
-    return True
 
 
 async def handle(server, session, reader):

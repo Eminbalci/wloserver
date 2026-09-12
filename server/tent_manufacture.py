@@ -7,7 +7,7 @@ import logging
 from typing import List, Optional
 from dataclasses import dataclass
 
-from server.network import PacketWriter
+from server.network import PacketWriter, send_system_msg
 
 logger = logging.getLogger("WLO_Server")
 
@@ -143,11 +143,7 @@ class TentManufactureManager:
                 if rem <= 0:
                     break
 
-    async def send_system_msg(self, session, msg: str):
-        if not session or not msg:
-            return
-        sys_pkt = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(msg)
-        await session.send_packet(sys_pkt)
+    send_system_msg = staticmethod(send_system_msg)
 
 
 GLOBAL_TENT_MANUFACTURE = TentManufactureManager()

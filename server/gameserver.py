@@ -11,9 +11,8 @@ import time
 from server.quest_manager import QuestManager
 from datetime import datetime
 
-from server.network import PacketReader, PacketWriter, xor_crypt
+from server.network import PacketReader, PacketWriter, xor_crypt, send_system_msg
 from server.database import DatabaseManager
-from server.battle import Fighter, BattleManager
 
 # Setup logger
 logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -343,6 +342,10 @@ class PlayerSession:
             except Exception as e:
                 logger.error(f"[{self.username}] Send failed: {e}")
 
+    async def send_system_message(self, msg: str) -> None:
+        """Sends a system announcement / prompt notification (AC 23 Sub 57) to this session."""
+        await send_system_msg(self, msg)
+
     async def send_multi_packets(self, packets: list['PacketWriter']):
         """
         Sends multiple packets as a single combined stream (used for battle init and stats).
@@ -613,19 +616,40 @@ class GameServer:
     @staticmethod
     def is_village_or_town_map(map_id: int) -> bool:
         """Returns True if the map is a village, town, interior or residential zone."""
-        if map_id in (10000, 10010, 60001):
-            return True
-        if 10001 <= map_id <= 10036:  # Starter Ship, Cabins, Beach, Kelan Village
-            return True
-        if 12000 <= map_id <= 12030:  # Welling Village
-            return True
-        if 14000 <= map_id <= 14030:  # Holy Village
-            return True
-        if 16000 <= map_id <= 16030:  # Kyoto
-            return True
-        if 18000 <= map_id <= 18030:  # Chang'an
-            return True
-        return False
+        from server.npc_manager import WorldNpc
+        return WorldNpc.is_village_or_town_map(map_id)
+
+    @staticmethod
+    def get_element_correction(hitter_element: int, target_element: int) -> float:
+        """Returns elemental advantage multiplier: Fire > Wind > Earth > Water > Fire."""
+        if hitter_element == 3:  # Fire
+            if target_element == 2: return 0.6
+            if target_element == 4: return 1.5
+        elif hitter_element == 1:  # Earth
+            if target_element == 2: return 1.7
+            if target_element == 4: return 0.6
+        elif hitter_element == 2:  # Water
+            if target_element == 3: return 1.7
+            if target_element == 1: return 0.6
+        elif hitter_element == 4:  # Wind
+            if target_element == 3: return 0.4
+            if target_element == 1: return 1.7
+        elif hitter_element == 0:  # Normal
+            if target_element in (1, 2, 3, 4): return 1.3
+        return 1.0
+
+    @staticmethod
+    def calculate_atk_damage(atk: int, def_val: int, hitter_element: int, target_element: int) -> int:
+        """Calculates authentic physical turn damage incorporating elemental multiplier and randomization."""
+        element_corr = GameServer.get_element_correction(hitter_element, target_element)
+        rand_val = 0.9 + (random.random() * 0.2)
+        base_dmg = atk * (atk / max(1, atk + def_val / 2.0))
+        if atk < 50:
+            base_dmg += atk * 0.5
+        est = base_dmg * element_corr * rand_val
+        return max(1, int(round(est)))
+
+
 
     @staticmethod
     def is_static_or_prop_npc(npc: dict, map_id: int) -> bool:
@@ -1112,26 +1136,8 @@ class GameServer:
             logger.error(f"[AC14] Error sending friend list: {e}", exc_info=True)
 
     def get_starter_skill_id(self, body: int, head: int) -> int:
-        if body == 4:  # Big Female
-            if head == 0: return 15041  # Iris: Love Wish
-            elif head == 1: return 12053  # Lique: Gallop
-            elif head == 2: return 15003  # Vanessa: Newbie's Stunt
-            elif head == 3: return 15060  # Breillat: Throw Dish
-            elif head == 4: return 12051  # Jessica: Note
-            elif head == 5: return 12049  # Konno Tsuruko: Fire Dance
-            elif head == 6: return 11077  # Maria: Cure 2 Players
-            elif head == 7: return 15040  # Karin: Palm
-        elif body == 3:  # Big Male
-            if head == 0: return 15038  # Daniel: Overarm Stumble
-            elif head == 1: return 11076  # Sid: Combo x3 Attack
-            elif head == 2: return 11183  # More: Deacon Attack
-            elif head == 3: return 11182  # Kurogane: Ghost Hammer
-        elif body == 2:  # Small Female
-            if head == 0: return 15039  # Nina: Wine Flame
-            elif head == 1: return 12036  # Betty: Leap
-        elif body == 1:  # Small Male
-            if head == 0: return 11075  # Rocco: Summon Dogs Groups
-        return 15003  # Default fallback: Newbie's Stunt
+        return self.db.get_starter_skill_id(body, head)
+
 
     # Skill table order -> offset in SkillData.MBTM (offset // 10)
     _SKILL_TABLE_ORDER = {
@@ -3374,33 +3380,7 @@ class GameServer:
                 if skill_id != 10001:
                     modified_atk += int(15 * multiplier)
 
-                def get_element_correction(hitter_element: int, target_element: int) -> float:
-                    if hitter_element == 3:
-                        if target_element == 2: return 0.6
-                        if target_element == 4: return 1.5
-                    elif hitter_element == 1:
-                        if target_element == 2: return 1.7
-                        if target_element == 4: return 0.6
-                    elif hitter_element == 2:
-                        if target_element == 3: return 1.7
-                        if target_element == 1: return 0.6
-                    elif hitter_element == 4:
-                        if target_element == 3: return 0.4
-                        if target_element == 1: return 1.7
-                    elif hitter_element == 0:
-                        if target_element in (1, 2, 3, 4): return 1.3
-                    return 1.0
-
-                def calculate_atk_damage(atk: int, def_val: int, hitter_element: int, target_element: int) -> int:
-                    element_corr = get_element_correction(hitter_element, target_element)
-                    rand_val = 0.9 + (random.random() * 0.2)
-                    base_dmg = atk * (atk / max(1, atk + def_val/2.0))
-                    if atk < 50:
-                        base_dmg += atk * 0.5
-                    est = base_dmg * element_corr * rand_val
-                    return max(1, int(round(est)))
-
-                dmg = calculate_atk_damage(modified_atk, def_stat, hitter_element, target_element)
+                dmg = self.calculate_atk_damage(modified_atk, def_stat, hitter_element, target_element)
 
                 # Defend logic
                 target_acted = battle['pending_actions'].get((target_fighter['x'], target_fighter['y']))
@@ -3556,31 +3536,7 @@ class GameServer:
         battle['turn'] += 1
         turn = battle['turn']
 
-        def get_element_correction(hitter_element: int, target_element: int) -> float:
-            if hitter_element == 3: # Fire
-                if target_element == 2: return 0.6
-                if target_element == 4: return 1.5
-            elif hitter_element == 1: # Earth
-                if target_element == 2: return 1.7
-                if target_element == 4: return 0.6
-            elif hitter_element == 2: # Water
-                if target_element == 3: return 1.7
-                if target_element == 1: return 0.6
-            elif hitter_element == 4: # Wind
-                if target_element == 3: return 0.4
-                if target_element == 1: return 1.7
-            elif hitter_element == 0: # Normal
-                if target_element in (1, 2, 3, 4): return 1.3
-            return 1.0
-
-        def calculate_atk_damage(atk: int, def_val: int, hitter_element: int, target_element: int) -> int:
-            element_corr = get_element_correction(hitter_element, target_element)
-            rand_val = 0.9 + (random.random() * 0.2) # 0.9 to 1.1
-            base_dmg = atk * (atk / max(1, atk + def_val/2.0))
-            if atk < 50:
-                base_dmg += atk * 0.5
-            est = base_dmg * element_corr * rand_val
-            return max(1, int(round(est)))
+        calculate_atk_damage = self.calculate_atk_damage
 
         def _hp_pkt(x, y, val):
             p = PacketWriter()
@@ -3594,7 +3550,6 @@ class GameServer:
             p.write_8(x).write_8(y).write_8(0x1a).write_32(val)
             return p
 
-        # Collect actions
         # Collect actions
         actions_to_process = []
         p_act = battle['pending_actions'].get((4, 2))

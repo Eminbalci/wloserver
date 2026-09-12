@@ -9,7 +9,7 @@ import logging
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
-from server.network import PacketWriter
+from server.network import PacketWriter, send_system_msg
 
 logger = logging.getLogger("WLO_Server")
 
@@ -239,11 +239,7 @@ class MailSystem:
         except Exception as e:
             logger.error(f"[MailSystem] Error deleting mail: {e}")
 
-    async def send_system_msg(self, session, msg: str):
-        if not session or not msg:
-            return
-        sys_pkt = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(msg)
-        await session.send_packet(sys_pkt)
+    send_system_msg = staticmethod(send_system_msg)
 
 
 GLOBAL_MAIL_SYSTEM = MailSystem()

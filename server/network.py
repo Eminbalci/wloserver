@@ -1,4 +1,5 @@
 import struct
+from typing import Any
 
 XOR_KEY = 173
 SIGNATURE = 17652  # 0x44F4
@@ -122,3 +123,12 @@ class PacketWriter:
         header = struct.pack('<HH', SIGNATURE, len(payload))
         full_packet = header + payload
         return xor_crypt(full_packet)
+
+
+async def send_system_msg(session: Any, msg: str) -> None:
+    """Sends a system announcement / prompt notification (AC 23 Sub 57) to the client."""
+    if not session or not msg:
+        return
+    pkt = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(msg)
+    await session.send_packet(pkt)
+
