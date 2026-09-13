@@ -109,13 +109,18 @@ class TestRobinsonRaftChestCascade(unittest.IsolatedAsyncioTestCase):
 
     @classmethod
     def tearDownClass(cls):
-        if os.path.exists(cls.test_db):
-            try:
-                os.remove(cls.test_db)
-            except Exception:
-                pass
         GLOBAL_CHEST_SYSTEM.db_path = "wlo_server.db"
         GLOBAL_CHEST_SYSTEM._ensure_tables()
+        import gc, time
+        gc.collect()
+        if os.path.exists(cls.test_db):
+            for _ in range(10):
+                try:
+                    os.remove(cls.test_db)
+                    break
+                except Exception:
+                    gc.collect()
+                    time.sleep(0.05)
 
     async def asyncSetUp(self):
         conn = sqlite3.connect(self.test_db)

@@ -16,6 +16,7 @@ import os
 import json
 import sqlite3
 import logging
+from contextlib import contextmanager
 from typing import Dict, List, Any, Optional, Tuple, Set, Union
 
 logger = logging.getLogger("WLO_Server")
@@ -29,10 +30,16 @@ class DynamicDataManager:
         self._ensure_tables()
         self._seed_default_dynamic_data()
 
+    @contextmanager
     def get_connection(self):
+        """Yields a managed SQLite connection that guarantees transaction commit/rollback and closure."""
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _ensure_tables(self):
         try:

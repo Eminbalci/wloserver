@@ -6,6 +6,7 @@ Ported from C# InstanceManager & dungeon handlers
 import time
 import sqlite3
 import logging
+from contextlib import contextmanager
 from typing import Dict, List, Optional
 from dataclasses import dataclass, field
 
@@ -47,6 +48,16 @@ class InstanceManager:
         self._load_templates()
         self._ensure_tables()
 
+    @contextmanager
+    def _get_connection(self):
+        """Yields a managed SQLite connection that guarantees closure."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _load_templates(self):
         self.TEMPLATES.clear()
         try:
@@ -77,29 +88,26 @@ class InstanceManager:
 
     def _ensure_tables(self):
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS char_instances (
-                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
-                    char_id INTEGER NOT NULL,
-                    instance_id INTEGER NOT NULL,
-                    completed_at REAL,
-                    UNIQUE(char_id, instance_id)
-                )
-            """)
-            conn.commit()
-            conn.close()
+            with self._get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS char_instances (
+                        pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        char_id INTEGER NOT NULL,
+                        instance_id INTEGER NOT NULL,
+                        completed_at REAL,
+                        UNIQUE(char_id, instance_id)
+                    )
+                """)
         except Exception as e:
             logger.error(f"[InstanceManager] DB Init Error: {e}")
 
     def can_enter_today(self, char_id: int, instance_id: int) -> bool:
         try:
-            conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                "SELECT completed_at FROM char_instances WHERE char_id = ? AND instance_id = ?",
-                (char_id, instance_id)
-            ).fetchone()
-            conn.close()
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT completed_at FROM char_instances WHERE char_id = ? AND instance_id = ?",
+                    (char_id, instance_id)
+                ).fetchone()
             if not row:
                 return True
             # 24-hour daily reset
@@ -177,13 +185,11 @@ class InstanceManager:
 
         # Record daily clear
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                INSERT OR REPLACE INTO char_instances (char_id, instance_id, completed_at)
-                VALUES (?, ?, ?)
-            """, (leader.char_id, template.instance_id, time.time()))
-            conn.commit()
-            conn.close()
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO char_instances (char_id, instance_id, completed_at)
+                    VALUES (?, ?, ?)
+                """, (leader.char_id, template.instance_id, time.time()))
         except Exception as e:
             logger.error(f"[InstanceManager] DB Error completing instance: {e}")
 

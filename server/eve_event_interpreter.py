@@ -76,9 +76,11 @@ def set_session_quest_state(session: Any, quest_id: Any, state: int, step: int =
                 import sqlite3
                 import json
                 conn = sqlite3.connect(db_path)
-                conn.execute("UPDATE characters SET quests = ? WHERE id = ?", (json.dumps(session.quests), session.char_id))
-                conn.commit()
-                conn.close()
+                try:
+                    conn.execute("UPDATE characters SET quests = ? WHERE id = ?", (json.dumps(session.quests), session.char_id))
+                    conn.commit()
+                finally:
+                    conn.close()
             except Exception as e:
                 logger.debug(f"[EveInterpreter] Failed to auto-persist quests for char {session.char_id}: {e}")
 
@@ -655,13 +657,14 @@ class EveEventInterpreter:
                     await GLOBAL_QUEST_ENGINE.send_companion_reward(server, session, companion_id, pet_name)
                     await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"{pet_name} has joined your party!"))
                     if companion_id in (12032, 12178):
-                        # Complete Robinson recruitment quests (Mark.dat 902/903 and event 12040/12047)
+                        # Complete Robinson recruitment quests (Mark.dat 902/903 and event 12040/12047/15283)
                         set_session_quest_state(session, 902, 2, step=1)
                         set_session_quest_state(session, 903, 2, step=1)
                         set_session_quest_state(session, 12040, 2, step=1)
                         set_session_quest_state(session, 12047, 2, step=1)
-                        for q_id in (902, 903, 12040, 12047):
-                            await session.send_packet(PacketWriter().write_8(24).write_8(5).write_16(q_id).write_8(2))
+                        set_session_quest_state(session, 15283, 2, step=1)
+                        for q_id in (902, 903, 12040, 12047, 15283):
+                            await session.send_packet(PacketWriter().write_8(24).write_8(5).write_16(q_id).write_8(1))
                         if hasattr(session, 'quests') and session.quests:
                             await session.send_packet(PacketWriter().write_8(24).write_8(4).write_16(len(session.quests)))
                     from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER

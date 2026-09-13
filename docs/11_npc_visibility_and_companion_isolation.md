@@ -10,6 +10,11 @@ In official Wonderland Online, story companions (such as Roca, Robinson, Niss, C
 3. **Map-Specific Visibility Lifecycles**:
    - **Map 12000 (Kelan Village Outdoors)**: Roca (`CID 32`) is strictly hidden outdoors; grave cutscene copy (`CID 34`) is visible only during Quest 13052 ("Death of Roca's Father") prior to recruitment; `CID 36` is permanently hidden.
    - **Map 12001 (Kelan Chief's House)**: Roca (`CID 2`) is canonically stationed next to Chief (`CID 1`) and remains visible until recruited.
+   - **Map 10035 (Kelan Beach)**: Robinson (`CID 1`) is visible until recruited. Chests (CID 2-7) visibility is determined by their individual quest states.
+4. **Per-Player Actor Visibility Cache Reset**: `session._actor_visibility` is reset to `{}` at the start of every `send_map_info` call so each map load starts with a clean state.
+5. **PreEvent Subentry Matching**: On the first matching condition sub-entry in `evaluate_map_preevents` and `is_npc_visible_to_player`, processing breaks to prevent later non-matching subs from overriding the first-match rule (matching C# `PreEventInterpreter.cs` behavior).
+6. **Companion Recruitment Despawn**: `send_companion_reward` iterates all NPCs on the current map using `GLOBAL_PREEVENT_INTERPRETER._get_all_map_npcs` and hides each one matching the recruited companion via `send_actor_hide`.
+7. **Mini-Map Exclamation Mark Clearance** (`Mark.dat` / `AC 24 Sub 5`): The client clears mini-map `!` icons when receiving `AC 24:5 [quest_id, 1]`. Byte `1` signals completion; byte `2` was incorrect and kept the icon visible. All completion packets now correctly send byte `1`.
 
 ---
 

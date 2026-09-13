@@ -3,7 +3,6 @@ Wonderland Online Character Deletion Handler (AC 35)
 Ported from C# Src/Network/ActionCodes/AC35.cs
 """
 
-import sqlite3
 import logging
 from server.network import PacketWriter
 

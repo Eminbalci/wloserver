@@ -25,6 +25,7 @@ venv/
 !requirements.txt
 
 # Specific client and debug directories
+logs/
 scratch/
 cursor/
 data/*

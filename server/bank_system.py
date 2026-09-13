@@ -5,6 +5,7 @@ Ported from C# Equip.cs and Character.cs bank/storage handlers
 
 import sqlite3
 import logging
+from contextlib import contextmanager
 from typing import Dict, List, Optional, Any
 
 from server.network import PacketWriter
@@ -22,37 +23,45 @@ class BankManager:
         self.db_path = db_path
         self._ensure_tables()
 
-    def _ensure_tables(self):
+    @contextmanager
+    def _get_connection(self):
+        """Yields a managed SQLite connection that guarantees closure."""
+        conn = sqlite3.connect(self.db_path)
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS char_bank_gold (
-                    char_id INTEGER PRIMARY KEY,
-                    gold INTEGER DEFAULT 0
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS char_bank_items (
-                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
-                    char_id INTEGER NOT NULL,
-                    vault_slot INTEGER NOT NULL,
-                    item_id INTEGER NOT NULL,
-                    count INTEGER NOT NULL,
-                    extra_data TEXT
-                )
-            """)
-            conn.commit()
+            with conn:
+                yield conn
+        finally:
             conn.close()
+
+    def _ensure_tables(self) -> None:
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS char_bank_gold (
+                        char_id INTEGER PRIMARY KEY,
+                        gold INTEGER DEFAULT 0
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS char_bank_items (
+                        pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        char_id INTEGER NOT NULL,
+                        vault_slot INTEGER NOT NULL,
+                        item_id INTEGER NOT NULL,
+                        count INTEGER NOT NULL,
+                        extra_data TEXT
+                    )
+                """)
         except Exception as e:
             logger.error(f"[BankManager] DB Init Error: {e}")
 
     def get_bank_gold(self, char_id: int) -> int:
         try:
-            conn = sqlite3.connect(self.db_path)
-            row = conn.execute("SELECT gold FROM char_bank_gold WHERE char_id = ?", (char_id,)).fetchone()
-            conn.close()
-            return row[0] if row else 0
-        except Exception:
+            with self._get_connection() as conn:
+                row = conn.execute("SELECT gold FROM char_bank_gold WHERE char_id = ?", (char_id,)).fetchone()
+                return row[0] if row else 0
+        except Exception as e:
+            logger.error(f"[BankManager] Error fetching bank gold for char {char_id}: {e}")
             return 0
 
     async def deposit_gold(self, server, player, amount: int) -> bool:
@@ -66,13 +75,11 @@ class BankManager:
         new_bank = current_bank + amount
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                INSERT OR REPLACE INTO char_bank_gold (char_id, gold)
-                VALUES (?, ?)
-            """, (player.char_id, new_bank))
-            conn.commit()
-            conn.close()
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO char_bank_gold (char_id, gold)
+                    VALUES (?, ?)
+                """, (player.char_id, new_bank))
 
             await player.send_packet(PacketWriter().write_8(26).write_8(4).write_32(player.gold))
             sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
@@ -99,10 +106,8 @@ class BankManager:
         player.gold += amount
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("UPDATE char_bank_gold SET gold = ? WHERE char_id = ?", (new_bank, player.char_id))
-            conn.commit()
-            conn.close()
+            with self._get_connection() as conn:
+                conn.execute("UPDATE char_bank_gold SET gold = ? WHERE char_id = ?", (new_bank, player.char_id))
 
             await player.send_packet(PacketWriter().write_8(26).write_8(4).write_32(player.gold))
             sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
@@ -146,15 +151,14 @@ class BankManager:
         server.save_player_to_db(player)
         return True
 
-    def get_vault_items(self, char_id: int) -> list:
+    def get_vault_items(self, char_id: int) -> List[Dict[str, Any]]:
         """Retrieves stored vault items for the specified character."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            rows = conn.execute(
-                "SELECT vault_slot, item_id, count, extra_data FROM char_bank_items WHERE char_id = ? ORDER BY vault_slot ASC",
-                (char_id,)
-            ).fetchall()
-            conn.close()
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT vault_slot, item_id, count, extra_data FROM char_bank_items WHERE char_id = ? ORDER BY vault_slot ASC",
+                    (char_id,)
+                ).fetchall()
             items = []
             for r in rows:
                 items.append({
@@ -217,25 +221,23 @@ class BankManager:
 
         # Save to DB
         try:
-            conn = sqlite3.connect(self.db_path)
-            existing = conn.execute(
-                "SELECT count FROM char_bank_items WHERE char_id = ? AND vault_slot = ?",
-                (player.char_id, target_slot)
-            ).fetchone()
+            with self._get_connection() as conn:
+                existing = conn.execute(
+                    "SELECT count FROM char_bank_items WHERE char_id = ? AND vault_slot = ?",
+                    (player.char_id, target_slot)
+                ).fetchone()
 
-            if existing:
-                new_cnt = existing[0] + amount
-                conn.execute(
-                    "UPDATE char_bank_items SET count = ? WHERE char_id = ? AND vault_slot = ?",
-                    (new_cnt, player.char_id, target_slot)
-                )
-            else:
-                conn.execute(
-                    "INSERT INTO char_bank_items (char_id, vault_slot, item_id, count, extra_data) VALUES (?, ?, ?, ?, ?)",
-                    (player.char_id, target_slot, item_id, amount, "")
-                )
-            conn.commit()
-            conn.close()
+                if existing:
+                    new_cnt = existing[0] + amount
+                    conn.execute(
+                        "UPDATE char_bank_items SET count = ? WHERE char_id = ? AND vault_slot = ?",
+                        (new_cnt, player.char_id, target_slot)
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO char_bank_items (char_id, vault_slot, item_id, count, extra_data) VALUES (?, ?, ?, ?, ?)",
+                        (player.char_id, target_slot, item_id, amount, "")
+                    )
         except Exception as e:
             logger.error(f"[BankManager] DB error depositing item: {e}")
             return False
@@ -255,40 +257,36 @@ class BankManager:
         from server.gameserver import add_item_to_inventory
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            row = conn.execute(
-                "SELECT item_id, count FROM char_bank_items WHERE char_id = ? AND vault_slot = ?",
-                (player.char_id, vault_slot)
-            ).fetchone()
-
-            if not row:
-                conn.close()
-                sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Item not found in Props Keeper!")
-                await player.send_packet(sys_msg)
-                return False
-
-            item_id, current_cnt = row[0], row[1]
-            withdraw_cnt = min(amount, current_cnt)
-
-            actual_slot = add_item_to_inventory(player, item_id, amount=withdraw_cnt)
-            if actual_slot is None:
-                conn.close()
-                sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Inventory is full!")
-                await player.send_packet(sys_msg)
-                return False
-
-            if current_cnt <= withdraw_cnt:
-                conn.execute(
-                    "DELETE FROM char_bank_items WHERE char_id = ? AND vault_slot = ?",
+            with self._get_connection() as conn:
+                row = conn.execute(
+                    "SELECT item_id, count FROM char_bank_items WHERE char_id = ? AND vault_slot = ?",
                     (player.char_id, vault_slot)
-                )
-            else:
-                conn.execute(
-                    "UPDATE char_bank_items SET count = ? WHERE char_id = ? AND vault_slot = ?",
-                    (current_cnt - withdraw_cnt, player.char_id, vault_slot)
-                )
-            conn.commit()
-            conn.close()
+                ).fetchone()
+
+                if not row:
+                    sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Item not found in Props Keeper!")
+                    await player.send_packet(sys_msg)
+                    return False
+
+                item_id, current_cnt = row[0], row[1]
+                withdraw_cnt = min(amount, current_cnt)
+
+                actual_slot = add_item_to_inventory(player, item_id, amount=withdraw_cnt)
+                if actual_slot is None:
+                    sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Inventory is full!")
+                    await player.send_packet(sys_msg)
+                    return False
+
+                if current_cnt <= withdraw_cnt:
+                    conn.execute(
+                        "DELETE FROM char_bank_items WHERE char_id = ? AND vault_slot = ?",
+                        (player.char_id, vault_slot)
+                    )
+                else:
+                    conn.execute(
+                        "UPDATE char_bank_items SET count = ? WHERE char_id = ? AND vault_slot = ?",
+                        (current_cnt - withdraw_cnt, player.char_id, vault_slot)
+                    )
 
             # Sync inventory & vault
             await player.send_packet(server.build_inventory_packet(player))

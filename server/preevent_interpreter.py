@@ -99,7 +99,10 @@ class PreEventInterpreter:
                             })
 
                     if subentries:
-                        preevent_list.append(subentries)
+                        preevent_list.append({
+                            "click_id": ev_id,
+                            "subentries": subentries
+                        })
                         loaded_preevents_count += 1
 
                 if preevent_list:
@@ -109,6 +112,71 @@ class PreEventInterpreter:
             logger.info(f"[PreEventInterpreter] Loaded {loaded_preevents_count} PreEvents across {len(self._map_preevents)} maps from eve.Emg.")
         except Exception as e:
             logger.error(f"[PreEventInterpreter] Error parsing PreEvents from eve.Emg: {e}", exc_info=True)
+
+    def is_same_pet_or_companion(self, id1: int, id2: int) -> bool:
+        """
+        Determines whether two entity IDs represent the same companion across NPC template and pet IDs.
+        Direct 1:1 Port from C# Player.IsSamePetOrCompanion.
+        """
+        if id1 == id2 and id1 > 0:
+            return True
+        if id1 == 0 or id2 == 0:
+            return False
+
+        # Robinson: 12032 (NPC TID) <-> 12178 (Pet TID)
+        if (id1 in (12032, 12178)) and (id2 in (12032, 12178)):
+            return True
+        # S.Monkey: 17162 (NPC TID) <-> 10727 (Pet TID)
+        if (id1 in (17162, 10727)) and (id2 in (17162, 10727)):
+            return True
+        # Roca: 14161 (mourning), 14162 (standard/village), 14001 (companion)
+        if (id1 in (14161, 14162, 14001)) and (id2 in (14161, 14162, 14001)):
+            return True
+        # Niss: 14081 (standard), 14002 (companion), 12003 (quest definition)
+        if (id1 in (14081, 14002, 12003)) and (id2 in (14081, 14002, 12003)):
+            return True
+        # Clive: 14163 (NPC), 14003 (companion), 12002 (quest definition)
+        if (id1 in (14163, 14003, 12002)) and (id2 in (14163, 14003, 12002)):
+            return True
+        # Fred: 14164 (NPC), 14004 (companion), 12004 (quest definition)
+        if (id1 in (14164, 14004, 12004)) and (id2 in (14164, 14004, 12004)):
+            return True
+        # Elin: 14165 (NPC), 14005 (companion), 12006 (quest definition)
+        if (id1 in (14165, 14005, 12006)) and (id2 in (14165, 14005, 12006)):
+            return True
+        # Sam: 14166 (NPC), 14006 (companion), 12005 (quest definition)
+        if (id1 in (14166, 14006, 12005)) and (id2 in (14166, 14006, 12005)):
+            return True
+        # Shizune: 14167 (NPC), 14007 (companion), 12015 (quest definition)
+        if (id1 in (14167, 14007, 12015)) and (id2 in (14167, 14007, 12015)):
+            return True
+        # Suzan: 14168 (NPC), 14008 (companion), 12008 (quest definition)
+        if (id1 in (14168, 14008, 12008)) and (id2 in (14168, 14008, 12008)):
+            return True
+
+        return False
+
+    def _get_map_npc(self, map_id: int, click_id: int, session=None) -> Optional[Any]:
+        if session and hasattr(session, "server") and session.server and hasattr(session.server, "map_npcs"):
+            for npc in session.server.map_npcs.get(map_id, []):
+                cid = getattr(npc, "click_id", None) or (npc.get("click_id") if isinstance(npc, dict) else None)
+                if cid == click_id:
+                    return npc
+
+        from server.npc_manager import GLOBAL_NPC_MANAGER
+        for npc in GLOBAL_NPC_MANAGER.map_npcs.get(map_id, []):
+            cid = getattr(npc, "click_id", None) or (npc.get("click_id") if isinstance(npc, dict) else None)
+            if cid == click_id:
+                return npc
+        return None
+
+    def _get_all_map_npcs(self, map_id: int, session=None) -> List[Any]:
+        if session and hasattr(session, "server") and session.server and hasattr(session.server, "map_npcs"):
+            npcs = session.server.map_npcs.get(map_id)
+            if npcs:
+                return npcs
+        from server.npc_manager import GLOBAL_NPC_MANAGER
+        return GLOBAL_NPC_MANAGER.map_npcs.get(map_id, [])
 
     async def send_actor_hide(self, session, click_id: int):
         """Dispatches authentic dual hide packets (AC 22:10 despawn frame and AC 22:11 scene isolation frame)."""
@@ -208,6 +276,16 @@ class PreEventInterpreter:
 
         try:
             handled_npcs: Set[int] = set()
+
+            # 1. Hide any companions on this map that have already been recruited by this player (C# lines 33-43)
+            all_npcs = self._get_all_map_npcs(map_id, session)
+            for npc in all_npcs:
+                c_id = getattr(npc, "click_id", None) or (npc.get("click_id") if isinstance(npc, dict) else None)
+                n_name = getattr(npc, "name", "") or (npc.get("name", "") if isinstance(npc, dict) else "")
+                t_id = getattr(npc, "npc_id", 0) or getattr(npc, "template_id", 0) or (npc.get("npc_id", 0) or npc.get("template_id", 0) if isinstance(npc, dict) else 0)
+                if c_id and self.has_recruited_companion(session, n_name, t_id):
+                    await self.send_actor_hide(session, c_id)
+                    handled_npcs.add(c_id)
 
             # Map 10035 (Kelan Beach): Robinson recruitment lifecycle
             if map_id == 10035:
@@ -325,20 +403,39 @@ class PreEventInterpreter:
             # Evaluate eve.Emg PreEvents for this map
             if map_id in self._map_preevents:
                 preevents = self._map_preevents[map_id]
-                for subentries in preevents:
+                for pe in preevents:
+                    pe_cid = pe.get("click_id", 0) if isinstance(pe, dict) else 0
+                    subentries = pe.get("subentries", pe) if isinstance(pe, dict) else pe
                     for sub in subentries:
                         cond_data = sub.get("condition")
                         if self._evaluate_condition_block(session, cond_data):
                             actions = sub.get("actions", [])
-                            for act_data in actions:
-                                action_op = act_data[1] if len(act_data) >= 2 else act_data[0]
-                                if action_op == 0x02:
-                                    click_id = struct.unpack_from("<H", act_data, 2)[0] if len(act_data) >= 4 else struct.unpack_from("<H", act_data, 1)[0]
-                                    if click_id not in handled_npcs:
-                                        handled_npcs.add(click_id)
+                            if actions:
+                                for act_data in actions:
+                                    action_op = act_data[1] if len(act_data) >= 2 else act_data[0]
+                                    if action_op == 0x02:
+                                        click_id = struct.unpack_from("<H", act_data, 2)[0] if len(act_data) >= 4 else struct.unpack_from("<H", act_data, 1)[0]
+                                        if click_id not in handled_npcs:
+                                            handled_npcs.add(click_id)
+                                            await self._execute_action_block(session, act_data)
+                                    else:
                                         await self._execute_action_block(session, act_data)
-                                else:
-                                    await self._execute_action_block(session, act_data)
+                            break
+
+            # Completed one-time despawn events from eve.Emg (C# QuestManager.ReplayActorVisibility)
+            from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
+            map_evs = GLOBAL_EVE_INTERPRETER.map_events.get(map_id, {})
+            for ev_cid, ev in map_evs.items():
+                if ev_cid in handled_npcs:
+                    continue
+                for sub in ev.get("subs", []):
+                    q_id = sub.get("w1", 0)
+                    if q_id > 0 and self._get_player_preevent_state(session, q_id) == 2:
+                        for op in sub.get("opcodes", []):
+                            if op.get("dptr") == 2 and op.get("d2") == 2:
+                                await self.send_actor_hide(session, ev_cid)
+                                handled_npcs.add(ev_cid)
+                                break
         except Exception as e:
             logger.error(f"[PreEventInterpreter] Error evaluating PreEvents for map {map_id}: {e}", exc_info=True)
 
@@ -506,11 +603,20 @@ class PreEventInterpreter:
             if click_id in session._actor_visibility:
                 return bool(session._actor_visibility[click_id])
 
-        # Map 12000 (Kelan Village outdoors): Exact lifecycle visibility rules ported from PreEventInterpreter.cs
-        if map_id == 12000:
-            if click_id in (10, 17, 31):
-                return True
+        # Permanent guideposts (10, 31) and honeycomb (17) on Map 12000 are always visible initially
+        if map_id == 12000 and click_id in (10, 17, 31):
+            return True
 
+        # 1. Check if this map entity is a companion already recruited by the player (all maps)
+        npc_obj = self._get_map_npc(map_id, click_id, session)
+        if npc_obj is not None:
+            n_name = getattr(npc_obj, "name", "") or (npc_obj.get("name", "") if isinstance(npc_obj, dict) else "")
+            n_tid = getattr(npc_obj, "npc_id", 0) or getattr(npc_obj, "template_id", 0) or (npc_obj.get("npc_id", 0) or npc_obj.get("template_id", 0) if isinstance(npc_obj, dict) else 0)
+            if self.has_recruited_companion(session, n_name, n_tid):
+                return False
+
+        # 2. Map 12000 (Kelan Village outdoors): Exact lifecycle visibility rules ported from PreEventInterpreter.cs
+        if map_id == 12000:
             # 1. Father's Statue (33) & Iron Sword (35) (Quest 13098)
             if click_id in (33, 35):
                 return self._get_player_preevent_state(session, 13098) == 1
@@ -566,12 +672,56 @@ class PreEventInterpreter:
             if click_id == 16:
                 return not (self._get_player_preevent_state(session, 13020) in (0, 2) or self._get_player_preevent_state(session, 13021) == 1)
 
-        # Map 12001 (Chief's House): Roca ClickID 2 is visible unless recruited
+        # 3. Map 12001 (Chief's House): Roca ClickID 2 is visible unless recruited
         if map_id == 12001:
             if click_id == 2:
                 return not self.has_recruited_companion(session, "Roca", 14162)
             if click_id == 3:
                 return False
+
+        # 4. Map 10035 (Kelan Beach): Robinson ClickID 1 is visible unless recruited
+        if map_id == 10035 and click_id == 1:
+            return not self.has_recruited_companion(session, "Robinson", 12032)
+
+        # 5. Dynamic PreEvents from eve.Emg across all maps (C# ShouldNpcBeVisible)
+        if map_id in self._map_preevents:
+            preevents = self._map_preevents[map_id]
+            for pe in preevents:
+                pe_cid = pe.get("click_id", 0) if isinstance(pe, dict) else 0
+                subentries = pe.get("subentries", pe) if isinstance(pe, dict) else pe
+                for sub in subentries:
+                    cond_data = sub.get("condition")
+                    if self._evaluate_condition_block(session, cond_data):
+                        actions = sub.get("actions", [])
+                        targets_this_npc = False
+                        if actions:
+                            for act_data in actions:
+                                action_op = act_data[1] if len(act_data) >= 2 else act_data[0]
+                                if action_op == 0x02:
+                                    target_click_id = struct.unpack_from("<H", act_data, 2)[0] if len(act_data) >= 4 else struct.unpack_from("<H", act_data, 1)[0]
+                                    if target_click_id == click_id:
+                                        targets_this_npc = True
+                                        s1 = act_data[9] if len(act_data) >= 11 else act_data[8]
+                                        s2 = act_data[10] if len(act_data) >= 11 else act_data[9]
+                                        if s1 == 0xFF and s2 == 0xFF:
+                                            return False
+                                        else:
+                                            return True
+                        if targets_this_npc:
+                            break
+                        break
+
+        # 6. Completed one-time despawn events from eve.Emg (C# QuestManager.ReplayActorVisibility)
+        from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
+        map_evs = GLOBAL_EVE_INTERPRETER.map_events.get(map_id, {})
+        if click_id in map_evs:
+            ev = map_evs[click_id]
+            for sub in ev.get("subs", []):
+                q_id = sub.get("w1", 0)
+                if q_id > 0 and self._get_player_preevent_state(session, q_id) == 2:
+                    for op in sub.get("opcodes", []):
+                        if op.get("dptr") == 2 and op.get("d2") == 2:
+                            return False
 
         return True
 

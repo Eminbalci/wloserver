@@ -5,8 +5,11 @@ This document details the SQLite data architecture, table schemas, JSON serializ
 ## Database Overview
 
 Wonderland Online Server utilizes two decoupled SQLite databases:
-1. **`wlo_server.db` (Runtime Store)**: Stores dynamic player state, user accounts, character inventory, bank storage, guild rosters, marriage registries, and security tables.
-2. **`ServerDataBase.db` (Static Game Store)**: Holds static NPC definitions, portal coordinates, map names, and base monster templates extracted from official game archives.
+1. **`wlo_server.db` (Runtime Store, located at project root)**: Stores dynamic player state, user accounts, character inventory, bank storage, guild rosters, marriage registries, dynamic game systems, and security tables. Vacuumed and defragmented.
+2. **`server/ServerDataBase.db` (Static Game Store, located at `server/`)**: Holds static NPC definitions, portal coordinates, warp destinations, map names, and base monster templates extracted from official game archives. Vacuumed and defragmented.
+
+> [!IMPORTANT]
+> Redundant, stale, or 0-byte SQLite databases (`ServerData.db`, `database.db`, `static.db`, `wlo.db`, `wonderland.db`, duplicate `server/wlo_server.db`, and temporary test databases) have been purged. Only `wlo_server.db` (root) and `server/ServerDataBase.db` are canonical and loaded by the server runtime.
 
 ## Table Schemas (`wlo_server.db`)
 

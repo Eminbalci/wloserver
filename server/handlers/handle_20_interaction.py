@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 import time
 from server.network import PacketWriter
 
@@ -107,7 +106,7 @@ async def handle(server, session, reader):
         from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
         if not GLOBAL_PREEVENT_INTERPRETER.is_npc_visible_to_player(session, session.map_id, native_click_id):
             logger.info(f"[{session.char_name}] Blocked interaction: NPC/Entity #{native_click_id} is hidden on map {session.map_id}")
-            await session.send_packet(PacketWriter().write_8(22).write_8(10).write_16(native_click_id).write_8(0xFF).write_8(0xFF))
+            await GLOBAL_PREEVENT_INTERPRETER.send_actor_hide(session, native_click_id)
             await session.send_packet(PacketWriter().write_8(20).write_8(8))
             return
 

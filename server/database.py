@@ -1,23 +1,36 @@
 import sqlite3
 import json
-import os
+import logging
+from contextlib import contextmanager
+from typing import Dict, List, Optional, Tuple, Any
+
+logger = logging.getLogger("WLO_Database")
+
 
 class DatabaseManager:
     """Manages SQLite connection and queries for accounts and characters."""
     def __init__(self, db_path: str = "wlo_server.db"):
         self.db_path = db_path
-        self._mem_conn = None
+        self._mem_conn: Optional[sqlite3.Connection] = None
         if db_path == ":memory:":
             self._mem_conn = sqlite3.connect(":memory:")
             self._mem_conn.row_factory = sqlite3.Row
         self.init_db()
 
+    @contextmanager
     def get_connection(self):
+        """Yields a managed SQLite connection that guarantees transaction commit/rollback and closure."""
         if self._mem_conn is not None:
-            return self._mem_conn
+            with self._mem_conn:
+                yield self._mem_conn
+            return
         conn = sqlite3.connect(self.db_path)
         conn.row_factory = sqlite3.Row
-        return conn
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def init_db(self):
         """Initializes tables for accounts and characters if they do not exist."""
@@ -646,9 +659,26 @@ class DatabaseManager:
         except Exception:
             return []
 
-    def get_all_users(self) -> list:
+    def _format_user_rows(self, rows: list, banned_ips_set: set) -> List[Dict[str, Any]]:
+        """Formats user rows with character summaries and IP ban status."""
+        results = []
+        for r in rows:
+            d = dict(r)
+            d['is_ip_banned'] = d.get('last_ip') in banned_ips_set
+            chars = []
+            if d.get('char_list'):
+                for part in d['char_list'].split(','):
+                    if ':' in part:
+                        cid_str, rest = part.split(':', 1)
+                        chars.append({"id": int(cid_str), "summary": rest})
+            d['characters'] = chars
+            results.append(d)
+        return results
+
+    def get_all_users(self) -> List[Dict[str, Any]]:
         """Returns all registered users with their character summaries, last IP, and ban status."""
         try:
+            banned_ips_set = {r['ip'] for r in self.get_banned_ips()}
             with self.get_connection() as conn:
                 rows = conn.execute("""
                     SELECT 
@@ -665,31 +695,19 @@ class DatabaseManager:
                     GROUP BY u.id
                     ORDER BY u.id DESC
                 """).fetchall()
-                banned_ips_set = {r['ip'] for r in self.get_banned_ips()}
-                results = []
-                for r in rows:
-                    d = dict(r)
-                    d['is_ip_banned'] = d.get('last_ip') in banned_ips_set
-                    chars = []
-                    if d.get('char_list'):
-                        for part in d['char_list'].split(','):
-                            if ':' in part:
-                                cid_str, rest = part.split(':', 1)
-                                chars.append({"id": int(cid_str), "summary": rest})
-                    d['characters'] = chars
-                    results.append(d)
-                return results
+                return self._format_user_rows(rows, banned_ips_set)
         except Exception as e:
             logger.error(f"[DB] Error getting all users: {e}")
             return []
 
-    def search_accounts(self, query: str = "") -> list:
+    def search_accounts(self, query: str = "") -> List[Dict[str, Any]]:
         """Searches accounts and characters by IP, Character Name, Username, Character ID, or User ID."""
         q = (query or "").strip()
         if not q:
             return self.get_all_users()
         
         try:
+            banned_ips_set = {r['ip'] for r in self.get_banned_ips()}
             with self.get_connection() as conn:
                 like_q = f"%{q}%"
                 rows = conn.execute("""
@@ -713,21 +731,7 @@ class DatabaseManager:
                     GROUP BY u.id
                     ORDER BY u.id DESC
                 """, (like_q, like_q, like_q, q, q)).fetchall()
-                
-                banned_ips_set = {r['ip'] for r in self.get_banned_ips()}
-                results = []
-                for r in rows:
-                    d = dict(r)
-                    d['is_ip_banned'] = d.get('last_ip') in banned_ips_set
-                    chars = []
-                    if d.get('char_list'):
-                        for part in d['char_list'].split(','):
-                            if ':' in part:
-                                cid_str, rest = part.split(':', 1)
-                                chars.append({"id": int(cid_str), "summary": rest})
-                    d['characters'] = chars
-                    results.append(d)
-                return results
+                return self._format_user_rows(rows, banned_ips_set)
         except Exception as e:
             logger.error(f"[DB] Error searching accounts: {e}")
             return []

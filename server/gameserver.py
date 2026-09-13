@@ -455,7 +455,7 @@ class PlayerSession:
         try:
             self.writer.close()
             await self.writer.wait_closed()
-        except:
+        except (OSError, asyncio.CancelledError, Exception):
             pass
 
 class GameServer:
@@ -465,6 +465,42 @@ class GameServer:
     def sessions(self) -> dict:
         """Exposes active sessions as a dict for compatibility with handlers/web admin."""
         return {getattr(s, 'char_id', id(s)): s for s in self.active_sessions}
+
+    @property
+    def players(self) -> dict:
+        """Exposes active players as a dict for compatibility with combat handlers."""
+        return self.sessions
+
+    def get_pet_template_info(self, pet_id: int) -> Tuple[str, int]:
+        """Retrieves authentic template name and element in a single query with in-memory cache."""
+        if not pet_id:
+            return "Companion", 0
+        if not hasattr(self, "_pet_template_cache"):
+            self._pet_template_cache: Dict[int, Tuple[str, int]] = {}
+        if pet_id in self._pet_template_cache:
+            return self._pet_template_cache[pet_id]
+
+        pet_name = "Companion"
+        pet_element = 0
+        try:
+            conn = sqlite3.connect(self.static_db_path)
+            try:
+                row = conn.execute("SELECT name, element FROM npc_data WHERE id = ?", (pet_id,)).fetchone()
+                if row:
+                    if row[0]:
+                        pet_name = row[0].split(chr(0))[0].strip() or "Companion"
+                    raw_element = int(row[1] or 0)
+                    if raw_element in (88, 89, 90, 91, 92):
+                        pet_element = (raw_element - 88) % 5
+                    else:
+                        pet_element = raw_element % 5
+            finally:
+                conn.close()
+        except Exception as e:
+            logger.error(f"[PetTemplate] Error fetching pet info for #{pet_id}: {e}")
+
+        self._pet_template_cache[pet_id] = (pet_name, pet_element)
+        return pet_name, pet_element
     
     def __init__(self, db_path: str = "wlo_server.db", static_db_path: str = "server/ServerDataBase.db"):
         self.db_path = db_path
@@ -1227,30 +1263,6 @@ class GameServer:
     def get_starter_skill_id(self, body: int, head: int) -> int:
         return self.db.get_starter_skill_id(body, head)
 
-
-    # Skill table order -> offset in SkillData.MBTM (offset // 10)
-    _SKILL_TABLE_ORDER = {
-        11075: 93497,   # Rocco: Summon Dogs Groups
-        11076: 93498,   # Sid: Combo x3 Attack
-        11077: 93499,   # Maria: Cure 2 Players
-        11182: 93543,   # Kurogane: Ghost Hammer
-        11183: 93544,   # More: Deacon Attack
-        12036: 93572,   # Betty: Leap
-        12049: 93581,   # Konno Tsuruko: Fire Dance
-        12051: 93582,   # Jessica: Note
-        12053: 93583,   # Lique: Gallop
-        15003: 93587,   # Newbie's Stunt (fallback / Vanessa)
-        15038: 93622,   # Daniel: Overarm Stumble
-        15039: 93623,   # Nina: Wine Flame
-        15040: 93624,   # Karin: Palm
-        15041: 93625,   # Iris: Love Wish
-        15060: 93641,   # Breillat: Throw Dish
-    }
-
-    def get_skill_table_order(self, skill_id: int) -> int:
-        # Table orders are byte offsets / 10 from SkillData.MBTM
-        return self._SKILL_TABLE_ORDER.get(skill_id, 93587) & 0xFFFF  # fallback: Newbie's Stunt
-
     # Skill grade leveling: EXP needed to advance to next grade
     # Grade 1->2: 100 exp, Grade 2->3: 300, 3->4: 600, etc.
     # Max grade is 20
@@ -1766,11 +1778,6 @@ class GameServer:
         if getattr(session, 'job', 0) == 5:  # Priest
             val = int(val * 1.1)
         return val
-    def build_stats_update_packets(self, session: PlayerSession, levelup: bool = True) -> list[PacketWriter]:
-        """Builds character stats update packets (Send8_1) matching C# emulator perfectly."""
-        session.update_max_hp_sp()
-
-        atk = self.get_player_atk(session)
 
     async def send_stats_update(self, session: PlayerSession, levelup: bool = False):
         """Sends derived stats to the client. Uses AC 8 Sub 1."""
@@ -2115,15 +2122,7 @@ class GameServer:
         # Name
         pet_name = pet.get("name")
         if not pet_name:
-            pet_name = "Companion"
-            try:
-                conn = sqlite3.connect(self.static_db_path)
-                row = conn.execute("SELECT name FROM npc_data WHERE id = ?", (pet.get("pet_id"),)).fetchone()
-                conn.close()
-                if row:
-                    pet_name = row[0].split(chr(0))[0].strip()
-            except Exception as e:
-                logger.error(f"[Companion Spawn Packet] Error fetching name: {e}")
+            pet_name, _ = self.get_pet_template_info(pet.get("pet_id", 0))
         p.write_string(pet_name)
         
         # Trailing fields
@@ -2272,6 +2271,9 @@ class GameServer:
         
         # 1. Map ID Info (23, 138) - always first
         await session.send_packet(PacketWriter().write_8(23).write_8(138))
+
+        # Reset per-player actor visibility cache so each map load starts fresh
+        session._actor_visibility = {}
 
         # 2. Send Map NPCs Batch Registration (AC 22 Sub 4 - Matching C# Map.cs lines 1320-1372)
         npcs = self.map_npcs.get(session.map_id, [])
@@ -2489,12 +2491,14 @@ class GameServer:
         # 1. Check database overrides first
         try:
             conn = sqlite3.connect(self.static_db_path)
-            cursor = conn.execute("SELECT dstMap, dstX, dstY FROM portal_overrides WHERE mapID = ? AND portalID = ?", (map_id, portal_id))
-            row = cursor.fetchone()
-            conn.close()
-            if row:
-                logger.info(f"[Portal] DB OVERRIDE: map {map_id} portal {portal_id} -> Map {row[0]} ({row[1]}, {row[2]})")
-                return row[0], row[1], row[2]
+            try:
+                cursor = conn.execute("SELECT dstMap, dstX, dstY FROM portal_overrides WHERE mapID = ? AND portalID = ?", (map_id, portal_id))
+                row = cursor.fetchone()
+                if row:
+                    logger.info(f"[Portal] DB OVERRIDE: map {map_id} portal {portal_id} -> Map {row[0]} ({row[1]}, {row[2]})")
+                    return row[0], row[1], row[2]
+            finally:
+                conn.close()
         except Exception as e:
             logger.error(f"[Portal] Failed to query portal_overrides: {e}")
 
@@ -2752,65 +2756,64 @@ class GameServer:
         
         raw_battle_npc_id = override_sprite_id if override_sprite_id > 0 else npc_id
         
-        db_path = os.path.join(os.path.dirname(__file__), 'ServerDataBase.db')
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(self.static_db_path)
         conn.row_factory = sqlite3.Row
         db_mon = None
-        
-        candidates = [
-            dec_no_offset,
-            dec_with_offset,
-            dec_no_offset + 27000,
-            dec_with_offset + 27000,
-            dec_no_offset + 10000,
-            dec_with_offset + 10000,
-            npc_base
-        ]
-        
-        battle_npc_id = dec_no_offset
-        for cand_id in candidates:
-            db_mon = conn.execute("SELECT * FROM npc_data WHERE id=?", (cand_id,)).fetchone()
-            if db_mon:
-                battle_npc_id = cand_id
-                break
+        try:
+            candidates = [
+                dec_no_offset,
+                dec_with_offset,
+                dec_no_offset + 27000,
+                dec_with_offset + 27000,
+                dec_no_offset + 10000,
+                dec_with_offset + 10000,
+                npc_base
+            ]
             
-        # 3rd fallback: map_npcs lookup
-        if not db_mon:
-            map_npcs = self.map_npcs.get(session.map_id, [])
-            map_npc_match = next((n for n in map_npcs if n.get('click_id') == click_id), None)
-            if map_npc_match:
-                true_npc_id = map_npc_match.get('npc_id', 0)
-                true_dec_no = (true_npc_id & 0xFFFF) ^ 0x5209
-                true_dec_with = true_dec_no - 9
-                true_cands = [
-                    true_dec_no,
-                    true_dec_with,
-                    true_dec_no + 27000,
-                    true_dec_with + 27000,
-                    true_dec_no + 10000,
-                    true_dec_with + 10000,
-                    true_npc_id
-                ]
-                for cand_id in true_cands:
-                    db_mon = conn.execute("SELECT * FROM npc_data WHERE id=?", (cand_id,)).fetchone()
-                    if db_mon:
-                        battle_npc_id = cand_id
-                        break
+            battle_npc_id = dec_no_offset
+            for cand_id in candidates:
+                db_mon = conn.execute("SELECT * FROM npc_data WHERE id=?", (cand_id,)).fetchone()
+                if db_mon:
+                    battle_npc_id = cand_id
+                    break
                 
-                if not db_mon:
-                    try:
-                        import json
-                        with open(os.path.join(os.path.dirname(__file__), 'data', 'npc.json'), 'r', encoding='utf-8') as f:
-                            npc_names = json.load(f)
-                        npc_name = npc_names.get(str(true_npc_id))
-                        if npc_name:
-                            db_mon = conn.execute("SELECT * FROM npc_data WHERE name LIKE ? ORDER BY level ASC", (npc_name + "%",)).fetchone()
-                            if db_mon:
-                                battle_npc_id = db_mon['id']
-                    except Exception as e:
-                        logger.error(f"Error in NPC name lookup fallback: {e}")
+            # 3rd fallback: map_npcs lookup
+            if not db_mon:
+                map_npcs = self.map_npcs.get(session.map_id, [])
+                map_npc_match = next((n for n in map_npcs if n.get('click_id') == click_id), None)
+                if map_npc_match:
+                    true_npc_id = map_npc_match.get('npc_id', 0)
+                    true_dec_no = (true_npc_id & 0xFFFF) ^ 0x5209
+                    true_dec_with = true_dec_no - 9
+                    true_cands = [
+                        true_dec_no,
+                        true_dec_with,
+                        true_dec_no + 27000,
+                        true_dec_with + 27000,
+                        true_dec_no + 10000,
+                        true_dec_with + 10000,
+                        true_npc_id
+                    ]
+                    for cand_id in true_cands:
+                        db_mon = conn.execute("SELECT * FROM npc_data WHERE id=?", (cand_id,)).fetchone()
+                        if db_mon:
+                            battle_npc_id = cand_id
+                            break
                     
-        conn.close()
+                    if not db_mon:
+                        try:
+                            import json
+                            with open(os.path.join(os.path.dirname(__file__), 'data', 'npc.json'), 'r', encoding='utf-8') as f:
+                                npc_names = json.load(f)
+                            npc_name = npc_names.get(str(true_npc_id))
+                            if npc_name:
+                                db_mon = conn.execute("SELECT * FROM npc_data WHERE name LIKE ? ORDER BY level ASC", (npc_name + "%",)).fetchone()
+                                if db_mon:
+                                    battle_npc_id = db_mon['id']
+                        except Exception as e:
+                            logger.error(f"Error in NPC name lookup fallback: {e}")
+        finally:
+            conn.close()
 
         if db_mon:
             mon_name = (db_mon['name'] or '').split('\x00')[0].replace('?', '').strip() or 'Monster'
@@ -2885,32 +2888,10 @@ class GameServer:
                 pet_matk = int(round(pet_lvl * 1.4 + pet_int * 2.0))
                 pet_mdef = int(round(pet_lvl * 2.0 + pet_wis * 2.2))
                 
-                # Custom name check
-                pet_name = pet.get("name")
-                if not pet_name:
-                    pet_name = "Companion"
-                    try:
-                        conn = sqlite3.connect(self.static_db_path)
-                        row = conn.execute("SELECT name FROM npc_data WHERE id = ?", (pet.get("pet_id"),)).fetchone()
-                        conn.close()
-                        if row:
-                            pet_name = row[0].split(chr(0))[0].strip()
-                    except Exception as e:
-                        logger.error(f"[Pet Name] Error fetching: {e}")
-                        
-                pet_element = 0
-                try:
-                    conn = sqlite3.connect(self.static_db_path)
-                    row = conn.execute("SELECT element FROM npc_data WHERE id = ?", (pet.get("pet_id"),)).fetchone()
-                    conn.close()
-                    if row:
-                        raw_element = int(row[0] or 0)
-                        if raw_element in (88, 89, 90, 91, 92):
-                            pet_element = (raw_element - 88) % 5
-                        else:
-                            pet_element = raw_element % 5
-                except Exception as e:
-                    logger.error(f"[Pet Element] Error fetching: {e}")
+                # Template name and element check
+                tpl_name, tpl_element = self.get_pet_template_info(pet.get("pet_id", 0))
+                pet_name = pet.get("name") or tpl_name
+                pet_element = tpl_element
 
                 pet_fighter = {
                     'role': 5, 'ftype': 4,
@@ -3139,31 +3120,9 @@ class GameServer:
         pet_matk = int(round(pet_lvl * 1.4 + pet_int * 2.0))
         pet_mdef = int(round(pet_lvl * 2.0 + pet_wis * 2.2))
         
-        pet_name = pet.get("name")
-        if not pet_name:
-            pet_name = "Companion"
-            try:
-                conn = sqlite3.connect(self.static_db_path)
-                row = conn.execute("SELECT name FROM npc_data WHERE id = ?", (pet.get("pet_id"),)).fetchone()
-                conn.close()
-                if row:
-                    pet_name = row[0].split(chr(0))[0].strip()
-            except Exception as e:
-                logger.error(f"[Pet Name] Error fetching: {e}")
-                
-        pet_element = 0
-        try:
-            conn = sqlite3.connect(self.static_db_path)
-            row = conn.execute("SELECT element FROM npc_data WHERE id = ?", (pet.get("pet_id"),)).fetchone()
-            conn.close()
-            if row:
-                raw_element = int(row[0] or 0)
-                if raw_element in (88, 89, 90, 91, 92):
-                    pet_element = (raw_element - 88) % 5
-                else:
-                    pet_element = raw_element % 5
-        except Exception as e:
-            logger.error(f"[Pet Element] Error fetching: {e}")
+        tpl_name, tpl_element = self.get_pet_template_info(pet.get("pet_id", 0))
+        pet_name = pet.get("name") or tpl_name
+        pet_element = tpl_element
 
         return {
             'role': role, 'ftype': 4,
@@ -4200,17 +4159,19 @@ class GameServer:
                 resolved_id = None
                 try:
                     conn = sqlite3.connect(self.static_db_path)
-                    search_name = monster_name.replace('monster', '').replace('mons', '').strip()
-                    rows = conn.execute(
-                        "SELECT id FROM npc_data WHERE name LIKE ?",
-                        (f"%{search_name}%",)
-                    ).fetchall()
-                    for r in rows:
-                        cand_id = str(r[0])
-                        if cand_id in self.drop_tables:
-                            resolved_id = cand_id
-                            break
-                    conn.close()
+                    try:
+                        search_name = monster_name.replace('monster', '').replace('mons', '').strip()
+                        rows = conn.execute(
+                            "SELECT id FROM npc_data WHERE name LIKE ?",
+                            (f"%{search_name}%",)
+                        ).fetchall()
+                        for r in rows:
+                            cand_id = str(r[0])
+                            if cand_id in self.drop_tables:
+                                resolved_id = cand_id
+                                break
+                    finally:
+                        conn.close()
                 except Exception as e:
                     logger.error(f"[Drop] Error resolving monster name {monster_name}: {e}")
                 

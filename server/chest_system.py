@@ -7,7 +7,8 @@ import time
 import random
 import sqlite3
 import logging
-from typing import Dict, List, Optional, Tuple
+from contextlib import contextmanager
+from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass
 
 from server.network import PacketWriter
@@ -34,33 +35,41 @@ class ChestSystem:
         self._ensure_tables()
         self._init_loot_tables()
 
-    def _ensure_tables(self):
+    @contextmanager
+    def _get_connection(self):
+        """Yields a managed SQLite connection that guarantees closure."""
+        conn = sqlite3.connect(self.db_path)
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS charchests (
-                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
-                    char_id INTEGER NOT NULL,
-                    map_id INTEGER NOT NULL,
-                    chest_id INTEGER NOT NULL,
-                    opened_at REAL,
-                    UNIQUE(char_id, map_id, chest_id)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS game_chest_pools (
-                    entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    map_id INTEGER NOT NULL,
-                    chest_id INTEGER NOT NULL,
-                    item_id INTEGER NOT NULL,
-                    item_name VARCHAR(100) NOT NULL,
-                    count INTEGER DEFAULT 1,
-                    weight INTEGER DEFAULT 100,
-                    required_key_id INTEGER DEFAULT 0
-                )
-            """)
-            conn.commit()
+            with conn:
+                yield conn
+        finally:
             conn.close()
+
+    def _ensure_tables(self) -> None:
+        try:
+            with self._get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS charchests (
+                        pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        char_id INTEGER NOT NULL,
+                        map_id INTEGER NOT NULL,
+                        chest_id INTEGER NOT NULL,
+                        opened_at REAL,
+                        UNIQUE(char_id, map_id, chest_id)
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS game_chest_pools (
+                        entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        map_id INTEGER NOT NULL,
+                        chest_id INTEGER NOT NULL,
+                        item_id INTEGER NOT NULL,
+                        item_name VARCHAR(100) NOT NULL,
+                        count INTEGER DEFAULT 1,
+                        weight INTEGER DEFAULT 100,
+                        required_key_id INTEGER DEFAULT 0
+                    )
+                """)
         except Exception as e:
             logger.error(f"[ChestSystem] DB Init Error: {e}")
 
@@ -125,9 +134,8 @@ class ChestSystem:
 
         # 3. Dynamic Database Overrides from game_chest_pools
         try:
-            conn = sqlite3.connect(self.db_path)
-            rows = conn.execute("SELECT map_id, item_id, item_name, count, weight FROM game_chest_pools").fetchall()
-            conn.close()
+            with self._get_connection() as conn:
+                rows = conn.execute("SELECT map_id, item_id, item_name, count, weight FROM game_chest_pools").fetchall()
             db_maps = set()
             for r in rows:
                 m_id, it_id, it_name, cnt, wt = r
@@ -183,12 +191,11 @@ class ChestSystem:
 
     def is_chest_opened(self, char_id: int, map_id: int, chest_id: int, is_permanent: bool = False) -> bool:
         try:
-            conn = sqlite3.connect(self.db_path)
-            row_match = conn.execute(
-                "SELECT opened_at FROM charchests WHERE char_id = ? AND map_id = ? AND chest_id = ?",
-                (char_id, map_id, chest_id)
-            ).fetchone()
-            conn.close()
+            with self._get_connection() as conn:
+                row_match = conn.execute(
+                    "SELECT opened_at FROM charchests WHERE char_id = ? AND map_id = ? AND chest_id = ?",
+                    (char_id, map_id, chest_id)
+                ).fetchone()
             if not row_match or row_match[0] is None:
                 return False
             if is_permanent:
@@ -198,19 +205,18 @@ class ChestSystem:
             if self.default_respawn_seconds > 0 and (time.time() - opened_at) >= self.default_respawn_seconds:
                 return False
             return True
-        except Exception:
+        except Exception as e:
+            logger.debug(f"[ChestSystem] is_chest_opened check: {e}")
             return False
 
     def record_chest_opened(self, char_id: int, map_id: int, chest_id: int) -> None:
         """Records opened chest in charchests SQLite table."""
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                INSERT OR REPLACE INTO charchests (char_id, map_id, chest_id, opened_at)
-                VALUES (?, ?, ?, ?)
-            """, (char_id, map_id, chest_id, time.time()))
-            conn.commit()
-            conn.close()
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO charchests (char_id, map_id, chest_id, opened_at)
+                    VALUES (?, ?, ?, ?)
+                """, (char_id, map_id, chest_id, time.time()))
         except Exception as e:
             logger.error(f"[ChestSystem] DB Error recording chest: {e}")
 
@@ -323,12 +329,11 @@ class ChestSystem:
             return
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            rows = conn.execute(
-                "SELECT chest_id FROM charchests WHERE char_id = ? AND map_id = ?",
-                (player.char_id, map_id)
-            ).fetchall()
-            conn.close()
+            with self._get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT chest_id FROM charchests WHERE char_id = ? AND map_id = ?",
+                    (player.char_id, map_id)
+                ).fetchall()
 
             server = getattr(player, 'server', None)
             map_npcs = getattr(server, 'map_npcs', {}).get(map_id, []) if server else []

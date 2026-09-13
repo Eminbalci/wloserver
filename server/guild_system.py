@@ -6,6 +6,7 @@ Ported from C# wlo.pserver.core/Game/PlayerRelated/Guild.cs and Src/Network/Acti
 import time
 import sqlite3
 import logging
+from contextlib import contextmanager
 from enum import IntEnum
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
@@ -59,88 +60,95 @@ class GuildManager:
         self._ensure_tables()
         self._load_from_db()
 
+    @contextmanager
+    def _get_connection(self):
+        """Yields a managed SQLite connection that guarantees closure."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _ensure_tables(self):
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS guilds (
-                    guild_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    guild_name VARCHAR(50) NOT NULL UNIQUE,
-                    leader_id INTEGER NOT NULL,
-                    leader_name VARCHAR(50) NOT NULL,
-                    icon INTEGER DEFAULT 3402,
-                    rules TEXT DEFAULT '',
-                    created_at REAL
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS guild_members (
-                    char_id INTEGER PRIMARY KEY,
-                    guild_id INTEGER NOT NULL,
-                    char_name VARCHAR(50) NOT NULL,
-                    level INTEGER DEFAULT 1,
-                    job INTEGER DEFAULT 0,
-                    element INTEGER DEFAULT 0,
-                    rank INTEGER DEFAULT 0
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS guild_storage (
-                    pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
-                    guild_id INTEGER NOT NULL,
-                    item_id INTEGER NOT NULL,
-                    count INTEGER NOT NULL
-                )
-            """)
-            conn.commit()
-            conn.close()
+            with self._get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS guilds (
+                        guild_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_name VARCHAR(50) NOT NULL UNIQUE,
+                        leader_id INTEGER NOT NULL,
+                        leader_name VARCHAR(50) NOT NULL,
+                        icon INTEGER DEFAULT 3402,
+                        rules TEXT DEFAULT '',
+                        created_at REAL
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS guild_members (
+                        char_id INTEGER PRIMARY KEY,
+                        guild_id INTEGER NOT NULL,
+                        char_name VARCHAR(50) NOT NULL,
+                        level INTEGER DEFAULT 1,
+                        job INTEGER DEFAULT 0,
+                        element INTEGER DEFAULT 0,
+                        rank INTEGER DEFAULT 0
+                    )
+                """)
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS guild_storage (
+                        pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
+                        guild_id INTEGER NOT NULL,
+                        item_id INTEGER NOT NULL,
+                        count INTEGER NOT NULL
+                    )
+                """)
         except Exception as e:
             logger.error(f"[GuildManager] DB Init Error: {e}")
 
     def _load_from_db(self):
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT * FROM guilds").fetchall()
-            for r in rows:
-                g = Guild(
-                    guild_id=r["guild_id"],
-                    guild_name=r["guild_name"],
-                    leader_id=r["leader_id"],
-                    leader_name=r["leader_name"],
-                    icon=r["icon"] or 3402,
-                    rules=r["rules"] or "",
-                    created_at=r["created_at"] or time.time()
-                )
-                self._guilds[g.guild_id] = g
-
-            # Load members
-            m_rows = conn.execute("SELECT * FROM guild_members").fetchall()
-            for mr in m_rows:
-                gid = mr["guild_id"]
-                if gid in self._guilds:
-                    gm = GuildMember(
-                        char_id=mr["char_id"],
-                        char_name=mr["char_name"],
-                        level=mr["level"],
-                        job=mr["job"],
-                        element=mr["element"],
-                        rank=GuildMemberRank(mr["rank"])
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT * FROM guilds").fetchall()
+                for r in rows:
+                    g = Guild(
+                        guild_id=r["guild_id"],
+                        guild_name=r["guild_name"],
+                        leader_id=r["leader_id"],
+                        leader_name=r["leader_name"],
+                        icon=r["icon"] or 3402,
+                        rules=r["rules"] or "",
+                        created_at=r["created_at"] or time.time()
                     )
-                    self._guilds[gid].members[gm.char_id] = gm
-                    self._player_guild[gm.char_id] = gid
+                    self._guilds[g.guild_id] = g
 
-            # Load storage
-            s_rows = conn.execute("SELECT * FROM guild_storage").fetchall()
-            for sr in s_rows:
-                gid = sr["guild_id"]
-                if gid in self._guilds:
-                    self._guilds[gid].storage.append({
-                        "item_id": sr["item_id"],
-                        "count": sr["count"]
-                    })
+                # Load members
+                m_rows = conn.execute("SELECT * FROM guild_members").fetchall()
+                for mr in m_rows:
+                    gid = mr["guild_id"]
+                    if gid in self._guilds:
+                        gm = GuildMember(
+                            char_id=mr["char_id"],
+                            char_name=mr["char_name"],
+                            level=mr["level"],
+                            job=mr["job"],
+                            element=mr["element"],
+                            rank=GuildMemberRank(mr["rank"])
+                        )
+                        self._guilds[gid].members[gm.char_id] = gm
+                        self._player_guild[gm.char_id] = gid
 
-            conn.close()
+                # Load storage
+                s_rows = conn.execute("SELECT * FROM guild_storage").fetchall()
+                for sr in s_rows:
+                    gid = sr["guild_id"]
+                    if gid in self._guilds:
+                        self._guilds[gid].storage.append({
+                            "item_id": sr["item_id"],
+                            "count": sr["count"]
+                        })
+
             logger.info(f"[GuildManager] Loaded {len(self._guilds)} guilds from DB.")
         except Exception as e:
             logger.error(f"[GuildManager] Error loading guilds: {e}")
@@ -170,21 +178,18 @@ class GuildManager:
         await player.send_packet(PacketWriter().write_8(26).write_8(4).write_32(player.gold))
 
         try:
-            conn = sqlite3.connect(self.db_path)
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO guilds (guild_name, leader_id, leader_name, icon, rules, created_at)
-                VALUES (?, ?, ?, ?, '', ?)
-            """, (name, player.char_id, player.char_name, icon, time.time()))
-            guild_id = cur.lastrowid
+            with self._get_connection() as conn:
+                cur = conn.cursor()
+                cur.execute("""
+                    INSERT INTO guilds (guild_name, leader_id, leader_name, icon, rules, created_at)
+                    VALUES (?, ?, ?, ?, '', ?)
+                """, (name, player.char_id, player.char_name, icon, time.time()))
+                guild_id = cur.lastrowid
 
-            cur.execute("""
-                INSERT INTO guild_members (char_id, guild_id, char_name, level, job, element, rank)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (player.char_id, guild_id, player.char_name, player.level, getattr(player, 'job', 0), player.element, GuildMemberRank.LEADER))
-
-            conn.commit()
-            conn.close()
+                cur.execute("""
+                    INSERT INTO guild_members (char_id, guild_id, char_name, level, job, element, rank)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (player.char_id, guild_id, player.char_name, player.level, getattr(player, 'job', 0), player.element, GuildMemberRank.LEADER))
 
             # Create in memory
             guild = Guild(
@@ -218,9 +223,13 @@ class GuildManager:
             logger.info(f"[GuildManager] Guild <{name}> created by {player.char_name}.")
             return True
         except sqlite3.IntegrityError:
+            player.gold += 100000
+            await player.send_packet(PacketWriter().write_8(26).write_8(4).write_32(player.gold))
             await self.send_system_msg(player, "A guild with that name already exists!")
             return False
         except Exception as e:
+            player.gold += 100000
+            await player.send_packet(PacketWriter().write_8(26).write_8(4).write_32(player.gold))
             logger.error(f"[GuildManager] Error creating guild: {e}", exc_info=True)
             return False
 
@@ -257,13 +266,11 @@ class GuildManager:
 
         # Add member to DB
         try:
-            conn = sqlite3.connect(self.db_path)
-            conn.execute("""
-                INSERT OR REPLACE INTO guild_members (char_id, guild_id, char_name, level, job, element, rank)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (target.char_id, guild_id, target.char_name, target.level, getattr(target, 'job', 0), target.element, GuildMemberRank.MEMBER))
-            conn.commit()
-            conn.close()
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT OR REPLACE INTO guild_members (char_id, guild_id, char_name, level, job, element, rank)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (target.char_id, guild_id, target.char_name, target.level, getattr(target, 'job', 0), target.element, GuildMemberRank.MEMBER))
 
             gm = GuildMember(
                 char_id=target.char_id,

@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 from server.network import PacketWriter
 
 logger = logging.getLogger("WLO_Server")
@@ -51,16 +50,10 @@ async def handle(server, session, reader):
         # Look up pet template name or use custom name
         pet_name = pet_match.get("name")
         if not pet_name:
-            pet_name = "Companion"
-            try:
-                conn = sqlite3.connect(server.static_db_path)
-                conn.row_factory = sqlite3.Row
-                row = conn.execute("SELECT name FROM npc_data WHERE id = ?", (pet_id,)).fetchone()
-                conn.close()
-                if row:
-                    pet_name = row['name'].split(chr(0))[0].strip()
-            except Exception as e:
-                logger.error(f"[Pet Spawn] Error getting name for pet template {pet_id}: {e}")
+            if hasattr(server, "get_pet_template_info"):
+                pet_name, _ = server.get_pet_template_info(pet_id)
+            else:
+                pet_name = "Companion"
         
         spawn.write_string(pet_name)
         spawn.write_16(0)  # Weapon ID placeholder

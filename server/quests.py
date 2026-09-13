@@ -906,17 +906,20 @@ class QuestEngine:
             server.broadcast_to_map(session.map_id, join_anim, exclude_session=session)
 
             # 1. Hide recruited NPC from map (Dual packets: AC 22:10 despawn frame and AC 22:11 scene isolation frame)
-            click_to_hide = 1 if pet_id in (12032, 12178) else getattr(session, 'last_clicked_npc_id', 1)
-            if not hasattr(session, '_actor_visibility') or session._actor_visibility is None:
-                session._actor_visibility = {}
-            session._actor_visibility[click_to_hide] = False
+            from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+            all_npcs = GLOBAL_PREEVENT_INTERPRETER._get_all_map_npcs(session.map_id, session)
+            despawned_any = False
+            for npc in all_npcs:
+                c_id = getattr(npc, "click_id", None) or (npc.get("click_id") if isinstance(npc, dict) else None)
+                n_name = getattr(npc, "name", "") or (npc.get("name", "") if isinstance(npc, dict) else "")
+                t_id = getattr(npc, "npc_id", 0) or getattr(npc, "template_id", 0) or (npc.get("npc_id", 0) or npc.get("template_id", 0) if isinstance(npc, dict) else 0)
+                if c_id and (GLOBAL_PREEVENT_INTERPRETER.is_same_pet_or_companion(t_id, pet_id) or GLOBAL_PREEVENT_INTERPRETER.has_recruited_companion(session, n_name, t_id)):
+                    await GLOBAL_PREEVENT_INTERPRETER.send_actor_hide(session, c_id)
+                    despawned_any = True
 
-            hide10 = PacketWriter().write_8(22).write_8(10).write_16(click_to_hide).write_8(0xFF).write_8(0xFF)
-            hide11 = PacketWriter().write_8(22).write_8(11).write_16(click_to_hide).write_8(0xFF).write_8(0xFF)
-            await session.send_packet(hide10)
-            await session.send_packet(hide11)
-            server.broadcast_to_map(session.map_id, hide10, exclude_session=session)
-            server.broadcast_to_map(session.map_id, hide11, exclude_session=session)
+            click_to_hide = 1 if pet_id in (12032, 12178) else getattr(session, 'last_clicked_npc_id', 1)
+            if not despawned_any and click_to_hide:
+                await GLOBAL_PREEVENT_INTERPRETER.send_actor_hide(session, click_to_hide)
 
             # 2. Add to session.pets
             pet_data = {
@@ -993,10 +996,15 @@ class QuestEngine:
                 set_session_quest_state(session, 903, 2, step=1)
                 set_session_quest_state(session, 12040, 2, step=1)
                 set_session_quest_state(session, 12047, 2, step=1)
-                for q_id in (902, 903, 12040, 12047):
-                    await session.send_packet(PacketWriter().write_8(24).write_8(5).write_16(q_id).write_8(2))
+                set_session_quest_state(session, 15283, 2, step=1)
+                for q_id in (902, 903, 12040, 12047, 15283):
+                    await session.send_packet(PacketWriter().write_8(24).write_8(5).write_16(q_id).write_8(1))
                 if hasattr(session, 'quests') and session.quests:
                     await session.send_packet(PacketWriter().write_8(24).write_8(4).write_16(len(session.quests)))
+
+            from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+            await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
+            await GLOBAL_PREEVENT_INTERPRETER.replay_actor_visibility(server, session, session.map_id)
 
             server.save_player_to_db(session)
             logger.info(f"[QuestEngine] Companion {pet_name} (ID: {pet_id}) recruited successfully for {session.char_name}!")
@@ -1077,13 +1085,13 @@ class QuestEngine:
                 await session.send_packet(pkt1)
                 await session.send_packet(pkt2)
             elif state == QuestState.COMPLETED:
-                pkt = PacketWriter().write_8(24).write_8(5).write_16(quest_id).write_8(int(state))
+                pkt = PacketWriter().write_8(24).write_8(5).write_16(quest_id).write_8(1)
                 await session.send_packet(pkt)
             elif state == QuestState.FAILED:
                 pkt = PacketWriter().write_8(24).write_8(3).write_16(quest_id)
                 await session.send_packet(pkt)
             else:
-                pkt = PacketWriter().write_8(24).write_8(5).write_16(quest_id).write_8(int(state))
+                pkt = PacketWriter().write_8(24).write_8(5).write_16(quest_id).write_8(1)
                 await session.send_packet(pkt)
 
             # Invalidate cached player quests map

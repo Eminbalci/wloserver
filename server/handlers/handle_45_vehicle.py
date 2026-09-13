@@ -10,7 +10,6 @@ import logging
 from typing import Any
 
 from server.network import PacketReader, PacketWriter
-from server.vehicle_system import GLOBAL_VEHICLE_MANAGER
 
 logger = logging.getLogger("WLO_Server")
 

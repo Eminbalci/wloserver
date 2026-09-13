@@ -78,45 +78,73 @@ class PalaceStage:
 
 
 class MonsterDropManager:
-    """Calculates and distributes monster loot among party members."""
+    """Calculates battle monster item drops dynamically from database or static cache."""
 
     def __init__(self):
-        # Default loot table for common monster drops
-        self.default_drops: Dict[int, List[Tuple[int, float, int]]] = {
-            # Monster TID -> List of (Item ID, Drop Rate 0.0-1.0, Max Count)
-            1001: [(27001, 0.40, 2), (28014, 0.30, 1), (48030, 0.05, 1)],  # Iron Ore, Apple, Chest
-            1002: [(27020, 0.35, 2), (28020, 0.25, 1), (48030, 0.05, 1)],  # Copper Ore, Meat
-            1003: [(27022, 0.30, 2), (30013, 0.20, 1), (48030, 0.05, 1)],  # Tin Ore, Silk
-            1004: [(27024, 0.30, 2), (30025, 0.25, 1), (48031, 0.05, 1)],  # Clay, Rice Ball
-        }
+        self._cached_drops: Dict[int, List[Dict[str, Any]]] = {}
+
+    def get_drops_for_monster(self, monster_id: int) -> List[Tuple[int, str, int]]:
+        """Returns list of (item_id, item_name, count) dropped by monster."""
+        from server.dynamic_data_manager import GLOBAL_DYNAMIC_DATA
+        if monster_id not in self._cached_drops:
+            self._cached_drops[monster_id] = GLOBAL_DYNAMIC_DATA.get_monster_drops(monster_id)
+
+        entries = self._cached_drops.get(monster_id, [])
+        dropped_items = []
+
+        for e in entries:
+            rate = e.get("drop_rate", 1000)  # 1-10000
+            roll = random.randint(1, 10000)
+            if roll <= rate:
+                min_c = e.get("min_count", 1)
+                max_c = e.get("max_count", 1)
+                count = random.randint(min_c, max_c)
+                dropped_items.append((e["item_id"], e["item_name"], count))
+
+        return dropped_items
 
     def calculate_drops(self, monster_tid: int) -> List[Tuple[int, int]]:
-        drops = []
-        loot_table = self.default_drops.get(monster_tid, [(27001, 0.25, 1), (28014, 0.20, 1)])
-        for item_id, rate, max_cnt in loot_table:
-            if random.random() <= rate:
-                cnt = random.randint(1, max_cnt)
-                drops.append((item_id, cnt))
-        return drops
+        """Compatibility method returning list of (item_id, count)."""
+        drops = self.get_drops_for_monster(monster_tid)
+        return [(item_id, count) for item_id, _, count in drops]
+
+    def reload_drops(self, dynamic_mgr=None):
+        self._cached_drops.clear()
+        logger.info("[MonsterDropManager] Reloaded dynamic monster drops cache.")
 
 
 class PalaceTrialManager:
     """Manages the 12 Zodiac Palace Trials and rewards."""
 
+    ZODIAC_STAGES = [
+        (1, "Aries Palace", 201, 10000, 5000),
+        (2, "Taurus Palace", 202, 15000, 7500),
+        (3, "Gemini Palace", 203, 20000, 10000),
+        (4, "Cancer Palace", 204, 25000, 12500),
+        (5, "Leo Palace", 205, 30000, 15000),
+        (6, "Virgo Palace", 206, 35000, 17500),
+        (7, "Libra Palace", 207, 40000, 20000),
+        (8, "Scorpio Palace", 208, 45000, 22500),
+        (9, "Sagittarius Palace", 209, 50000, 25000),
+        (10, "Capricorn Palace", 210, 55000, 27500),
+        (11, "Aquarius Palace", 211, 60000, 30000),
+        (12, "Pisces Palace", 212, 100000, 50000),
+    ]
+
     def __init__(self):
         self.palaces: List[PalaceStage] = [
-            PalaceStage(1, "Aries Palace (Koç)", 1001, 15000, 450, 48030),
-            PalaceStage(2, "Taurus Palace (Boğa)", 1002, 22000, 520, 48030),
-            PalaceStage(3, "Gemini Palace (İkizler)", 1003, 30000, 600, 48030),
-            PalaceStage(4, "Cancer Palace (Yengeç)", 1004, 38000, 680, 48031),
-            PalaceStage(5, "Leo Palace (Aslan)", 1005, 48000, 780, 48031),
-            PalaceStage(6, "Virgo Palace (Başak)", 1006, 58000, 850, 48031),
-            PalaceStage(7, "Libra Palace (Terazi)", 1007, 70000, 950, 48032),
-            PalaceStage(8, "Scorpio Palace (Akrep)", 1008, 85000, 1050, 48032),
-            PalaceStage(9, "Sagittarius Palace (Yay)", 1009, 100000, 1200, 48032),
-            PalaceStage(10, "Capricorn Palace (Oğlak)", 1010, 120000, 1350, 48033),
-            PalaceStage(11, "Aquarius Palace (Kova)", 1011, 150000, 1500, 48033),
-            PalaceStage(12, "Pisces Palace (Balık)", 1012, 200000, 1800, 48033),
+            PalaceStage(1, "Aries Palace", 1001, 15000, 450, 48030),
+            PalaceStage(2, "Taurus Palace", 1002, 22000, 520, 48030),
+            PalaceStage(3, "Gemini Palace", 1003, 30000, 600, 48030),
+            PalaceStage(4, "Cancer Palace", 1004, 38000, 680, 48031),
+            PalaceStage(5, "Leo Palace", 1005, 48000, 780, 48031),
+            PalaceStage(6, "Virgo Palace", 1006, 58000, 850, 48031),
+            PalaceStage(7, "Libra Palace", 1007, 70000, 950, 48032),
+            PalaceStage(8, "Scorpio Palace", 1008, 85000, 1050, 48032),
+            PalaceStage(9, "Sagittarius Palace", 1009, 100000, 1200, 48032),
+            PalaceStage(10, "Capricorn Palace", 1010, 120000, 1350, 48033),
+            PalaceStage(11, "Aquarius Palace", 1011, 150000, 1500, 48033),
+            PalaceStage(12, "Pisces Palace", 1012, 200000, 1800, 48033),
         ]
 
     def get_stage(self, stage_num: int) -> Optional[PalaceStage]:
@@ -131,7 +159,6 @@ class PalaceTrialManager:
             return False
 
         from server.gameserver import add_item_to_inventory
-        # Grant Zodiac Trial Chest
         add_item_to_inventory(session, stage.reward_chest_item_id, 1)
 
         sys_msg = PacketWriter().write_8(23).write_8(57).write_8(0).write_string(
@@ -303,56 +330,6 @@ class AdvancedBattleManager:
         elif pattern == AOETargetPattern.ALL_8:
             return list(range(8))
         return [primary_pos]
-
-
-class MonsterDropManager:
-    """Calculates battle monster item drops dynamically from database or static cache."""
-
-    def __init__(self):
-        self._cached_drops: Dict[int, List[Dict[str, Any]]] = {}
-
-    def get_drops_for_monster(self, monster_id: int) -> List[Tuple[int, str, int]]:
-        """Returns list of (item_id, item_name, count) dropped by monster."""
-        from server.dynamic_data_manager import GLOBAL_DYNAMIC_DATA
-        if monster_id not in self._cached_drops:
-            self._cached_drops[monster_id] = GLOBAL_DYNAMIC_DATA.get_monster_drops(monster_id)
-
-        entries = self._cached_drops.get(monster_id, [])
-        dropped_items = []
-
-        for e in entries:
-            rate = e.get("drop_rate", 1000)  # 1-10000
-            roll = random.randint(1, 10000)
-            if roll <= rate:
-                min_c = e.get("min_count", 1)
-                max_c = e.get("max_count", 1)
-                count = random.randint(min_c, max_c)
-                dropped_items.append((e["item_id"], e["item_name"], count))
-
-        return dropped_items
-
-    def reload_drops(self, dynamic_mgr=None):
-        self._cached_drops.clear()
-        logger.info("[MonsterDropManager] Reloaded dynamic monster drops cache.")
-
-
-class PalaceTrialManager:
-    """Manages 12 Zodiac Palace Trial waves and rewards."""
-
-    ZODIAC_STAGES = [
-        (1, "Aries Palace", 201, 10000, 5000),
-        (2, "Taurus Palace", 202, 15000, 7500),
-        (3, "Gemini Palace", 203, 20000, 10000),
-        (4, "Cancer Palace", 204, 25000, 12500),
-        (5, "Leo Palace", 205, 30000, 15000),
-        (6, "Virgo Palace", 206, 35000, 17500),
-        (7, "Libra Palace", 207, 40000, 20000),
-        (8, "Scorpio Palace", 208, 45000, 22500),
-        (9, "Sagittarius Palace", 209, 50000, 25000),
-        (10, "Capricorn Palace", 210, 55000, 27500),
-        (11, "Aquarius Palace", 211, 60000, 30000),
-        (12, "Pisces Palace", 212, 100000, 50000),
-    ]
 
 
 # Global singleton instance

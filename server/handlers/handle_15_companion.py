@@ -1,5 +1,4 @@
 import logging
-import sqlite3
 from server.network import PacketWriter
 
 logger = logging.getLogger("WLO_Server")
@@ -78,15 +77,8 @@ async def handle(server, session, reader):
                 
                 # Look up pet template name
                 pet_name = "Companion"
-                try:
-                    conn = sqlite3.connect(server.static_db_path)
-                    conn.row_factory = sqlite3.Row
-                    row = conn.execute("SELECT name FROM npc_data WHERE id = ?", (pet_id,)).fetchone()
-                    conn.close()
-                    if row:
-                        pet_name = row['name'].strip('\x00').strip()
-                except Exception as e:
-                    logger.error(f"[Pet Spawn] Error getting name for pet template {pet_id}: {e}")
+                if hasattr(server, "get_pet_template_info"):
+                    pet_name, _ = server.get_pet_template_info(pet_id)
                 
                 spawn.write_string(pet_name)
                 spawn.write_16(0)  # Weapon ID placeholder
@@ -199,12 +191,24 @@ async def handle(server, session, reader):
             await GLOBAL_VEHICLE_MANAGER.dismount_vehicle(server, session)
             return
 
-        slot = reader.read_8() if reader.remaining_bytes() >= 1 else 0
-        logger.info(f"[{session.char_name}] AC 15 Sub 9 action received: slot={slot}")
+        slot = 0
+        item_id_param = 0
+        if reader.remaining_bytes() >= 3:
+            slot = reader.read_8()
+            item_id_param = reader.read_16()
+        elif reader.remaining_bytes() == 2:
+            item_id_param = reader.read_16()
+        elif reader.remaining_bytes() == 1:
+            slot = reader.read_8()
+
+        logger.info(f"[{session.char_name}] AC 15 Sub 9 action received: slot={slot}, item_id={item_id_param}")
 
         vehicle_item_id = 0
+        if item_id_param > 0 and ((48000 <= item_id_param <= 48050) or (36000 <= item_id_param <= 36050) or (34100 <= item_id_param <= 34200) or GLOBAL_VEHICLE_MANAGER.get_template(item_id_param)):
+            vehicle_item_id = item_id_param
+
         # 1. Check item at specified inventory slot
-        if slot > 0:
+        if not vehicle_item_id and slot > 0:
             item = None
             if hasattr(server, 'get_item_at_slot') and callable(getattr(server, 'get_item_at_slot', None)):
                 try:
@@ -309,34 +313,17 @@ async def handle(server, session, reader):
         server.broadcast_to_map(session.map_id, p18, exclude_session=session)
 
     elif sub == 7:  # Board / Enter Placed Vehicle (Authentic AC 15 Sub 7)
+        from server.vehicle_system import GLOBAL_VEHICLE_MANAGER
         vehicle_item_id = reader.read_16() if reader.remaining_bytes() >= 2 else getattr(session, 'active_vehicle_id', 0)
+        if not vehicle_item_id:
+            vehicle_item_id = 48016
         logger.info(f"[{session.char_name}] Board placed vehicle #{vehicle_item_id}")
-        session.riding_vehicle = True
-        session.active_vehicle_id = vehicle_item_id
-        # Server confirms boarding: AC 15 Sub 10
-        # Format: [15, 10, char_id(4), vehicle_id(2)]
-        p10 = (
-            PacketWriter()
-            .write_8(15)
-            .write_8(10)
-            .write_32(session.char_id)
-            .write_16(vehicle_item_id)
-        )
-        await session.send_packet(p10)
-        server.broadcast_to_map(session.map_id, p10, exclude_session=session)
+        await GLOBAL_VEHICLE_MANAGER.mount_vehicle(server, session, vehicle_item_id)
 
     elif sub == 10:  # Packup / Dismount Placed Vehicle (Authentic AC 15 Sub 10)
-        vehicle_item_id = reader.read_16() if reader.remaining_bytes() >= 2 else getattr(session, 'active_vehicle_id', 0)
-        logger.info(f"[{session.char_name}] Packup/Dismount vehicle #{vehicle_item_id}")
-        session.riding_vehicle = False
-        # Server confirms packup and despawns vehicle: AC 15 Sub 15 followed by Sub 11
-        p15 = PacketWriter().write_8(15).write_8(15).write_32(session.char_id).write_16(vehicle_item_id)
-        await session.send_packet(p15)
-        server.broadcast_to_map(session.map_id, p15, exclude_session=session)
-
-        p11 = PacketWriter().write_8(15).write_8(11).write_8(21).write_32(session.char_id)
-        await session.send_packet(p11)
-        server.broadcast_to_map(session.map_id, p11, exclude_session=session)
+        from server.vehicle_system import GLOBAL_VEHICLE_MANAGER
+        logger.info(f"[{session.char_name}] Packup/Dismount vehicle")
+        await GLOBAL_VEHICLE_MANAGER.dismount_vehicle(server, session)
 
     elif sub == 13:  # Vehicle Navigation Orientation / Ping
         logger.debug(f"[{session.char_name}] Vehicle navigation sync received (AC 15 Sub 13)")

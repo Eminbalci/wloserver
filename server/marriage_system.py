@@ -6,6 +6,7 @@ Ported from C# wlo.pserver.core/Game/PlayerRelated/MarriageManager.cs
 import time
 import sqlite3
 import logging
+from contextlib import contextmanager
 from typing import Dict, Optional
 from dataclasses import dataclass, field
 
@@ -40,46 +41,50 @@ class MarriageManager:
         self._ensure_tables()
         self._load_from_db()
 
+    @contextmanager
     def _get_connection(self):
+        """Yields a managed SQLite connection that guarantees closure (except for shared :memory:)."""
         if self._shared_conn is not None:
-            return self._shared_conn
-        return sqlite3.connect(self.db_path)
+            with self._shared_conn:
+                yield self._shared_conn
+        else:
+            conn = sqlite3.connect(self.db_path)
+            try:
+                with conn:
+                    yield conn
+            finally:
+                conn.close()
 
     def _ensure_tables(self):
         try:
-            conn = self._get_connection()
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS charmarriage (
-                    husband_id INTEGER PRIMARY KEY,
-                    husband_name VARCHAR(50) NOT NULL,
-                    wife_id INTEGER NOT NULL UNIQUE,
-                    wife_name VARCHAR(50) NOT NULL,
-                    marriage_date REAL
-                )
-            """)
-            conn.commit()
-            if self._shared_conn is None:
-                conn.close()
+            with self._get_connection() as conn:
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS charmarriage (
+                        husband_id INTEGER PRIMARY KEY,
+                        husband_name VARCHAR(50) NOT NULL,
+                        wife_id INTEGER NOT NULL UNIQUE,
+                        wife_name VARCHAR(50) NOT NULL,
+                        marriage_date REAL
+                    )
+                """)
         except Exception as e:
             logger.error(f"[MarriageManager] DB Init Error: {e}")
 
     def _load_from_db(self):
         try:
-            conn = self._get_connection()
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute("SELECT * FROM charmarriage").fetchall()
-            for r in rows:
-                rec = MarriageRecord(
-                    husband_id=r["husband_id"],
-                    husband_name=r["husband_name"],
-                    wife_id=r["wife_id"],
-                    wife_name=r["wife_name"],
-                    marriage_date=r["marriage_date"] or time.time()
-                )
-                self._marriages[rec.husband_id] = rec
-                self._marriages[rec.wife_id] = rec
-            if self._shared_conn is None:
-                conn.close()
+            with self._get_connection() as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute("SELECT * FROM charmarriage").fetchall()
+                for r in rows:
+                    rec = MarriageRecord(
+                        husband_id=r["husband_id"],
+                        husband_name=r["husband_name"],
+                        wife_id=r["wife_id"],
+                        wife_name=r["wife_name"],
+                        marriage_date=r["marriage_date"] or time.time()
+                    )
+                    self._marriages[rec.husband_id] = rec
+                    self._marriages[rec.wife_id] = rec
             logger.info(f"[MarriageManager] Loaded {len(rows)} marriage records from DB.")
         except Exception as e:
             logger.error(f"[MarriageManager] Error loading marriages: {e}")
@@ -123,11 +128,8 @@ class MarriageManager:
 
         # Delete from DB
         try:
-            conn = self._get_connection()
-            conn.execute("DELETE FROM charmarriage WHERE husband_id = ? OR wife_id = ?", (player.char_id, player.char_id))
-            conn.commit()
-            if self._shared_conn is None:
-                conn.close()
+            with self._get_connection() as conn:
+                conn.execute("DELETE FROM charmarriage WHERE husband_id = ? OR wife_id = ?", (player.char_id, player.char_id))
 
             spouse_id = rec.get_spouse_id(player.char_id)
             self._marriages.pop(rec.husband_id, None)
@@ -142,6 +144,8 @@ class MarriageManager:
             logger.info(f"[MarriageManager] Divorce processed between {rec.husband_name} and {rec.wife_name}.")
             return True
         except Exception as e:
+            player.gold += cost
+            await player.send_packet(PacketWriter().write_8(26).write_8(4).write_32(player.gold))
             logger.error(f"[MarriageManager] Error processing divorce: {e}", exc_info=True)
             return False
 
@@ -200,14 +204,11 @@ class MarriageManager:
 
         # Save to DB
         try:
-            conn = self._get_connection()
-            conn.execute("""
-                INSERT INTO charmarriage (husband_id, husband_name, wife_id, wife_name, marriage_date)
-                VALUES (?, ?, ?, ?, ?)
-            """, (proposer.char_id, proposer.char_name, target.char_id, target.char_name, time.time()))
-            conn.commit()
-            if self._shared_conn is None:
-                conn.close()
+            with self._get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO charmarriage (husband_id, husband_name, wife_id, wife_name, marriage_date)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (proposer.char_id, proposer.char_name, target.char_id, target.char_name, time.time()))
 
             rec = MarriageRecord(
                 husband_id=proposer.char_id,
@@ -235,6 +236,8 @@ class MarriageManager:
             logger.info(f"[MarriageManager] {proposer.char_name} and {target.char_name} are now married.")
             return True
         except Exception as e:
+            proposer.gold += 60000
+            await proposer.send_packet(PacketWriter().write_8(26).write_8(4).write_32(proposer.gold))
             logger.error(f"[MarriageManager] Error recording marriage: {e}", exc_info=True)
             return False
 
