@@ -95,8 +95,97 @@ class GmCommandProcessor:
                 else:
                     await cls._send_reply(session, f"Player {target_name} not found.")
 
+            elif cmd == "save":
+                server.save_player_to_db(session)
+                await cls._send_reply(session, "Player session saved to database.")
+
+            elif cmd == "pet" and len(args) >= 2:
+                subcmd = args[0].lower()
+                if subcmd == "add":
+                    pet_id = int(args[1])
+                    pet_name = args[2] if len(args) >= 3 else f"Pet #{pet_id}"
+                    if not hasattr(session, 'pets') or session.pets is None:
+                        session.pets = []
+                    if len(session.pets) >= 4:
+                        await cls._send_reply(session, "Pet roster full (max 4 pets).")
+                        return True
+                    new_pet = {
+                        "id": pet_id,
+                        "pet_id": pet_id,
+                        "name": pet_name,
+                        "level": 10,
+                        "hp": 500,
+                        "max_hp": 500,
+                        "sp": 200,
+                        "max_sp": 200,
+                        "amity": 100,
+                        "str": 15,
+                        "con": 15,
+                        "int": 15,
+                        "wis": 15,
+                        "agi": 15,
+                        "exp": 0,
+                        "potential": 0,
+                        "in_battle": False
+                    }
+                    session.pets.append(new_pet)
+                    server.save_player_to_db(session)
+                    await server.send_pet_list(session)
+                    await cls._send_reply(session, f"Added pet {pet_name} (ID: {pet_id}) to party.")
+                elif subcmd == "del":
+                    slot = int(args[1])
+                    if not hasattr(session, 'pets') or not session.pets or slot < 1 or slot > len(session.pets):
+                        await cls._send_reply(session, f"Invalid pet slot {slot}.")
+                        return True
+                    removed = session.pets.pop(slot - 1)
+                    server.save_player_to_db(session)
+                    await server.send_pet_list(session)
+                    await cls._send_reply(session, f"Deleted pet in slot {slot} ({removed.get('name', 'Pet')}).")
+                else:
+                    return False
+
+            elif cmd == "quest":
+                if not args:
+                    await cls._send_reply(session, "Usage: :quest <reset|clear|set|status> [args]")
+                    return True
+                subcmd = args[0].lower()
+                from server.eve_event_interpreter import get_session_quest_state, set_session_quest_state
+                from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+
+                if subcmd in ("clear", "reset") and len(args) == 1:
+                    session.quests = []
+                    if hasattr(session, '_player_quests_map'):
+                        session._player_quests_map = None
+                    server.save_player_to_db(session)
+                    await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
+                    await cls._send_reply(session, "Cleared all quests for character.")
+                elif subcmd == "reset" and len(args) >= 2:
+                    qid = int(args[1])
+                    if isinstance(session.quests, list):
+                        session.quests = [q for q in session.quests if int(q.get("quest_id", q.get("id", 0))) != qid]
+                    elif isinstance(session.quests, dict):
+                        session.quests.pop(str(qid), None)
+                    if hasattr(session, '_player_quests_map'):
+                        session._player_quests_map = None
+                    server.save_player_to_db(session)
+                    await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
+                    await cls._send_reply(session, f"Reset quest {qid} to NotStarted.")
+                elif subcmd == "set" and len(args) >= 3:
+                    qid = int(args[1])
+                    qst = int(args[2])
+                    qstep = int(args[3]) if len(args) >= 4 else 1
+                    set_session_quest_state(session, qid, qst, qstep)
+                    server.save_player_to_db(session)
+                    await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
+                    await cls._send_reply(session, f"Set quest {qid} to state {qst}, step {qstep}.")
+                elif subcmd == "status":
+                    qlist_str = str(session.quests)
+                    await cls._send_reply(session, f"Quests: {qlist_str[:100]}")
+                else:
+                    return False
+
             else:
-                await cls._send_reply(session, f"Unknown command ':{cmd}'. Type ':help' for assistance.")
+                return False
         except Exception as e:
             logger.error(f"[GmCommand] Error executing ':{cmd}': {e}", exc_info=True)
             await cls._send_reply(session, f"Command error: {e}")

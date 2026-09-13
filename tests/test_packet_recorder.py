@@ -212,7 +212,16 @@ class TestProxyBridgeRecorder(unittest.TestCase):
 
         # 2. Connect client and send a C->S packet
         client_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client_sock.connect(("127.0.0.1", listen_port))
+        connected = False
+        for _ in range(15):
+            try:
+                client_sock.connect(("127.0.0.1", listen_port))
+                connected = True
+                break
+            except ConnectionRefusedError:
+                time.sleep(0.1)
+        if not connected:
+            client_sock.connect(("127.0.0.1", listen_port))
 
         client_payload = bytes([24, 1, 0x05, 0x01])  # Quest AC 24
         client_frame = make_test_frame(client_payload, encrypt=True)

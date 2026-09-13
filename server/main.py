@@ -9,7 +9,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from server.gameserver import GameServer
 from server.web_registration import WebRegistrationServer
 
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+from server.logger_config import setup_logging
+
+setup_logging()
 logger = logging.getLogger("Main")
 
 import threading
@@ -53,6 +55,8 @@ def main():
             asyncio.run(run_server_stack(server, web_reg, item_mall_server))
         except KeyboardInterrupt:
             logger.info("Server shut down by keyboard interrupt.")
+        finally:
+            server.save_all_sessions()
     else:
         logger.info("Starting in Modern Desktop GUI mode (Administrator Control Suite)...")
         # Run server network stack in dedicated background thread
@@ -65,6 +69,8 @@ def main():
             start_gui_app(game_server=server, db_path=db_path)
         except Exception as ex:
             logger.error(f"GUI Error: {ex}")
+        finally:
+            server.save_all_sessions()
 
 if __name__ == "__main__":
     main()

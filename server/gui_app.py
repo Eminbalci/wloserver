@@ -960,18 +960,37 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
                 live.element = elem
                 live.reborn = rb
                 live.reborn_job = rb_job
+                live._str_val = s_str
+                live._con_val = s_con
+                live._int_val = s_int
+                live._wis_val = s_wis
+                live._agi_val = s_agi
                 live.str = s_str
                 live.con = s_con
                 live.int = s_int
                 live.wis = s_wis
                 live.agi = s_agi
+                live.points = pts
                 live.stat_points = pts
                 live.potential = pot
                 # Stat packet AC 8 Sub 1
+                loop = getattr(self.game_server, "loop", None) or getattr(live, "loop", None)
                 if self.game_server and hasattr(self.game_server, "send_stats_update"):
-                    asyncio.create_task(self.game_server.send_stats_update(live, levelup=False))
+                    if loop:
+                        safe_run_coroutine(self.game_server.send_stats_update(live, levelup=False), loop)
+                    else:
+                        try:
+                            asyncio.create_task(self.game_server.send_stats_update(live, levelup=False))
+                        except Exception:
+                            pass
                 elif self.game_server and hasattr(self.game_server, "send_stat_packet"):
-                    asyncio.create_task(self.game_server.send_stat_packet(live))
+                    if loop:
+                        safe_run_coroutine(self.game_server.send_stat_packet(live), loop)
+                    else:
+                        try:
+                            asyncio.create_task(self.game_server.send_stat_packet(live))
+                        except Exception:
+                            pass
 
             messagebox.showinfo("Success", f"Character [{self.char_name}] successfully saved to database & live session!")
         except Exception as e:
@@ -1025,6 +1044,23 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
         except Exception as e:
             logger.error(f"[CharEditor] Error updating {col}: {e}")
 
+        # Synchronize live session to prevent live session overwriting DB on tick/save
+        live = self._get_live_session()
+        if live:
+            if hasattr(live, col):
+                setattr(live, col, val)
+            if col == "pets":
+                live.pets = val
+                loop = getattr(self.game_server, "loop", None) or getattr(live, "loop", None)
+                if self.game_server and hasattr(self.game_server, "send_pet_list"):
+                    if loop:
+                        safe_run_coroutine(self.game_server.send_pet_list(live), loop)
+                    else:
+                        try:
+                            asyncio.create_task(self.game_server.send_pet_list(live))
+                        except Exception:
+                            pass
+
     def action_set_quest(self):
         try:
             qid = int(self.ent_q_id.get())
@@ -1072,7 +1108,26 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
             pets = self._get_char_json("pets", [])
             if not isinstance(pets, list):
                 pets = []
-            pets.append({"id": pid, "name": pname, "level": 10, "amity": 100, "hp": 500, "max_hp": 500, "sp": 200, "max_sp": 200})
+            pet_entry = {
+                "id": pid,
+                "pet_id": pid,
+                "name": pname,
+                "level": 10,
+                "amity": 100,
+                "hp": 500,
+                "max_hp": 500,
+                "sp": 200,
+                "max_sp": 200,
+                "in_battle": False,
+                "str": 15,
+                "con": 15,
+                "int": 15,
+                "wis": 15,
+                "agi": 15,
+                "exp": 0,
+                "potential": 0
+            }
+            pets.append(pet_entry)
             self._set_char_json("pets", pets)
             self.load_all_character_data()
             messagebox.showinfo("Pet Added", f"{pname} (ID: {pid}) added to party!")
@@ -1096,7 +1151,7 @@ class CharacterDataEditorDialog(ctk.CTkToplevel if HAS_CTK else tk.Toplevel):
         pid = int(self.tree_pets.item(sel[0])["values"][1])
         pets = self._get_char_json("pets", [])
         if isinstance(pets, list):
-            pets = [p for p in pets if (p if isinstance(p, int) else p.get("id")) != pid]
+            pets = [p for p in pets if (p if isinstance(p, int) else (p.get("pet_id") or p.get("id"))) != pid]
             self._set_char_json("pets", pets)
         self.load_all_character_data()
 
@@ -1626,6 +1681,16 @@ class ModernServerGUI:
         self._build_header()
         self._build_tabview()
         self._schedule_refresh()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        try:
+            if self.game_server and hasattr(self.game_server, "save_all_sessions"):
+                self.game_server.save_all_sessions()
+        except Exception as e:
+            logger.error(f"[GUI] Error saving sessions on window close: {e}")
+        finally:
+            self.root.destroy()
 
     def _configure_styles(self):
         try:
@@ -2712,6 +2777,9 @@ class ModernServerGUI:
         return lbl_val
 
     def _setup_log_pipe(self):
+        from server.logger_config import setup_logging
+        setup_logging()
+
         class TkLogHandler(logging.Handler):
             def __init__(self, text_widget):
                 super().__init__()
@@ -2855,11 +2923,18 @@ class ModernServerGUI:
         logger.info(f"[Broadcast] Global announcement sent: '{msg}'")
 
     def action_kick_all(self):
+        if self.game_server and hasattr(self.game_server, "save_all_sessions"):
+            self.game_server.save_all_sessions()
         if self.game_server and hasattr(self.game_server, "sessions"):
             for s in list(self.game_server.sessions.values()):
                 if hasattr(s, "close"):
                     s.close()
-        messagebox.showinfo("Disconnected", "All active player sessions closed.")
+                elif hasattr(s, "writer") and s.writer:
+                    try:
+                        s.writer.close()
+                    except Exception:
+                        pass
+        messagebox.showinfo("Disconnected", "All active player sessions saved and closed.")
 
     def action_clear_logs(self):
         self.log_text.delete("1.0", tk.END)
@@ -3198,8 +3273,8 @@ class ModernServerGUI:
         except Exception:
             pass
         if hasattr(self.game_server, "loop") and self.game_server.loop:
-            if hasattr(self.game_server, "send_pet_list_packet"):
-                safe_run_coroutine(self.game_server.send_pet_list_packet(s), self.game_server.loop)
+            if hasattr(self.game_server, "send_pet_list"):
+                safe_run_coroutine(self.game_server.send_pet_list(s), self.game_server.loop)
         messagebox.showinfo("Companion Recruited", f"Added companion [{npc_name}] to [{getattr(s, 'char_name', 'Player')}]'s team!")
 
     def action_cheat_leave_npc(self):
@@ -3220,8 +3295,8 @@ class ModernServerGUI:
         except Exception:
             pass
         if hasattr(self.game_server, "loop") and self.game_server.loop:
-            if hasattr(self.game_server, "send_pet_list_packet"):
-                safe_run_coroutine(self.game_server.send_pet_list_packet(s), self.game_server.loop)
+            if hasattr(self.game_server, "send_pet_list"):
+                safe_run_coroutine(self.game_server.send_pet_list(s), self.game_server.loop)
         messagebox.showinfo("Dismissed", f"Dismissed companion [{pname}] from [{getattr(s, 'char_name', 'Player')}].")
 
     def action_give_stat_points(self):

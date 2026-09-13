@@ -78,9 +78,33 @@ Portals are extracted from category offset `6` in `eve.Emg`:
 - Players clicking a chest (`AC 20:1`) trigger `ChestSystem.open_chest()`.
 - Checks `char_chests` table in SQLite:
   - If record exists: Sends `AC 23 Sub 57` notification ("You have already looted this chest!").
-  - If unlooted: Dispenses dynamic items from `DynamicDataManager`, commits record to `char_chests`, and broadcasts `AC 22:10` to render the chest as permanently opened for the player.
+  - If unlooted: Dispenses dynamic items from `DynamicDataManager`, commits record to `char_chests`, and dispatches `AC 22:10 [click_id, 0x01, 0x00]` to render the chest in its opened sprite frame.
+  - **Frame Isolation Rule**: Chest open states (`0x01, 0x00`) and prop frame modifications dispatch single-packet `AC 22:10` ONLY. `AC 22:11` scene isolation frames are strictly avoided for non-concealment updates, preventing client engine despawn cascades across surrounding map chests.
+  - **Map Sync (`sync_opened_chests_on_map`)**: When entering a map, previously looted permanent chests are synchronized using `AC 22:10 [click_id, 0x01, 0x00]` so unopened chests remain visible and intact.
 
 ### 2. Gathering Nodes & Respawn Cycle
 - Nodes (e.g. Coconut Palms `19039`, Iron Veins) switch to `is_broken = True` when harvested.
 - Broadcasts `AC 22:10 [click_id, state=1, 0]` to visually despawn or fell the tree.
 - When `respawn_time` expires (default: 300 seconds), server broadcasts `AC 22:10 [click_id, state=0, 0]` to seamlessly restore the resource.
+
+## Companion & Mount Map Spawning Lifecycle
+
+### 1. Map Spawning Architecture (`spawn_player_companion`)
+When a player enters the game world (`commence_login`) or warps between maps (`warp_player`), their active battle companion and riding mount are summoned to the map grid:
+- **Battle Companion**: If an active companion (`in_battle = True`) is present in the player's roster:
+  1. `AC 19 Sub 4`: Dispatches companion appearance, coordinates, and entity IDs.
+  2. `AC 15 Sub 4`: Attaches companion follow state to the player character.
+  3. `AC 5 Sub 8`: Synchronizes companion status icon and amity indicator.
+- **Riding Mount**: If a pet is set as mounted (`riding = True`):
+  1. `AC 15 Sub 16`: Broadcasts mount attachment to the map viewport with pet model ID.
+- **Viewport Catch-Up (`spawn_existing_map_players`)**: When a player transitions to a new map, the server renders all companions and mounts for players already present in that map zone.
+
+---
+
+## Dynamic Actor Visibility & Interaction Gating
+
+Certain world entities (quest NPCs, cutscene actors, recruited companions) change visibility dynamically:
+- **PreEvent Integration**: [`PreEventInterpreter`](file:///D:/GitHub/Wonderland%20Online/server/preevent_interpreter.py) evaluates bytecode from `eve.Emg` to determine whether an actor should be rendered (`AC 22:10 0x00 0x00`) or hidden (`AC 22:10 0xFF 0xFF`).
+- **Delta Optimization**: Redundant show packets to static props and chests are suppressed to avoid sprite animation frame resets.
+- **Client Interaction Gating**: [`handle_20_interaction.py`](file:///D:/GitHub/Wonderland%20Online/server/handlers/handle_20_interaction.py) verifies `is_npc_visible_to_player` prior to processing click events. Clicks on hidden entities are rejected with despawn confirmation and interface release (`AC 20:8`).
+

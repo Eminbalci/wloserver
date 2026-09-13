@@ -140,6 +140,87 @@ class TestQuestSystem(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.engine._is_npc_match("Villager", 0, "Welling Villager", 14144))
         self.assertFalse(self.engine._is_npc_match("Robinson", 12032, "Ashley", 14013))
 
+    def test_get_quest_state_resolution(self):
+        """Tests authoritative get_quest_state across PlayerQuest, raw dict, and list formats."""
+        s = DummySession()
+        # Not started
+        self.assertEqual(self.engine.get_quest_state(s, 13046), QuestState.NOT_STARTED)
+
+        # In progress via PlayerQuest dict
+        self.engine.get_player_quests_dict(s)[13046] = PlayerQuest(13046, QuestState.IN_PROGRESS, 1)
+        self.assertEqual(self.engine.get_quest_state(s, 13046), QuestState.IN_PROGRESS)
+
+        # Completed via raw session.quests list
+        s._player_quests_map = None
+        s.quests = [{"quest_id": 13046, "state": 2, "step": 2}]
+        self.assertEqual(self.engine.get_quest_state(s, 13046), QuestState.COMPLETED)
+
+    async def test_handle_24_quest_protocol(self):
+        """Tests client AC 24 protocol packets: Sub 1 (step ACK), Sub 5 (status), Sub 6 (pin tracker)."""
+        from server.network import PacketReader
+        from server.handlers.handle_24_quest import handle as handle_24
+
+        s = DummySession()
+        s.server = self.server
+        s.quests = [{"quest_id": 12020, "state": 1, "step": 1}]
+
+        # 1. AC 24 Sub 5 request for active quest state
+        reader = PacketReader(bytes([5]) + (12020).to_bytes(2, "little") + bytes([1]))
+        s.sent_packets.clear()
+        await handle_24(self.server, s, reader)
+        self.assertEqual(len(s.sent_packets), 1)
+        b = s.sent_packets[0].to_bytes()
+        self.assertEqual(b[0], 24)
+        self.assertEqual(b[1], 5)
+        qid = b[2] | (b[3] << 8)
+        self.assertEqual(qid, 12020)
+        self.assertEqual(b[4], int(QuestState.IN_PROGRESS))
+
+        # 2. AC 24 Sub 5 with quest_id=0 (request journal)
+        reader0 = PacketReader(bytes([5, 0, 0, 0]))
+        s.sent_packets.clear()
+        await handle_24(self.server, s, reader0)
+        self.assertTrue(any(p.to_bytes()[0] == 24 and p.to_bytes()[1] == 4 for p in s.sent_packets))
+
+        # 3. AC 24 Sub 1 (Step ACK)
+        reader1 = PacketReader(bytes([1]) + (12020).to_bytes(2, "little") + bytes([2]))
+        s.sent_packets.clear()
+        await handle_24(self.server, s, reader1)
+        self.assertEqual(len(s.sent_packets), 1)
+        b1 = s.sent_packets[0].to_bytes()
+        self.assertEqual(b1[:2], bytes([24, 1]))
+
+        # 4. AC 24 Sub 6 (Pin tracker sync)
+        reader6 = PacketReader(bytes([6]))
+        s.sent_packets.clear()
+        await handle_24(self.server, s, reader6)
+        self.assertEqual(len(s.sent_packets), 1)
+        b6 = s.sent_packets[0].to_bytes()
+        self.assertEqual(b6[:3], bytes([24, 6, 1]))
+
+    async def test_quest_engine_lifecycle_methods(self):
+        """Tests accept_quest, advance_quest_step, complete_quest, and reset_quest."""
+        s = DummySession()
+        s.server = self.server
+        self.assertEqual(self.engine.get_quest_state(s, 7777), QuestState.NOT_STARTED)
+
+        # Accept
+        await self.engine.accept_quest(s, 7777)
+        self.assertEqual(self.engine.get_quest_state(s, 7777), QuestState.IN_PROGRESS)
+        self.assertEqual(self.engine.get_player_quests_dict(s)[7777].step, 1)
+
+        # Advance step
+        await self.engine.advance_quest_step(s, 7777)
+        self.assertEqual(self.engine.get_player_quests_dict(s)[7777].step, 2)
+
+        # Complete
+        await self.engine.complete_quest(self.server, s, 7777)
+        self.assertEqual(self.engine.get_quest_state(s, 7777), QuestState.COMPLETED)
+
+        # Reset
+        await self.engine.reset_quest(s, 7777)
+        self.assertEqual(self.engine.get_quest_state(s, 7777), QuestState.NOT_STARTED)
+
 
 class TestTentSystem(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
@@ -221,5 +302,36 @@ class TestTentManufacture(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(output_items), 1)
 
 
+class TestPreEventActorVisibility(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.server = DummyServer()
+        self.session = DummySession()
+        self.session.map_id = 12000
+        self.interpreter = PreEventInterpreter()
+        self.interpreter.load_preevents("data/eve.Emg")
+
+    async def test_preevents_loaded_and_shiba_inu_visibility(self):
+        """Tests that eve.Emg PreEvents are loaded and Shiba Inu is hidden when quest is in progress."""
+        self.assertGreater(len(self.interpreter._map_preevents), 500)
+        self.assertIn(12000, self.interpreter._map_preevents)
+
+        # Quest 13046 in progress -> NPC 28 (Shiba Inu beside Lina) must be hidden
+        self.session.quests = {"13046": 1}
+        await self.interpreter.sync_per_player_npc_visibility(self.server, self.session, 12000)
+
+        # Verify AC 22:10 packets sent
+        sent_cids = []
+        for p in self.session.sent_packets:
+            b = p.to_bytes()
+            if b[0] == 22 and b[1] == 10:
+                cid = b[2] | (b[3] << 8)
+                st1, st2 = b[4], b[5]
+                sent_cids.append((cid, st1, st2))
+
+        # Must include hide packet for NPC 28
+        self.assertIn((28, 255, 255), sent_cids)
+
+
 if __name__ == "__main__":
     unittest.main()
+

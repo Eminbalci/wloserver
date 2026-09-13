@@ -78,7 +78,7 @@ class QuestDefinition:
     description: str = ""
     required_level: int = 1
     npc_template_id: int = 0
-    category: str = "🏝️ Storyline & Area"
+    category: str = "Storyline & Area"
     area_name: str = "Unknown"
     in_progress_mark_id: int = 0
     completed_mark_id: int = 0
@@ -262,14 +262,14 @@ class QuestEngine:
         a = (area or "").lower()
 
         if any(x in t for x in ["roca", "niss", "clive", "sasha", "xaolan", "sam", "shizune", "elin", "victoria", "angela", "suzuru", "eva", "robinson", "fred", "magellan", "kanako", "charlotte", "rebirth", "reincarnation", "skill master"]):
-            return "👥 Companion & Rebirth"
+            return "Companion & Rebirth"
         if any(x in t for x in ["raft", "canoe", "ship", "boat", "airplane", "rocket", "ufo", "tent", "craftsman", "alchemy", "make a"]):
-            return "🛠️ Crafting & Vehicles"
+            return "Crafting & Vehicles"
         if any(x in t for x in ["whack", "collect", "contest", "quiz", "test", "game"]):
-            return "🎯 Minigames & Challenges"
+            return "Minigames & Challenges"
         if any(x in t for x in ["zodiac", "trial", "ghost", "dragon", "round", "palace", "tower", "cave", "pirate"]):
-            return "🐉 Dungeons & Instances"
-        return "🏝️ Storyline & Area"
+            return "Dungeons & Instances"
+        return "Storyline & Area"
 
     def resolve_default_map_id(self, area: str, title: str, description: str) -> int:
         full = f"{area or ''} {title or ''} {description or ''}".lower()
@@ -591,6 +591,21 @@ class QuestEngine:
 
     def get_quest(self, quest_id: int) -> Optional[QuestDefinition]:
         return self._registered_quests.get(quest_id) or self._master_quests.get(quest_id)
+
+    def get_quest_state(self, session: Any, quest_id: int) -> QuestState:
+        """Retrieves authoritative quest state for session across journal and raw flags."""
+        if not session:
+            return QuestState.NOT_STARTED
+        p_map = self.get_player_quests_dict(session)
+        if quest_id in p_map:
+            return p_map[quest_id].state
+        from server.eve_event_interpreter import get_session_quest_state
+        raw_st = get_session_quest_state(session, quest_id)
+        if raw_st >= 2:
+            return QuestState.COMPLETED
+        elif raw_st == 1:
+            return QuestState.IN_PROGRESS
+        return QuestState.NOT_STARTED
 
     def _is_npc_match(self, pattern: str, target_tid: int, current_name: str, current_tid: int) -> bool:
         if target_tid > 0 and current_tid > 0 and target_tid == current_tid:
@@ -1043,6 +1058,15 @@ class QuestEngine:
             else:
                 pkt = PacketWriter().write_8(24).write_8(5).write_16(quest_id).write_8(int(state))
                 await session.send_packet(pkt)
+
+            # Invalidate cached player quests map
+            if hasattr(session, '_player_quests_map'):
+                session._player_quests_map = None
+
+            server = getattr(session, 'server', None)
+            if server:
+                from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+                await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
         except Exception as e:
             logger.error(f"[QuestEngine] Error sending quest update: {e}", exc_info=True)
 
@@ -1086,10 +1110,19 @@ class QuestEngine:
                 for q in p_map.values()
             ]
 
+            # Persist to characters table via server instance if available
+            srv = getattr(session, 'server', None)
+            if srv and hasattr(srv, 'save_player_to_db'):
+                try:
+                    srv.save_player_to_db(session)
+                except Exception:
+                    pass
+
             # Also persist to charquest table in database
+            db_path = getattr(srv, 'db_path', 'wlo_server.db') if srv else 'wlo_server.db'
             import sqlite3
             try:
-                conn = sqlite3.connect("wlo_server.db")
+                conn = sqlite3.connect(db_path)
                 conn.execute("""
                     CREATE TABLE IF NOT EXISTS charquest (
                         pri_key INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1111,16 +1144,16 @@ class QuestEngine:
     async def accept_quest(self, session, quest_id: int):
         p_map = self.get_player_quests_dict(session)
         p_map[quest_id] = PlayerQuest(quest_id, QuestState.IN_PROGRESS, 1)
-        await self.send_quest_update(session, quest_id, QuestState.IN_PROGRESS, 1)
         self.save_player_quest(session, quest_id)
+        await self.send_quest_update(session, quest_id, QuestState.IN_PROGRESS, 1)
 
     async def advance_quest_step(self, session, quest_id: int):
         p_map = self.get_player_quests_dict(session)
         if quest_id not in p_map:
             p_map[quest_id] = PlayerQuest(quest_id, QuestState.IN_PROGRESS, 1)
         p_map[quest_id].step += 1
-        await self.send_quest_update(session, quest_id, QuestState.IN_PROGRESS, p_map[quest_id].step)
         self.save_player_quest(session, quest_id)
+        await self.send_quest_update(session, quest_id, QuestState.IN_PROGRESS, p_map[quest_id].step)
 
     async def complete_quest(self, server, session, quest_id: int):
         p_map = self.get_player_quests_dict(session)
@@ -1134,8 +1167,10 @@ class QuestEngine:
         if quest:
             await self.grant_rewards(server, session, quest)
 
-        await self.send_quest_update(session, quest_id, QuestState.COMPLETED)
         self.save_player_quest(session, quest_id)
+        await self.send_quest_update(session, quest_id, QuestState.COMPLETED)
+        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+        await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
 
     async def reset_quest(self, session, quest_id: int):
         p_map = self.get_player_quests_dict(session)
@@ -1147,9 +1182,17 @@ class QuestEngine:
         ]
         await self.send_quest_update(session, quest_id, QuestState.FAILED)
 
+        srv = getattr(session, 'server', None)
+        if srv and hasattr(srv, 'save_player_to_db'):
+            try:
+                srv.save_player_to_db(session)
+            except Exception:
+                pass
+
+        db_path = getattr(srv, 'db_path', 'wlo_server.db') if srv else 'wlo_server.db'
         import sqlite3
         try:
-            conn = sqlite3.connect("wlo_server.db")
+            conn = sqlite3.connect(db_path)
             conn.execute("DELETE FROM charquest WHERE charID = ? AND quest_started = ?", (session.char_id, quest_id))
             conn.commit()
             conn.close()

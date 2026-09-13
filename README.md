@@ -17,10 +17,12 @@ Detailed architectural specifications, binary formats, packet catalogs, and subs
 - [Action Code & Packet Handlers Catalog](file:///D:/GitHub/Wonderland%20Online/docs/03_packet_handlers_catalog.md) - Exhaustive reference of all 50+ implemented Action Codes (AC 0 to AC 226) and sub-opcodes mapped to client functions and server handlers.
 - [Turn-Based Combat Engine & Formulas](file:///D:/GitHub/Wonderland%20Online/docs/04_combat_engine.md) - 8v8 turn-based combat cycle, damage formulas, elemental counter cycle, status ailments, Pet capture, Defend/Flee, 12 Zodiac Trials, and PvP duel systems.
 - [Database Schemas & Storage Systems](file:///D:/GitHub/Wonderland%20Online/docs/05_database_and_storage.md) - SQLite relational tables, JSON serialization models, account authentication, dynamic subsystems, and hot-reload architecture.
-- [Quest Engine & PreEvent Bytecode Interpreter](file:///D:/GitHub/Wonderland%20Online/docs/06_quest_and_event_engine.md) - Master Quest engine, Mark.dat parsing, AC 24 quest protocol, eve.Emg PreEvent bytecode interpreter, conditional actor visibility, and dialogue resolution.
+- [Quest Engine & PreEvent Bytecode Interpreter](file:///D:/GitHub/Wonderland%20Online/docs/06_quest_and_event_engine.md) - Master Quest engine, Mark.dat parsing, AC 24 quest protocol, eve.Emg PreEvent bytecode interpreter, authentic quest lifecycle state mapping (`0 = NotStarted`, `1 = InProgress`, `2 = Completed`), item & level condition verification (`unkb1 == 1, 2`), inventory item consumption, dynamic actor visibility & real-time lifecycle synchronization, event branch cascading, opened chest map synchronization, and dialogue resolution.
 - [Items, Compounding & Economy Engine](file:///D:/GitHub/Wonderland%20Online/docs/07_items_and_economy.md) - AC 23:5 inventory serialization, equipment slots, alchemy compounding formulas, Item Mall, bank gold vault, player stalls, and P2P trading.
-- [World Entities, NPCs & Map Engine](file:///D:/GitHub/Wonderland%20Online/docs/08_world_and_entities.md) - 7,545 authentic NPCs from eve.Emg, sprite blinking prevention, waypoint patrol AI, map portals, gathering nodes, and persistent treasure chests.
+- [World Entities, NPCs & Map Engine](file:///D:/GitHub/Wonderland%20Online/docs/08_world_and_entities.md) - 7,545 authentic NPCs from eve.Emg, sprite blinking prevention, waypoint patrol AI, map portals, gathering nodes, and persistent treasure chests with single-packet `AC 22:10` frame isolation.
 - [Administrator Suite & Tooling](file:///D:/GitHub/Wonderland%20Online/docs/09_admin_suite_and_tools.md) - Modern 19-tab Desktop Administrator Suite, in-game GM chat commands, standalone packet recorder proxy bridge, and live game gap analyzer.
+- [Logging & Diagnostics Architecture](file:///D:/GitHub/Wonderland%20Online/docs/10_logging_and_diagnostics.md) - Multi-target rotating file persistence, console streaming, real-time GUI log pipe, and UTF-8 diagnostic formats.
+- [NPC Visibility & Companion Isolation](file:///D:/GitHub/Wonderland%20Online/docs/11_npc_visibility_and_companion_isolation.md) - Dynamic actor visibility, dual-packet despawn (AC 22:10 & 22:11), story companion scene isolation across maps (Roca Kelan Village square vs Chief's House), and quest-state lifecycle mapping.
 
 Decompiled client code references and protocol analysis from `aLogin.exe` are preserved in [decompiled docs/](file:///D:/GitHub/Wonderland%20Online/decompiled%20docs/).
 
@@ -33,14 +35,15 @@ Decompiled client code references and protocol analysis from `aLogin.exe` are pr
 | Module | Description |
 | :--- | :--- |
 | `server/main.py` | Server entry point, configuration loading, database initialization, and TCP listener bind. |
-| `server/gameserver.py` | Central `GameServer` hub, `PlayerSession` state tracking, packet dispatching, and broadcast routing. |
+| `server/gameserver.py` | Central `GameServer` hub, `PlayerSession` state tracking, packet dispatching, inventory removal, and broadcast routing. |
 | `server/network.py` | Protocol framing, XOR-173 encryption/decryption, `PacketReader`, `PacketWriter`, and `send_system_msg`. |
 | `server/database.py` | Thread-safe SQLite data access layer for accounts, characters, items, quests, chests, and bans. |
 | `server/battle_engine.py` | 8v8 turn-based battle manager, damage calculation, status effects, and 12 Zodiac Trials. |
 | `server/battle.py` | Compatibility facade re-exporting symbols (`Fighter`, `BattleManager`) for legacy subsystem imports. |
 | `server/npc_manager.py` | Manages 7,545 authentic NPCs, waypoint pacing loops, idle intervals, and sprite blinking prevention. |
 | `server/eve_loader.py` | Binary parser for 1,119 maps in `data/eve.Emg` (NPCs, portals, chests, mining nodes, bytecode events). |
-| `server/preevent_interpreter.py` | Virtual machine executing `eve.Emg` PreEvent bytecode conditions for dynamic actor visibility. |
+| `server/eve_event_interpreter.py` | Bytecode event VM executing dialogs, warp sequences, quest progression, and conditional branch evaluations (`unkb1 == 1, 2, 3, 5, 15`). |
+| `server/preevent_interpreter.py` | Virtual machine executing `eve.Emg` PreEvent bytecode conditions, quest lifecycle state mapping (`0 = NotStarted`, `1 = InProgress`, `2 = Completed`), and dynamic actor visibility. |
 | `server/quest_manager.py` | Master quest engine, `Mark.dat` binary parser, quest tracking, and AC 24 protocol handling. |
 | `server/dynamic_data_manager.py` | Central manager for hot-reloadable dynamic game tables (drops, crafting, alchemy, chests). |
 | `server/version_validator.py` | Client version validation, `Data\Item.Dat` file integrity checking, and AC 0 0x41 error handling. |
@@ -59,7 +62,7 @@ Decompiled client code references and protocol analysis from `aLogin.exe` are pr
 | `server/reborn_system.py` | AC 23, 26 | Character rebirth transformation, 6 advanced job classes, and stat bonuses. |
 | `server/alchemy_system.py` | AC 23:14 | Item compounding, synthesis ranks, primary material affinity, and Alchemy Books. |
 | `server/gathering_system.py` | AC 23, 62 | AFK gathering loops for mining ores, woodcutting lumber, and fishing. |
-| `server/chest_system.py` | AC 22:10, 23 | Interactive world chests, key requirements, dynamic loot pools, and anti-re-loot. |
+| `server/chest_system.py` | AC 22:10, 23 | Interactive world chests, key requirements, dynamic loot pools, anti-re-loot, and single-packet `AC 22:10` frame isolation. |
 | `server/bank_system.py` | AC 29, 35 | Town bank gold vault deposits/withdrawals and inventory expansion bags. |
 | `server/pvp_system.py` | AC 10, 11 | 1v1 PvP duel requests, PK flag system, PK point penalties, and Imperial Jail. |
 | `server/minigames_system.py` | AC 57, 75, 104 | Lucky Draw wheel, Claw Machine / UFO Catcher, and Gobang board games. |
@@ -74,6 +77,7 @@ Decompiled client code references and protocol analysis from `aLogin.exe` are pr
 | `server/instance_system.py` | AC 10, 22 | Multi-stage instanced party dungeons (Ghost Ship, Maya, Pirate Cove). |
 | `server/security_pin.py` | AC 226 | Secondary 6-digit cryptographic security PIN lock on sensitive operations. |
 | `server/anti_cheat.py` | AC 22 | Velocity vector delta speed checks, teleport bounds, and packet rate limiting. |
+| `server/starter_pack_manager.py` | AC 23:5, 23:6 | Authentic 8-item starter bundle delivery, dynamic DB persistence, and single-dispatch inventory sync. |
 
 ---
 
@@ -137,6 +141,13 @@ Game Master (GM) commands can be executed in the client chat window:
 | `:skill` | `<skill_id> [grade]` | Unlock or level up specific combat skill. |
 | `:propshop` | None | Open the Property / Storage shop interface. |
 | `:clear` | None | Wipe all items from character inventory. |
+| `:save` | None | Force immediate persistence of player session and pets to SQLite. |
+| `:pet add` | `<pet_id> [name]` | Recruit companion directly into party roster. |
+| `:pet del` | `<slot>` | Remove companion from party by slot (1-4). |
+| `:quest reset` | `[quest_id]` | Reset specific quest or all quests for player. |
+| `:quest clear` | None | Clear all quests for player session. |
+| `:quest set` | `<id> <state> [step]` | Set quest state and step for testing. |
+| `:quest status` | None | View raw quest status list. |
 
 ---
 

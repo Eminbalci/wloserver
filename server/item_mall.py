@@ -210,38 +210,62 @@ class ItemMallManager:
     def get_user_points(self, session, db_path: str = "wlo_server.db") -> int:
         if not session:
             return 0
-        if hasattr(session, "im_points"):
+        if hasattr(session, "im_points") and session.im_points is not None:
             return session.im_points
 
+        char_id = getattr(session, "char_id", 0)
         acc_id = getattr(session, "account_id", 0) or getattr(session, "user_id", 0)
-        if not acc_id:
-            return 0
+        if not char_id and not acc_id:
+            return getattr(session, "im_points", 0)
 
         try:
             conn = sqlite3.connect(db_path)
-            try:
-                row = conn.execute("SELECT im_points FROM accounts WHERE id = ?", (acc_id,)).fetchone()
-                points = row[0] if row and row[0] is not None else 500
-            except sqlite3.OperationalError:
-                conn.execute("ALTER TABLE accounts ADD COLUMN im_points INTEGER DEFAULT 500")
-                conn.commit()
-                points = 500
+            points = None
+            if char_id:
+                try:
+                    row = conn.execute("SELECT im_points FROM characters WHERE id = ?", (char_id,)).fetchone()
+                    if row and row[0] is not None:
+                        points = row[0]
+                except sqlite3.OperationalError:
+                    pass
+            if points is None and acc_id:
+                try:
+                    row = conn.execute("SELECT im_points FROM users WHERE id = ?", (acc_id,)).fetchone()
+                    if row and row[0] is not None:
+                        points = row[0]
+                except sqlite3.OperationalError:
+                    pass
             conn.close()
-            session.im_points = points
-            return points
+            final_points = points if points is not None else getattr(session, "im_points", 0)
+            session.im_points = final_points
+            return final_points
         except Exception as e:
-            logger.error(f"[ItemMallManager] Error getting points for account {acc_id}: {e}")
-            return getattr(session, "im_points", 500)
+            logger.error(f"[ItemMallManager] Error getting points: {e}")
+            return getattr(session, "im_points", 0)
 
     def set_user_points(self, session, points: int, db_path: str = "wlo_server.db"):
         if not session:
             return
         session.im_points = max(0, points)
+        char_id = getattr(session, "char_id", 0)
         acc_id = getattr(session, "account_id", 0) or getattr(session, "user_id", 0)
-        if acc_id:
+        if char_id or acc_id:
             try:
                 conn = sqlite3.connect(db_path)
-                conn.execute("UPDATE accounts SET im_points = ? WHERE id = ?", (session.im_points, acc_id))
+                if char_id:
+                    try:
+                        conn.execute("UPDATE characters SET im_points = ? WHERE id = ?", (session.im_points, char_id))
+                    except sqlite3.OperationalError:
+                        pass
+                if acc_id:
+                    try:
+                        conn.execute("UPDATE users SET im_points = ? WHERE id = ?", (session.im_points, acc_id))
+                    except sqlite3.OperationalError:
+                        try:
+                            conn.execute("ALTER TABLE users ADD COLUMN im_points INTEGER DEFAULT 5000")
+                            conn.execute("UPDATE users SET im_points = ? WHERE id = ?", (session.im_points, acc_id))
+                        except Exception:
+                            pass
                 conn.commit()
                 conn.close()
             except Exception as e:
@@ -250,37 +274,62 @@ class ItemMallManager:
     def get_user_bonus_points(self, session, db_path: str = "wlo_server.db") -> int:
         if not session:
             return 0
-        if hasattr(session, "im_bonus_points"):
+        if hasattr(session, "im_bonus_points") and session.im_bonus_points is not None:
             return session.im_bonus_points
 
+        char_id = getattr(session, "char_id", 0)
         acc_id = getattr(session, "account_id", 0) or getattr(session, "user_id", 0)
-        if not acc_id:
-            return 0
+        if not char_id and not acc_id:
+            return getattr(session, "im_bonus_points", 0)
 
         try:
             conn = sqlite3.connect(db_path)
-            try:
-                row = conn.execute("SELECT im_bonus_points FROM accounts WHERE id = ?", (acc_id,)).fetchone()
-                bonus_points = row[0] if row and row[0] is not None else 0
-            except sqlite3.OperationalError:
-                conn.execute("ALTER TABLE accounts ADD COLUMN im_bonus_points INTEGER DEFAULT 0")
-                conn.commit()
-                bonus_points = 0
+            bonus_points = None
+            if char_id:
+                try:
+                    row = conn.execute("SELECT im_bonus_points FROM characters WHERE id = ?", (char_id,)).fetchone()
+                    if row and row[0] is not None:
+                        bonus_points = row[0]
+                except sqlite3.OperationalError:
+                    pass
+            if bonus_points is None and acc_id:
+                try:
+                    row = conn.execute("SELECT im_bonus_points FROM users WHERE id = ?", (acc_id,)).fetchone()
+                    if row and row[0] is not None:
+                        bonus_points = row[0]
+                except sqlite3.OperationalError:
+                    pass
             conn.close()
-            session.im_bonus_points = bonus_points
-            return bonus_points
+            final_bonus = bonus_points if bonus_points is not None else getattr(session, "im_bonus_points", 0)
+            session.im_bonus_points = final_bonus
+            return final_bonus
         except Exception as e:
+            logger.error(f"[ItemMallManager] Error getting bonus points: {e}")
             return getattr(session, "im_bonus_points", 0)
 
     def set_user_bonus_points(self, session, bonus_points: int, db_path: str = "wlo_server.db"):
         if not session:
             return
         session.im_bonus_points = max(0, bonus_points)
+        char_id = getattr(session, "char_id", 0)
         acc_id = getattr(session, "account_id", 0) or getattr(session, "user_id", 0)
-        if acc_id:
+        if char_id or acc_id:
             try:
                 conn = sqlite3.connect(db_path)
-                conn.execute("UPDATE accounts SET im_bonus_points = ? WHERE id = ?", (session.im_bonus_points, acc_id))
+                if char_id:
+                    try:
+                        conn.execute("UPDATE characters SET im_bonus_points = ? WHERE id = ?", (session.im_bonus_points, char_id))
+                    except sqlite3.OperationalError:
+                        pass
+                if acc_id:
+                    try:
+                        conn.execute("UPDATE users SET im_bonus_points = ? WHERE id = ?", (session.im_bonus_points, acc_id))
+                    except sqlite3.OperationalError:
+                        try:
+                            conn.execute("ALTER TABLE users ADD COLUMN im_bonus_points INTEGER DEFAULT 1000")
+                            conn.execute("UPDATE users SET im_bonus_points = ? WHERE id = ?", (session.im_bonus_points, acc_id))
+                        except Exception:
+                            pass
                 conn.commit()
                 conn.close()
             except Exception as e:

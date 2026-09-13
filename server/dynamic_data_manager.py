@@ -659,6 +659,8 @@ class DynamicDataManager:
                         (10036, 1, 12032, "Robinson Crusoe", 1, 0, 0, 1, 1), # Hide once recruited/completed
                         (10001, 5, 12005, "Lost Traveler", 1, 0, 0, 1, 0),
                         (10010, 12, 12010, "Secret Merchant", 0, 102, 1, 0, 0), # Hidden by default, visible during quest 102
+                        (12000, 28, 11003, "Shiba Inu (Lina)", 0, 13047, 1, 0, 0), # Hidden by default, visible only after finding dog and completing quest
+                        (12000, 20, 11003, "Shiba Inu (Village)", 0, 13046, 1, 1, 0), # Hidden by default, visible when quest 13046 is in progress, hidden when completed
                     ]
                     conn.executemany("""
                         INSERT INTO game_npc_visibility (map_id, click_id, npc_id, npc_name, default_visible, required_quest_id, required_quest_state, hide_if_quest_completed, hide_if_companion_recruited)
@@ -737,6 +739,15 @@ class DynamicDataManager:
                         """, mall_data)
 
                 # 20. Seed Starter Items
+                # Check for obsolete, invalid or redundant starter item IDs and resync with authentic items (matching C# VerifyTable)
+                obsolete_count = conn.execute("""
+                    SELECT count(*) FROM game_starter_items 
+                    WHERE item_id IN (23050, 23051, 48050, 57001, 34542, 21742, 34330, 34258, 34332)
+                """).fetchone()[0]
+                if obsolete_count > 0:
+                    logger.info("[DynamicDataManager] Detected obsolete or invalid starter item IDs in SQLite. Reseeding authentic starter pack...")
+                    conn.execute("DELETE FROM game_starter_items")
+
                 starter_count = conn.execute("SELECT count(*) FROM game_starter_items").fetchone()[0]
                 if starter_count == 0:
                     loaded_starter_json = False
@@ -770,16 +781,14 @@ class DynamicDataManager:
 
                     if not loaded_starter_json:
                         default_starters = [
-                            (34038, "Starter Gift 1", 1, 1, "Beginner gift package"),
-                            (34058, "Remote Control", 1, 2, "Auto-combat and assistant remote control"),
-                            (34332, "Mini Dragonfly", 5, 3, "Starter flying mount vehicle"),
-                            (32176, "Spicy Hot Pot", 50, 4, "Full recovery food"),
-                            (34026, "Protective Exp Pill", 10, 5, "Prevents EXP loss upon death"),
-                            (34542, "Substitute Doll", 1, 6, "Prevents companion amity drop upon death"),
-                            (21742, "Goddess Robe", 1, 7, "Starter protective equipment"),
-                            (34330, "Mini HP Potion", 1, 8, "Starter HP healing potions"),
-                            (34190, "10x Holy EXP Potion", 5, 9, "Boosts experience gain"),
-                            (34258, "Training Ticket", 5, 10, "Instant training island pass"),
+                            (34038, "Notepad", 1, 1, "Beginner guide and notepad"),
+                            (34058, "Remote Control", 1, 2, "Auto-combat assistant controller"),
+                            (32176, "Fugu Hot Pot", 50, 3, "Full recovery food"),
+                            (34014, "Tao Rice Ball", 10, 4, "Pet and character food"),
+                            (34026, "Protective EXP Pill", 5, 5, "Prevents EXP loss upon death"),
+                            (34169, "Bamboo Dragonfly", 1, 6, "Starter flying mount vehicle"),
+                            (34190, "10X Holy EXP Potion", 3, 7, "Boosts experience gain"),
+                            (34253, "Training Ticket", 5, 8, "Training island pass"),
                         ]
                         conn.executemany("""
                             INSERT INTO game_starter_items (item_id, item_name, count, order_idx, description)

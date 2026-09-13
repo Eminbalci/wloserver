@@ -216,3 +216,33 @@ The `server/dynamic_data_manager.py` module acts as a central registry for game 
 18. **Weather Engine**: Atmospheric effects per map (`map_weather`).
 19. **Item Mall**: Points Mall and Bonus Mall item catalogs (`item_mall_catalog`).
 20. **Starter Packs**: Beginner gift item bundles (`starter_items`).
+
+## Session & Companion Persistence Lifecycle
+
+### 1. Persistence Architecture
+Player sessions are backed by `PlayerSession` in memory and mirrored to the SQLite `characters` table via `GameServer.save_player_to_db(session)`. All critical gameplay transitions enforce transactional saves:
+- **Battle Resolution**: Win, flee, or defeat commits updated player HP/SP, pet HP/SP/EXP, potential points, and gold.
+- **Companion Mutation**: Capture, recruit, release, amity changes, or stat points trigger immediate DB commits and client synchronization via AC 15 Sub 8 (`send_pet_list`).
+- **Map Transitions & Warps**: Zone changes commit player coordinates and map ID before spawning companions on destination maps.
+- **Server Shutdown**:
+  - `GameServer.save_all_sessions()` iterates through `active_sessions`, guaranteeing zero data loss during server restarts or console termination.
+  - Desktop GUI binds `WM_DELETE_WINDOW` protocol to `save_all_sessions()`.
+  - Disconnect All Players (`action_kick_all`) flushes all session caches before socket termination.
+
+### 2. Authentic 188-Byte Companion Wire Protocol (AC 15 Sub 8)
+WLO clients require an exact 188-byte fixed-width binary record per companion:
+- **Header**: 2 bytes (`[0x0F, 0x08]`).
+- **Pet Record (188 bytes)**:
+  - Byte 0: `slot` (1-4)
+  - Bytes 1-2: `pet_id` (uint16 LE)
+  - Bytes 3-6: `exp` (uint32 LE)
+  - Byte 7: `level` (uint8)
+  - Bytes 8-11: `hp` (uint32 LE)
+  - Bytes 12-13: `sp` (uint16 LE)
+  - Bytes 14-23: `int`, `str`, `con`, `agi`, `wis` (each uint16 LE)
+  - Byte 24: `element` (0: Earth, 1: Water, 2: Fire, 3: Wind)
+  - Byte 25: `amity` (0-100)
+  - Byte 26: `in_battle` flag (0 or 1)
+  - Bytes 27-28: `weapon` item ID (uint16 LE)
+  - Byte 29: `name_len` (uint8)
+  - Bytes 30+: Big5-encoded name bytes followed by static control flags (`01 00 00 00 00 01`) and null-padding up to 188 bytes total.

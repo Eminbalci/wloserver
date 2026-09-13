@@ -476,6 +476,60 @@ async def handle(server, session, reader):
                 session.is_remote_control = not is_rc
                 status = "active" if session.is_remote_control else "inactive"
                 await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Remote control auto-battler is now {status}."))
+
+            elif words[0] == ":save":
+                server.save_player_to_db(session)
+                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Player state successfully saved to database!"))
+
+            elif words[0] == ":pet":
+                if len(words) >= 3 and words[1] == "add":
+                    try:
+                        pet_id = int(words[2])
+                        if not hasattr(session, 'pets') or session.pets is None:
+                            session.pets = []
+                        if len(session.pets) >= 4:
+                            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Your pet roster is full (max 4 pets)."))
+                            return
+                        pet_name = words[3] if len(words) >= 4 else f"Pet #{pet_id}"
+                        new_pet = {
+                            "id": pet_id,
+                            "pet_id": pet_id,
+                            "name": pet_name,
+                            "level": 10,
+                            "hp": 500,
+                            "max_hp": 500,
+                            "sp": 200,
+                            "max_sp": 200,
+                            "amity": 100,
+                            "str": 15,
+                            "con": 15,
+                            "int": 15,
+                            "wis": 15,
+                            "agi": 15,
+                            "exp": 0,
+                            "potential": 0,
+                            "in_battle": False
+                        }
+                        session.pets.append(new_pet)
+                        server.save_player_to_db(session)
+                        await server.send_pet_list(session)
+                        await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Added pet {pet_name} (ID: {pet_id})!"))
+                    except ValueError:
+                        await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Usage: :pet add <pet_id> [name]"))
+                elif len(words) >= 3 and words[1] == "del":
+                    try:
+                        slot = int(words[2])
+                        if not hasattr(session, 'pets') or not session.pets or slot < 1 or slot > len(session.pets):
+                            await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Invalid pet slot {slot}."))
+                            return
+                        removed = session.pets.pop(slot - 1)
+                        server.save_player_to_db(session)
+                        await server.send_pet_list(session)
+                        await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"Deleted pet in slot {slot} ({removed.get('name', 'Pet')})."))
+                    except ValueError:
+                        await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Usage: :pet del <slot>"))
+                else:
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("Pet commands: :pet add <pet_id> [name] | :pet del <slot>"))
         else:
             # Regular local chat: broadcast to map
             chat_pkt = PacketWriter()

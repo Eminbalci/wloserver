@@ -78,6 +78,14 @@ async def handle(server, session, reader):
         session.last_clicked_npc_id = native_click_id
         logger.info(f"[{session.char_name}] Clicked NPC/Object ID {click_id} on map {session.map_id} (native ID: {native_click_id})")
 
+        # Check if clicked NPC / entity is visible to player
+        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+        if not GLOBAL_PREEVENT_INTERPRETER.is_npc_visible_to_player(session, session.map_id, native_click_id):
+            logger.info(f"[{session.char_name}] Blocked interaction: NPC/Entity #{native_click_id} is hidden on map {session.map_id}")
+            await session.send_packet(PacketWriter().write_8(22).write_8(10).write_16(native_click_id).write_8(0xFF).write_8(0xFF))
+            await session.send_packet(PacketWriter().write_8(20).write_8(8))
+            return
+
         # Find the clicked NPC in the map NPCs list
         map_npcs = server.map_npcs.get(session.map_id, [])
         npc = None
@@ -520,6 +528,8 @@ async def handle(server, session, reader):
                 session.active_quest_id = None
                 session.active_quest_step = 0
                 await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+                await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
                 return
             
             action = script[session.active_quest_step]
@@ -549,11 +559,15 @@ async def handle(server, session, reader):
                     session.active_quest_step = 0
                     session.active_quest_dialog_counter = 1
                     await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                    from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+                    await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
             
             return
 
         await session.send_packet(PacketWriter().write_8(20).write_8(8))
         await session.send_packet(PacketWriter().write_8(5).write_8(4))
+        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+        await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
         
     elif sub == 9 or sub == 2:  # Select dialogue option (sub=9 legacy, sub=2 client-accurate)
         option_id = reader.read_8()

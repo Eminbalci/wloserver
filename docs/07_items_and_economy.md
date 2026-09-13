@@ -16,14 +16,37 @@ Wonderland Online employs fixed-stride binary structures for inventory transmiss
 | 1 .. 2      | 2 B  | uint16_le | Item ID (1 .. 65535)       |
 | 3           | 1 B  | uint8     | Quantity / Stack Count     |
 | 4           | 1 B  | uint8     | Durability Decay / Damage  |
-| 5 .. 28     | 24 B | bytes     | Attributes / Spar Sockets  |
+| 5 .. 30     | 26 B | bytes     | Padding / Spar Sockets     |
 +-------------------------------------------------------------+
 ```
+Total record size per occupied slot: 31 bytes (`PacketWriter: 1 header byte AC 23, 1 byte Sub 5 + (count * 31 bytes)`), matching C# `Inventory.cs:528-532` (`Pack8(slot), Pack16(ItemID), Pack8(Ammt), Pack8(Damage), PackArray(26 zeros)`).
 
 ### Full Inventory Synchronization Implementation
 Located in `GameServer.build_inventory_packet()`:
-- Unoccupied slots can be omitted or zero-padded depending on client handshake version.
-- Overfilled non-stackable items trigger auto-drop packets (`AC 23 Sub 2`).
+- Encodes occupied slots sequentially, strictly formatting `amount` as `uint8` and preserving the 26-byte trailing padding.
+- Unoccupied slots are omitted, allowing the official client to update its visual grid cleanly without packet bloat.
+
+## Authentic Starter Items Pack Architecture
+
+Upon new character creation (`handle_9_char_creation.py` / `AC 9 Sub 1`) or initial login fallback (`gameserver.py:commence_login` for level 1 characters without starter items), the server grants the canonical 8-item starter bundle:
+
+| Order | Item ID | Item Name | Count | Description |
+| :--- | :--- | :--- | :--- | :--- |
+| 1 | **34038** | Notepad | 1 | Beginner guide and notepad |
+| 2 | **34058** | Remote Control | 1 | Auto-combat assistant controller |
+| 3 | **32176** | Fugu Hot Pot | 50 | Full recovery food |
+| 4 | **34014** | Tao Rice Ball | 10 | Pet and character food |
+| 5 | **34026** | Protective EXP Pill | 5 | Prevents EXP loss upon death |
+| 6 | **34169** | Bamboo Dragonfly | 1 | Starter flying mount vehicle |
+| 7 | **34190** | 10X Holy EXP Potion | 3 | Boosts experience gain |
+| 8 | **34253** | Training Ticket | 5 | Training island pass |
+
+### Delivery Protocol & Duplication Prevention
+- **Silent Internal Delivery (`send_packets=False`)**: Matching C# `StarterPackManager.DeliverToPlayer(tp, sendData: false)`, starter items are inserted directly into `session.inventory` during character creation without dispatching intermediate `AC 23 Sub 6` ("Item Acquire Notice") frames.
+- **Single-Dispatch Invariant for Full Inventory Synchronization (`AC 23 Sub 5`)**: The official WLO game client (`aLogin.exe`) does not wipe existing inventory slots upon receiving `AC 23 Sub 5`; rather, it accumulates and adds incoming item quantities into existing visual slots. If `build_inventory_packet()` is transmitted more than once during the login handshake (e.g. before map warp and after fallback delivery), every item in the player's inventory doubles client-side (e.g. Notepad 1 -> 2, Remote Control 1 -> 2, Fugu Hot Pot 50 -> 100). Therefore, `commence_login()` enforces a strict single-dispatch rule: the fallback starter pack delivery check runs prior to packet serialization, and `AC 23 Sub 5` is transmitted exactly once.
+- **Client Desync Elimination**: In the official WLO client, transmitting `AC 23 Sub 6` for items already in the inventory causes client-side double-counting (e.g. quantity 1 rendering as 2) and causes high-count non-stackable or consumable items (such as obsolete item `34330`) to cascade across all 50 slots as individual single items.
+- **Obsolete / Invalid Item Purge**: Any legacy starter configurations containing non-authentic or obsolete IDs (`23050, 23051, 48050, 57001, 34542, 21742, 34330, 34258, 34332`) are automatically purged from SQLite (`game_starter_items`) on boot and reseeded with the authentic 8-item roster.
+
 
 ## Equipment Slots & Stat Application (AC 23 Sub 11)
 

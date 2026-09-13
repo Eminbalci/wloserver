@@ -74,6 +74,11 @@ async def handle(server, session, reader):
                 
             # Load character stats first to populate session.char_id
             server.load_character_into_session(session, char_id)
+
+            # Deliver authentic starter items directly to inventory (matching C# AC09.cs:88)
+            from server.starter_pack_manager import GLOBAL_STARTER_PACK_MANAGER
+            GLOBAL_STARTER_PACK_MANAGER.deliver_to_player(session, send_packets=False)
+            server.save_player_to_db(session)
             
             # Commence Map Entry directly (no 63, 2 confirm packet!)
             await server.commence_login(session)

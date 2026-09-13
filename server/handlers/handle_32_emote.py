@@ -2,6 +2,8 @@ import logging
 from typing import TYPE_CHECKING
 from server.network import PacketReader, PacketWriter
 
+logger = logging.getLogger("WLO_Server")
+
 if TYPE_CHECKING:
     from server.gameserver import GameServer, PlayerSession
 

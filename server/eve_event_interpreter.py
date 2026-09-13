@@ -7,6 +7,7 @@ Ported and enhanced from authentic WLO C# EveEventInterpreter.cs.
 import struct
 import os
 import logging
+import inspect
 from typing import Dict, List, Any, Optional, Tuple
 
 from server.network import PacketWriter
@@ -22,7 +23,10 @@ def get_session_quest_state(session: Any, quest_id: Any) -> int:
         return 0
     str_qid = str(quest_id)
     if isinstance(quests, dict):
-        return int(quests.get(str_qid, quests.get(quest_id, 0)) or 0)
+        val = quests.get(str_qid, quests.get(quest_id, 0))
+        if isinstance(val, dict):
+            return int(val.get("state", 0) or 0)
+        return int(val or 0)
     elif isinstance(quests, list):
         for q in quests:
             if isinstance(q, dict):
@@ -33,22 +37,50 @@ def get_session_quest_state(session: Any, quest_id: Any) -> int:
     return 0
 
 
-def set_session_quest_state(session: Any, quest_id: Any, state: int):
+def set_session_quest_state(session: Any, quest_id: Any, state: int, step: int = 1):
     """Safely sets quest state on session, supporting both dict and list structures."""
     if not hasattr(session, "quests") or session.quests is None:
         session.quests = {}
     str_qid = str(quest_id)
+    int_qid = int(quest_id) if str_qid.isdigit() else 0
     if isinstance(session.quests, dict):
-        session.quests[str_qid] = state
+        if step > 1 or isinstance(session.quests.get(str_qid), dict):
+            session.quests[str_qid] = {"state": state, "step": step}
+        else:
+            session.quests[str_qid] = state
     elif isinstance(session.quests, list):
         found = False
         for q in session.quests:
             if isinstance(q, dict) and str(q.get("quest_id", q.get("id", ""))) == str_qid:
                 q["state"] = state
+                if step > 1 or "step" not in q:
+                    q["step"] = step
                 found = True
                 break
         if not found:
-            session.quests.append({"quest_id": int(quest_id) if str_qid.isdigit() else quest_id, "state": state})
+            session.quests.append({"quest_id": int_qid if int_qid > 0 else quest_id, "state": state, "step": step})
+
+    # Invalidate cached _player_quests_map on session so it regenerates
+    if hasattr(session, "_player_quests_map"):
+        try:
+            delattr(session, "_player_quests_map")
+        except AttributeError:
+            pass
+
+    # Persist to database only if session has an active game server attached
+    server = getattr(session, "server", None)
+    if server and hasattr(session, "char_id") and session.char_id and session.char_id > 0:
+        db_path = getattr(server, "db_path", None)
+        if db_path:
+            try:
+                import sqlite3
+                import json
+                conn = sqlite3.connect(db_path)
+                conn.execute("UPDATE characters SET quests = ? WHERE id = ?", (json.dumps(session.quests), session.char_id))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                logger.debug(f"[EveInterpreter] Failed to auto-persist quests for char {session.char_id}: {e}")
 
 
 class EveEventInterpreter:
@@ -170,6 +202,20 @@ class EveEventInterpreter:
             logger.error(f"[EveInterpreter] Error parsing eve.Emg: {e}")
             return False
 
+    def get_executable_branch(self, event_entry: Dict[str, Any], sub: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Returns sub itself if it has opcodes, or finds the next sub with opcodes in the event tree."""
+        if sub.get("opcodes"):
+            return sub
+        subs = event_entry.get("subs", [])
+        try:
+            idx = subs.index(sub)
+        except ValueError:
+            return None
+        for next_sub in subs[idx + 1:]:
+            if next_sub.get("opcodes"):
+                return next_sub
+        return None
+
     def select_matching_branch(self, session: Any, event_entry: Dict[str, Any], exclude_sub: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
         """
         Evaluates quest conditions and player state to choose the authentic branch from eve.Emg.
@@ -195,7 +241,7 @@ class EveEventInterpreter:
                 if loot_branch:
                     return loot_branch
 
-        # 1. Evaluate Quests & Flags (unkb1 == 1, 2, 4, 15, etc.)
+        # 1. Evaluate Conditions (Level unkb1==1, Item unkb1==2, Quest unkb1==5)
         for s in subs:
             if s == exclude_sub:
                 continue
@@ -203,35 +249,99 @@ class EveEventInterpreter:
             if unkb1 == 7:  # Choice outcome branch, skip during initial branch selection
                 continue
 
+            # Level Condition (unkb1 == 1)
+            if unkb1 == 1 and s.get("w1", 0) > 0:
+                if getattr(session, "level", 1) >= s.get("w1", 0):
+                    target = self.get_executable_branch(event_entry, s)
+                    if target and target != exclude_sub:
+                        return target
+
+            # Item Condition (unkb1 == 2)
+            if unkb1 == 2:
+                req_item = s.get("w1", 0) if (10000 <= s.get("w1", 0) <= 65000) else s.get("w3", 0)
+                if req_item > 0:
+                    req_count = max(1, s.get("w2", 1))
+                    player_inv = getattr(session, "inventory", [])
+                    has_count = 0
+                    if isinstance(player_inv, list):
+                        for it in player_inv:
+                            if isinstance(it, dict) and it.get("item_id") == req_item:
+                                has_count += int(it.get("amount", 1) or 1)
+                    has_item = (has_count >= req_count)
+                    w4 = s.get("w4", 0)
+                    req_have = (w4 == 2 or w4 == 5 or (w4 & 0x01) != 0)
+                    if (req_have and has_item) or (not req_have and not has_item):
+                        target = self.get_executable_branch(event_entry, s)
+                        if target and target != exclude_sub:
+                            t_qid = target.get("w1", 0)
+                            if t_qid > 0:
+                                raw_st = get_session_quest_state(session, t_qid)
+                                paired_st = get_session_quest_state(session, t_qid + 1)
+                                if raw_st >= 2 or paired_st > 0:
+                                    continue
+                            return target
+
             q_id = s.get("w1", 0)
             req_state = s.get("w2", 0)
-            req_step = s.get("w3", 0)
+            req_step = (s.get("w4", 0) >> 8) & 0xFF
+            if req_step == 0 and 1 < s.get("w3", 0) < 250:
+                req_step = s.get("w3", 0)
 
             if q_id > 0:
-                current_state = get_session_quest_state(session, q_id)
-                # If this sub sets quest flag to completed (state 2) and quest is already completed, do not repeat
-                is_completion_branch = any(
-                    o.get("dptr") == 5 and o.get("d1") == q_id and o.get("d2") == 2
-                    for o in s.get("opcodes", [])
-                )
-                if is_completion_branch and current_state >= 2:
-                    continue
+                raw_st = get_session_quest_state(session, q_id)
+                paired_st = get_session_quest_state(session, q_id + 1)
+                is_completed = (raw_st >= 2) or (paired_st > 0)
+                is_in_progress = (raw_st == 1 and not is_completed)
+                is_not_started = (raw_st == 0 and not is_completed)
 
-                # If player already completed this quest step, check if sub matches completed state
-                if req_state == 2 and current_state >= 2:
-                    return s
-                elif req_state == 1 and current_state == 1:
-                    return s
-                elif current_state == 0 and req_state == 0:
+                step = 1
+                try:
+                    from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+                    step = GLOBAL_PREEVENT_INTERPRETER._get_player_quest_step(session, q_id)
+                except Exception:
+                    step = 1
+
+                state_matches = False
+                if req_state == 1 and is_in_progress:
+                    if req_step == 0:
+                        state_matches = True
+                    else:
+                        cmp_op = s.get("w3", 1)
+                        if cmp_op == 2: state_matches = (step >= req_step)
+                        elif cmp_op == 3: state_matches = (step <= req_step)
+                        elif cmp_op == 4: state_matches = (step != req_step)
+                        else: state_matches = (step == req_step)
+                elif req_state == 2 and is_not_started:
+                    state_matches = True
+                elif req_state == 3 and is_completed:
+                    state_matches = True
+                elif req_state == 0 and is_not_started:
+                    state_matches = True
+
+                if state_matches:
+                    is_completion_branch = any(
+                        o.get("dptr") == 5 and o.get("d1") == q_id and o.get("d2") == 2
+                        for o in s.get("opcodes", [])
+                    )
+                    if is_completion_branch and is_completed:
+                        continue
                     if s.get("opcodes"):
                         return s
 
-        # 2. Fallback to first available root branch (excluding choice branches)
-        for s in subs:
-            if s != exclude_sub and s.get("unkb1") != 7 and s.get("opcodes"):
+        # 2. Fallback: only when exclude_sub is None, and filter out completed quest branches
+        if exclude_sub is None:
+            for s in subs:
+                if s.get("unkb1") in (4, 7, 15) or not s.get("opcodes"):
+                    continue
+                q_id = s.get("w1", 0)
+                if q_id > 0:
+                    raw_st = get_session_quest_state(session, q_id)
+                    paired_st = get_session_quest_state(session, q_id + 1)
+                    if raw_st >= 2 or paired_st > 0:
+                        continue
                 return s
 
-        return subs[0] if subs else None
+        return None
 
     async def try_execute(self, server: Any, session: Any, click_id: int) -> bool:
         """
@@ -269,31 +379,63 @@ class EveEventInterpreter:
             if dummy.is_permanent_chest():
                 is_perm_chest = True
 
-        from server.chest_system import GLOBAL_CHEST_SYSTEM
+        # If permanent chest was already claimed, only allow execution if an in-progress quest branch exists
         if is_perm_chest:
+            from server.chest_system import GLOBAL_CHEST_SYSTEM
             if GLOBAL_CHEST_SYSTEM.is_chest_opened(session.char_id, session.map_id, click_id, is_permanent=True):
-                logger.info(f"[{session.char_name}] Permanent chest #{click_id} on map {session.map_id} is already claimed.")
-                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("You have already claimed this treasure."))
-                await session.send_packet(PacketWriter().write_8(20).write_8(8))
-                await session.send_packet(PacketWriter().write_8(5).write_8(4))
-                return True
-        elif is_gather_node:
-            if getattr(npc, 'is_broken', False) or GLOBAL_CHEST_SYSTEM.is_chest_opened(session.char_id, session.map_id, click_id, is_permanent=False):
-                logger.info(f"[{session.char_name}] Gathering node #{click_id} on map {session.map_id} is currently empty.")
-                await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("This node/chest is currently empty and will respawn soon."))
-                await session.send_packet(PacketWriter().write_8(20).write_8(8))
-                await session.send_packet(PacketWriter().write_8(5).write_8(4))
-                return True
+                cand_list = []
+                if npc and npc.get("events"):
+                    for ev_id in npc["events"]:
+                        if ev_id in map_events:
+                            cand_list.append(map_events[ev_id])
+                if not cand_list and click_id in map_events:
+                    cand_list.append(map_events[click_id])
 
+                has_in_progress = False
+                for cand in cand_list:
+                    for s in cand.get("subs", []):
+                        q_id = s.get("w1", 0)
+                        req_state = s.get("w2", 0)
+                        if q_id > 0 and req_state == 1:
+                            raw_st = get_session_quest_state(session, q_id)
+                            paired_st = get_session_quest_state(session, q_id + 1)
+                            if raw_st == 1 and paired_st == 0:
+                                has_in_progress = True
+                                break
+                    if has_in_progress:
+                        break
+
+                if not has_in_progress:
+                    logger.info(f"[{session.char_name}] Chest #{click_id} on map {session.map_id} is already claimed.")
+                    await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("You have already claimed this treasure."))
+                    await session.send_packet(PacketWriter().write_8(20).write_8(8))
+                    await session.send_packet(PacketWriter().write_8(5).write_8(4))
+                    return True
+
+        # Scan registered events for this NPC to find the first event with an eligible branch (1:1 C# EveEventInterpreter.cs lines 50-78)
         event_entry = None
+        selected_sub = None
+        candidate_events = []
+
         if npc and npc.get("events"):
             for ev_id in npc["events"]:
                 if ev_id in map_events:
-                    event_entry = map_events[ev_id]
+                    candidate_events.append(map_events[ev_id])
+
+        if not candidate_events and click_id in map_events:
+            candidate_events.append(map_events[click_id])
+
+        for cand in candidate_events:
+            if cand.get("subs"):
+                sub = self.select_matching_branch(session, cand)
+                if sub and sub.get("opcodes"):
+                    event_entry = cand
+                    selected_sub = sub
                     break
 
-        if not event_entry and click_id in map_events:
-            event_entry = map_events[click_id]
+        if not event_entry and candidate_events:
+            event_entry = candidate_events[0]
+            selected_sub = self.select_matching_branch(session, event_entry)
 
         if not event_entry or not event_entry.get("subs"):
             return False
@@ -305,9 +447,9 @@ class EveEventInterpreter:
         else:
             npc_name = raw_name
 
-        # Select matching branch
-        selected_sub = self.select_matching_branch(session, event_entry)
+        # If no executable branch was found for this candidate event:
         if not selected_sub or not selected_sub.get("opcodes"):
+            from server.chest_system import GLOBAL_CHEST_SYSTEM
             if is_perm_chest:
                 logger.info(f"[{session.char_name}] Chest #{click_id} on map {session.map_id} is empty / already claimed.")
                 await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string("You have already claimed this treasure."))
@@ -350,7 +492,7 @@ class EveEventInterpreter:
                     dialogue_text = GLOBAL_TALK_DAT.get(talk_id, "", player_name=session.char_name)
                     dialogue_steps.append({
                         "type": "dialogue",
-                        "click_id": click_id,
+                        "click_id": 0,
                         "talk_id": talk_id,
                         "step": len(dialogue_steps) + 1,
                         "portrait": 7,  # Player portrait
@@ -470,7 +612,7 @@ class EveEventInterpreter:
 
                     if talk_id > 0:
                         dialogue_text = GLOBAL_TALK_DAT.get(talk_id, "", player_name=session.char_name)
-                        speaker_id = d1 if (dptr == 2 and d1 > 0 and d1 < 50) else click_id
+                        speaker_id = 0 if portrait == 7 else (d1 if (dptr == 2 and d1 > 0 and d1 < 50) else click_id)
                         dialogue_steps.append({
                             "type": "dialogue",
                             "click_id": speaker_id,
@@ -479,6 +621,14 @@ class EveEventInterpreter:
                             "portrait": portrait,
                             "text": dialogue_text
                         })
+                        executed_any = True
+                    elif dptr == 2 and (d4 == 65280 or (d4 & 0xFF00) == 0xFF00) and d1 > 0:
+                        target_click = d1
+                        hide_pkt = PacketWriter().write_8(22).write_8(10).write_16(target_click).write_8(0xFF).write_8(0xFF)
+                        await session.send_packet(hide_pkt)
+                        if not hasattr(session, '_actor_visibility') or session._actor_visibility is None:
+                            session._actor_visibility = {}
+                        session._actor_visibility[target_click] = False
                         executed_any = True
 
             # Opcode 3: Companion Pet Recruitment
@@ -489,6 +639,9 @@ class EveEventInterpreter:
                     from server.quests import GLOBAL_QUEST_ENGINE
                     await GLOBAL_QUEST_ENGINE.send_companion_reward(server, session, companion_id, pet_name)
                     await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"{pet_name} has joined your party!"))
+                    from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+                    await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
+                    await GLOBAL_PREEVENT_INTERPRETER.replay_actor_visibility(server, session, session.map_id)
                     executed_any = True
 
             # Opcode 5: Quest Flag State Update
@@ -497,8 +650,16 @@ class EveEventInterpreter:
                     quest_id = d1
                     step = max(1, d3 if d3 > 0 else (d4 >> 8 if d4 >> 8 > 0 else 1))
                     state = 2 if (d2 == 2 or step >= 250) else 1
-                    set_session_quest_state(session, quest_id, state)
-                    await server._send_quest_flag(session, quest_id, state)
+                    set_session_quest_state(session, quest_id, state, step)
+                    if hasattr(server, "_send_quest_flag") and callable(server._send_quest_flag):
+                        res = server._send_quest_flag(session, quest_id, state)
+                        if inspect.isawaitable(res):
+                            await res
+                    try:
+                        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+                        await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
+                    except Exception:
+                        pass
                     executed_any = True
 
             # Opcode 6: Sound effect / Fanfare
@@ -570,6 +731,19 @@ class EveEventInterpreter:
             await self._dispatch_step(server, session, first_step)
             executed_any = True
         elif executed_any:
+            # If selectedSub was a quest flag setter with no dialogues and no choice prompt,
+            # evaluate the newly activated dialogue branch (1:1 C# EveEventInterpreter.cs lines 559-568)
+            next_sub = self.select_matching_branch(session, event_entry, exclude_sub=sub)
+            if next_sub and next_sub.get("opcodes"):
+                has_dialogue = any(
+                    (o.get("dptr") == 1 and o.get("d1") == 2 and o.get("d2", 0) >= 10000) or
+                    (o.get("dptr") == 2 and (o.get("d2") == 6 or o.get("d3", 0) >= 10000 or o.get("d2", 0) >= 10000))
+                    for o in next_sub.get("opcodes", [])
+                )
+                if has_dialogue:
+                    logger.info(f"[EveInterpreter] Cascading to newly activated dialogue branch Sub #{next_sub.get('sub_idx')} for Event #{event_entry.get('click_id')}")
+                    return await self.execute_sub_opcodes(server, session, click_id, event_entry, next_sub)
+
             # Event had actions (item grant, quest updates, animation) but no dialogue window:
             # Immediately close dialogue and unfreeze controls so inventory updates visually on client!
             await session.send_packet(PacketWriter().write_8(20).write_8(8))

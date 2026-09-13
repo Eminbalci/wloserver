@@ -122,19 +122,21 @@ async def handle(server, session, reader):
     elif sub == 3:  # Cancel Character Creation (C line 226227: FUN_002d6994(..., 0x3f, 3, 0))
         logger.info(f"[Auth] Username '{getattr(session, 'username', 'User')}' canceled character creation.")
         list_pkt = PacketWriter().write_8(63).write_8(1)
-        u_data = {}
+        char1 = None
+        char2 = None
         if getattr(session, 'user_id', None):
             with server.db.get_connection() as conn:
-                u_row = conn.execute("SELECT * FROM users WHERE id = ?", (session.user_id,)).fetchone()
-                if u_row:
-                    u_data = dict(u_row)
-        char1 = server.db.get_character_by_id(u_data.get('character1_id')) if u_data.get('character1_id') else None
+                c1_row = conn.execute("SELECT id FROM characters WHERE user_id = ? AND slot = 1", (session.user_id,)).fetchone()
+                if c1_row:
+                    char1 = server.db.get_character_by_id(c1_row['id'])
+                c2_row = conn.execute("SELECT id FROM characters WHERE user_id = ? AND slot = 2", (session.user_id,)).fetchone()
+                if c2_row:
+                    char2 = server.db.get_character_by_id(c2_row['id'])
         if char1:
             list_pkt.write_bytes(server.serialize_character_slot(char1))
         else:
             list_pkt.write_8(1).write_8(0)
 
-        char2 = server.db.get_character_by_id(u_data.get('character2_id')) if u_data.get('character2_id') else None
         if char2:
             list_pkt.write_bytes(server.serialize_character_slot(char2))
         else:

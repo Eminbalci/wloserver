@@ -330,10 +330,22 @@ class ChestSystem:
             ).fetchall()
             conn.close()
 
+            server = getattr(player, 'server', None)
+            map_npcs = getattr(server, 'map_npcs', {}).get(map_id, []) if server else []
             for r in rows:
                 chest_id = r[0]
-                hide_pkt = PacketWriter().write_8(22).write_8(10).write_16(chest_id).write_8(0xFF).write_8(0xFF)
-                await player.send_packet(hide_pkt)
+                is_gather = False
+                for m_npc in map_npcs:
+                    m_cid = m_npc.click_id if hasattr(m_npc, 'click_id') else (m_npc.get('click_id', 0) if isinstance(m_npc, dict) else 0)
+                    if m_cid == chest_id:
+                        if hasattr(m_npc, 'is_gathering_node') and m_npc.is_gathering_node():
+                            is_gather = True
+                        break
+                if is_gather:
+                    pkt = PacketWriter().write_8(22).write_8(10).write_16(chest_id).write_8(0xFF).write_8(0xFF)
+                else:
+                    pkt = PacketWriter().write_8(22).write_8(10).write_16(chest_id).write_8(0x01).write_8(0x00)
+                await player.send_packet(pkt)
         except Exception as e:
             logger.error(f"[ChestSystem] Error syncing opened chests: {e}")
 

@@ -14,8 +14,10 @@ from datetime import datetime
 from server.network import PacketReader, PacketWriter, xor_crypt, send_system_msg
 from server.database import DatabaseManager
 
+from server.logger_config import setup_logging
+
 # Setup logger
-logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(message)s")
+setup_logging()
 logger = logging.getLogger("WLO_Server")
 
 # Version string for AC 0 Response
@@ -86,6 +88,27 @@ def remove_item_at_slot(session, slot: int, amount: int = 1):
                 item['amount'] = item.get('amount', 1) - amount
             return True
     return False
+
+def remove_item_from_inventory(session, item_id: int, amount: int = 1) -> bool:
+    """Removes a specified amount of an item across inventory slots. Returns True if removed, False otherwise."""
+    if not hasattr(session, "inventory") or not session.inventory:
+        return False
+    total = sum(item.get("amount", 1) for item in session.inventory if item.get("item_id") == item_id)
+    if total < amount:
+        return False
+    remaining = amount
+    for item in list(session.inventory):
+        if item.get("item_id") == item_id:
+            cur_amt = item.get("amount", 1)
+            if cur_amt <= remaining:
+                remaining -= cur_amt
+                session.inventory.remove(item)
+            else:
+                item["amount"] = cur_amt - remaining
+                remaining = 0
+            if remaining <= 0:
+                break
+    return True
 
 def add_item_to_inventory(session, item_id: int, amount: int = 1, slot: int = None):
     if slot is None:
@@ -267,6 +290,7 @@ class PlayerSession:
         
         # Send lock to avoid parallel write corruption
         self.send_lock = asyncio.Lock()
+        self.server = None
 
 
     def get_stat_bonus(self, stat_name: str) -> int:
@@ -312,6 +336,54 @@ class PlayerSession:
     @agi_val.setter
     def agi_val(self, val: int):
         self._agi_val = val
+
+    @property
+    def str(self) -> int:
+        return self._str_val
+
+    @str.setter
+    def str(self, val: int):
+        self._str_val = int(val)
+
+    @property
+    def con(self) -> int:
+        return self._con_val
+
+    @con.setter
+    def con(self, val: int):
+        self._con_val = int(val)
+
+    @property
+    def int(self) -> int:
+        return self._int_val
+
+    @int.setter
+    def int(self, val: int):
+        self._int_val = int(val)
+
+    @property
+    def wis(self) -> int:
+        return self._wis_val
+
+    @wis.setter
+    def wis(self, val: int):
+        self._wis_val = int(val)
+
+    @property
+    def agi(self) -> int:
+        return self._agi_val
+
+    @agi.setter
+    def agi(self, val: int):
+        self._agi_val = int(val)
+
+    @property
+    def stat_points(self) -> int:
+        return self.points
+
+    @stat_points.setter
+    def stat_points(self, val: int):
+        self.points = int(val)
 
     def update_max_hp_sp(self):
         """Calculates and updates max HP/SP dynamically using WLO formulas."""
@@ -744,6 +816,7 @@ class GameServer:
     async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handles a new client socket connection."""
         session = PlayerSession(reader, writer)
+        session.server = self
         if hasattr(self, 'db') and self.db.is_ip_banned(session.ip):
             logger.warning(f"[Server] Rejected connection from banned IP: {session.ip}")
             try:
@@ -768,7 +841,7 @@ class GameServer:
         except Exception as e:
             logger.error(f"[Server] Connection error: {e}\n{traceback.format_exc()}")
         finally:
-            self.active_sessions.remove(session)
+            self.active_sessions.discard(session)
             await self.handle_disconnect(session)
 
     async def kick_user(self, user_id: int, reason: str = "Disconnected by administrator"):
@@ -848,15 +921,31 @@ class GameServer:
     async def handle_disconnect(self, session: PlayerSession):
         """Cleans up player session on disconnection."""
         logger.info(f"[{session.username or session.ip}] Client disconnected.")
-        if session.logged_in and session.char_id:
-            # Save character
-            self.save_player_to_db(session)
-            # Remove from map
-            self.remove_player_from_map(session)
-            # Broadcast exit to map
-            bye = PacketWriter().write_8(1).write_8(1).write_32(session.char_id)
-            self.broadcast_to_map(session.map_id, bye, exclude_session=session)
+        if getattr(session, 'char_id', None):
+            try:
+                self.save_player_to_db(session)
+            except Exception as ex:
+                logger.error(f"[Disconnect] Error saving session {getattr(session, 'char_name', 'Player')}: {ex}")
+            try:
+                self.remove_player_from_map(session)
+                bye = PacketWriter().write_8(1).write_8(1).write_32(session.char_id)
+                self.broadcast_to_map(session.map_id, bye, exclude_session=session)
+            except Exception:
+                pass
         await session.disconnect()
+
+    def save_all_sessions(self) -> int:
+        """Safely persists all active player sessions to database."""
+        saved = 0
+        for session in list(self.active_sessions):
+            if getattr(session, 'char_id', None):
+                try:
+                    self.save_player_to_db(session)
+                    saved += 1
+                except Exception as ex:
+                    logger.error(f"[SaveAll] Error saving {getattr(session, 'char_name', 'Player')}: {ex}")
+        logger.info(f"[Server] Saved {saved} active sessions to database.")
+        return saved
 
     def remove_player_from_map(self, session: PlayerSession):
         """Removes session from map tracking."""
@@ -1402,7 +1491,14 @@ class GameServer:
         # Sidebar player stats details (moved to end of login)
         pass
         
-        # Inventory update (actual database content)
+        # Fallback starter items delivery for level 1 players without any starter items (matching C# WorldServer.cs:456)
+        from server.starter_pack_manager import GLOBAL_STARTER_PACK_MANAGER
+        if getattr(session, "level", 1) <= 1 and not GLOBAL_STARTER_PACK_MANAGER.has_any_starter_item(session):
+            delivered_cnt = GLOBAL_STARTER_PACK_MANAGER.deliver_to_player(session, send_packets=False)
+            self.save_player_to_db(session)
+            logger.info(f"[{session.char_name}] Delivered {delivered_cnt} authentic starter pack items to inventory.")
+
+        # Inventory update (actual database content) - dispatched ONCE during login to prevent client-side quantity doubling
         await session.send_packet(self.build_inventory_packet(session))
         
         # Equipments update (actual database content)
@@ -1513,23 +1609,6 @@ class GameServer:
         from server.item_mall import GLOBAL_ITEM_MALL_MANAGER
         await GLOBAL_ITEM_MALL_MANAGER.send_initial_mall_sync(session)
 
-        # Free Starter Items Delivery for New Characters (Authentic PCAP oyunailkgirisvebedavaitemverilmesi.pcapng)
-        if not getattr(session, "received_starter_pack", False) and len(session.inventory) <= 2:
-            from server.starter_pack_manager import GLOBAL_STARTER_PACK_MANAGER
-            starter_gifts = GLOBAL_STARTER_PACK_MANAGER.get_delivery_tuples()
-            for itm_id, itm_cnt in starter_gifts:
-                add_item_to_inventory(session, itm_id, itm_cnt)
-                # Authentic PCAP format: [23, 6, item_id(uint16_LE), count(uint8), padding(28 zeros)] (33 bytes total)
-                delivery_pkt = PacketWriter().write_8(23).write_8(6).write_16(itm_id).write_8(min(255, int(itm_cnt))).write_bytes(bytes(28))
-                await session.send_packet(delivery_pkt)
-            session.received_starter_pack = True
-            self.save_player_to_db(session)
-            logger.info(f"[{session.char_name}] Granted authentic starter items pack ({len(starter_gifts)} items) via AC 23 Sub 6.")
-
-        # Always synchronize full inventory packet at the conclusion of login sequence so
-        # the client's inventory bag UI is guaranteed to cleanly populate for both new and returning players.
-        await session.send_packet(self.build_inventory_packet(session))
-
         # Synchronize already-opened chests on map (AC 22 Sub 10)
         from server.chest_system import GLOBAL_CHEST_SYSTEM
         await GLOBAL_CHEST_SYSTEM.sync_opened_chests_on_map(session, session.map_id)
@@ -1542,6 +1621,7 @@ class GameServer:
         await asyncio.sleep(0.5) 
         await self.send_stats_update(session, levelup=False)
         await self.send_pet_list(session)
+        await self.spawn_player_companion(session)
         
         logger.info(f"[{session.char_name}] Login complete.")
 
@@ -1772,19 +1852,28 @@ class GameServer:
         await session.send_packet(sb)
         
     def build_pet_list_packet(self, session: PlayerSession) -> PacketWriter:
+        """Constructs authentic AC 15 Sub 8 companion list packet matching PCAP captures.
+        Each pet record is exactly 188 bytes (total payload = 2 + 188 * pet_count)."""
         p = PacketWriter()
         p.write_8(15).write_8(8)
+        if not hasattr(session, 'pets') or not session.pets:
+            return p
+            
         for idx, pet in enumerate(session.pets):
             slot = idx + 1
             if slot > 4:
                 break
-            p.write_8(slot)
-            p.write_16(pet.get("pet_id", 0))   # write_16 for NPC IDs
-            p.write_32(pet.get("exp", 0))
-            p.write_8(pet.get("level", 1))
+            pet_buf = PacketWriter()
+            pet_buf.write_8(slot)
             
-            # HP and SP limits calculation
+            raw_id = pet.get("pet_id", 0) or pet.get("id", 0)
+            pkt_pet_id = 12178 if raw_id in (12032, 12178) else raw_id
+            pet_buf.write_16(pkt_pet_id)
+            pet_buf.write_32(pet.get("exp", 0))
+            
             level = pet.get("level", 1)
+            pet_buf.write_8(level)
+            
             con = pet.get("con", 5)
             wis = pet.get("wis", 5)
             max_hp = int(round(((level ** 0.35) * con * 2) + (level * 1) + (con * 2) + 180))
@@ -1792,23 +1881,72 @@ class GameServer:
             hp = min(pet.get("hp", max_hp), max_hp)
             sp = min(pet.get("sp", max_sp), max_sp)
             
-            p.write_32(hp)
-            p.write_16(sp)
-            p.write_16(pet.get("int", 5))
-            p.write_16(pet.get("str", 5))
-            p.write_16(pet.get("con", 5))
-            p.write_16(pet.get("agi", 5))
-            p.write_16(pet.get("wis", 5))
-            p.write_8(0)
-            p.write_8(pet.get("amity", 100))
-            p.write_16(1) # Weapon (1 = default/none)
-            p.write_8(0)  # Worn count
-            for _ in range(6):
-                p.write_16(0) # 6 equipments
-            p.write_16(0)
-            p.write_8(pet.get("reborn", 0))
-            p.write_8(pet.get("potential", 0))
+            pet_buf.write_32(hp)
+            pet_buf.write_16(sp)
+            pet_buf.write_16(pet.get("int", 5))
+            pet_buf.write_16(pet.get("str", 5))
+            pet_buf.write_16(con)
+            pet_buf.write_16(pet.get("agi", 5))
+            pet_buf.write_16(wis)
+            pet_buf.write_8(pet.get("element", 0))
+            pet_buf.write_8(pet.get("amity", 100))
+            pet_buf.write_8(1 if pet.get("in_battle", False) else 0)
+            pet_buf.write_16(0)
+            
+            pet_name = pet.get("name") or "Companion"
+            try:
+                name_bytes = pet_name.encode("big5")
+            except UnicodeEncodeError:
+                name_bytes = pet_name.encode("latin1", errors="replace")
+            pet_buf.write_8(len(name_bytes))
+            pet_buf.write_bytes(name_bytes)
+            
+            pet_buf.write_8(1)
+            pet_buf.write_32(0)
+            pet_buf.write_8(1)
+            
+            # Pad or trim to exactly 188 bytes per pet record (matching authentic PCAP struct)
+            record_bytes = pet_buf.buffer
+            if len(record_bytes) < 188:
+                pet_buf.write_bytes(bytes(188 - len(record_bytes)))
+            elif len(record_bytes) > 188:
+                pet_buf.buffer = record_bytes[:188]
+                
+            p.write_bytes(pet_buf.buffer)
         return p
+
+    async def spawn_player_companion(self, session: PlayerSession):
+        """Spawns active battle or riding companion on the map upon login or warp."""
+        if not hasattr(session, 'pets') or not session.pets:
+            return
+        for idx, pet in enumerate(session.pets):
+            if pet.get("in_battle", False):
+                raw_id = pet.get("pet_id", 0) or pet.get("id", 0)
+                pkt_pet_id = 12178 if raw_id in (12032, 12178) else raw_id
+                pet_name = pet.get("name") or "Companion"
+                
+                # 1. Send owner packet: AC 19 Sub 4
+                pp = PacketWriter().write_8(19).write_8(4).write_32(session.char_id).write_32(pkt_pet_id)
+                await session.send_packet(pp)
+                
+                # 2. Broadcast companion spawn to map: AC 15 Sub 4
+                spawn = PacketWriter().write_8(15).write_8(4)
+                spawn.write_32(session.char_id).write_32(pkt_pet_id).write_8(0).write_8(1)
+                spawn.write_string(pet_name).write_16(0)
+                self.broadcast_to_map(session.map_id, spawn, exclude_session=session)
+                
+                # 3. Broadcast appearance refresh: AC 5 Sub 8
+                refresh = PacketWriter().write_8(5).write_8(8).write_32(session.char_id).write_8(0)
+                self.broadcast_to_map(session.map_id, refresh)
+                break
+            elif pet.get("riding", False):
+                raw_id = pet.get("pet_id", 0) or pet.get("id", 0)
+                pkt_pet_id = 12178 if raw_id in (12032, 12178) else raw_id
+                ride_pkt = PacketWriter().write_8(15).write_8(16).write_8(idx + 1)
+                ride_pkt.write_32(session.char_id).write_32(pkt_pet_id).write_bytes(bytes(26))
+                await session.send_packet(ride_pkt)
+                self.broadcast_to_map(session.map_id, ride_pkt, exclude_session=session)
+                break
 
     async def send_pet_list(self, session: PlayerSession):
         """Sends companion list (AC 15 Sub 8) to the client."""
@@ -2022,9 +2160,9 @@ class GameServer:
             if item_id > 0:
                 p.write_8(slot)
                 p.write_16(item_id)
-                p.write_16(int(item.get('amount', 1) or 1))
+                p.write_8(min(255, max(1, int(item.get('amount', 1) or 1))))
                 p.write_8(int(item.get('damage', 0) or 0))
-                p.write_bytes(bytes(25))
+                p.write_bytes(bytes(26))
 
         return p
 
@@ -2109,6 +2247,25 @@ class GameServer:
             pos.write_16(r.y)
             await session.send_packet(pos)
 
+            # Spawn remote player's active companion or riding pet
+            if hasattr(r, 'pets') and r.pets:
+                for idx, pet in enumerate(r.pets):
+                    if pet.get("in_battle", False):
+                        pet_id = pet.get("pet_id", 0) or pet.get("id", 0)
+                        pkt_pet_id = 12178 if pet_id in (12032, 12178) else pet_id
+                        spawn = PacketWriter().write_8(15).write_8(4)
+                        spawn.write_32(r.char_id).write_32(pkt_pet_id).write_8(0).write_8(1)
+                        spawn.write_string(pet.get("name", "Companion")).write_16(0)
+                        await session.send_packet(spawn)
+                        break
+                    elif pet.get("riding", False):
+                        pet_id = pet.get("pet_id", 0) or pet.get("id", 0)
+                        pkt_pet_id = 12178 if pet_id in (12032, 12178) else pet_id
+                        ride_pkt = PacketWriter().write_8(15).write_8(16).write_8(idx + 1)
+                        ride_pkt.write_32(r.char_id).write_32(pkt_pet_id).write_bytes(bytes(26))
+                        await session.send_packet(ride_pkt)
+                        break
+
     async def send_map_info(self, session: PlayerSession):
         """Sends map initialization packets matching C# Map.cs SendMapInfo.
         Each packet has its own header - the client parses them individually."""
@@ -2132,15 +2289,10 @@ class GameServer:
                 n_y = npc.y if hasattr(npc, 'y') else (npc.get('y', 0) if isinstance(npc, dict) else 0)
                 is_broken = getattr(npc, 'is_broken', False) or (npc.get('is_broken', False) if isinstance(npc, dict) else False)
 
-                # Check if recruited companion
-                is_recruited = False
-                if hasattr(session, 'has_recruited_companion'):
-                    is_recruited = session.has_recruited_companion(n_name, t_id)
-                elif hasattr(session, 'companions'):
-                    for c in session.companions:
-                        if (c.get('name') and c.get('name').lower() == n_name.lower()) or c.get('npc_id') == t_id:
-                            is_recruited = True
-                            break
+                # Check if recruited companion or hidden by PreEvent / lifecycle rules
+                from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+                is_recruited = GLOBAL_PREEVENT_INTERPRETER.has_recruited_companion(session, n_name, t_id)
+                is_visible = GLOBAL_PREEVENT_INTERPRETER.is_npc_visible_to_player(session, session.map_id, c_id)
 
                 # Check if opened in charchests for this player
                 is_opened = False
@@ -2152,7 +2304,7 @@ class GameServer:
                 except Exception:
                     is_opened = False
 
-                is_hidden = getattr(npc, 'visible', True) is False or (npc.get('visible', True) is False if isinstance(npc, dict) else False)
+                is_hidden = (getattr(npc, 'visible', True) is False or (npc.get('visible', True) is False if isinstance(npc, dict) else False)) or (not is_visible)
 
                 is_static = False
                 if hasattr(npc, 'is_static_npc'):
@@ -2163,26 +2315,29 @@ class GameServer:
 
                 if is_recruited or is_hidden:
                     state = 0xFFFF
+                    entity_type = 2
                 elif is_static:
                     # In authentic WLO protocol (PCAP verified across all captures), all static chests,
                     # crates, and map props spawn with state 0x0000. State 0x0001 in AC 22:4 is an active
                     # animation flag that causes the client's sprite renderer to cycle/blink continuously.
                     state = 0x0000
+                    entity_type = 1
                 else:
                     # Living NPCs / monsters / companions have normal active state 0x00FF (255)
                     state = 0x00FF
+                    entity_type = 1
 
                 npc_pkt.write_16(c_id)
                 npc_pkt.write_16(state)
                 npc_pkt.write_16(n_x)
                 npc_pkt.write_16(n_y)
-                npc_pkt.write_8(1)
+                npc_pkt.write_8(entity_type)
                 npc_pkt.write_8(0)
                 npc_pkt.write_32(0)
 
             await session.send_packet(npc_pkt)
 
-            # Send individual hide packets for recruited companions (AC 22:10)
+            # Send individual hide packets for recruited companions and hidden actors (AC 22:10 & AC 22:11)
             for npc in sorted_npcs:
                 # Static props and permanent chests must never receive AC 22:10 packets (handled natively via AC 22:4 state)
                 if (hasattr(npc, 'is_static_npc') and npc.is_static_npc()) or (isinstance(npc, dict) and ((19000 <= (npc.get('npc_id', 0) or npc.get('template_id', 0)) <= 35000) or (12000 <= (npc.get('npc_id', 0) or npc.get('template_id', 0)) <= 12999))):
@@ -2190,22 +2345,20 @@ class GameServer:
                 c_id = npc.click_id if hasattr(npc, 'click_id') else (npc.get('click_id', 0) if isinstance(npc, dict) else 0)
                 t_id = npc.template_id if hasattr(npc, 'template_id') else ((npc.get('npc_id', 0) or npc.get('template_id', 0)) if isinstance(npc, dict) else 0)
                 n_name = npc.name if hasattr(npc, 'name') else (npc.get('name', '') if isinstance(npc, dict) else '')
-                is_recruited = False
-                if hasattr(session, 'has_recruited_companion'):
-                    is_recruited = session.has_recruited_companion(n_name, t_id)
-                elif hasattr(session, 'companions'):
-                    for c in session.companions:
-                        if (c.get('name') and c.get('name').lower() == n_name.lower()) or c.get('npc_id') == t_id:
-                            is_recruited = True
-                            break
-                is_hidden = getattr(npc, 'visible', True) is False or (npc.get('visible', True) is False if isinstance(npc, dict) else False)
+                is_recruited = GLOBAL_PREEVENT_INTERPRETER.has_recruited_companion(session, n_name, t_id)
+                is_visible = GLOBAL_PREEVENT_INTERPRETER.is_npc_visible_to_player(session, session.map_id, c_id)
+                is_hidden = (getattr(npc, 'visible', True) is False or (npc.get('visible', True) is False if isinstance(npc, dict) else False)) or (not is_visible)
                 if is_recruited or is_hidden:
-                    hide_pkt = PacketWriter().write_8(22).write_8(10).write_16(c_id).write_8(0xFF).write_8(0xFF)
-                    await session.send_packet(hide_pkt)
+                    await GLOBAL_PREEVENT_INTERPRETER.send_actor_hide(session, c_id)
 
-        # 3. Evaluate native map PreEvents (Matching C# Map.cs line 1388)
+        # 3. Dynamic PreEvents, Quest State & Companion Actor Visibility
         from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
-        await GLOBAL_PREEVENT_INTERPRETER.evaluate_map_preevents(session, session.map_id)
+        await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(self, session, session.map_id)
+        await GLOBAL_PREEVENT_INTERPRETER.replay_actor_visibility(self, session, session.map_id)
+
+        # 4. Synchronize opened chests / gathering nodes (AC 22:10)
+        from server.chest_system import GLOBAL_CHEST_SYSTEM
+        await GLOBAL_CHEST_SYSTEM.sync_opened_chests_on_map(session, session.map_id)
 
         # 4. Add players on map (including self) and their confirmations
         # C# sends 10,3 for ALL players INCLUDING self (not just others)
@@ -2310,6 +2463,10 @@ class GameServer:
             if not found:
                 session.quests.append({"quest_id": quest_id, "state": state})
         self.save_player_to_db(session)
+        if hasattr(session, '_player_quests_map'):
+            session._player_quests_map = None
+        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+        await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(self, session, session.map_id)
 
     def _is_visible_portal(self, name: str, dest_mapID: int) -> bool:
         if dest_mapID == 58001:
@@ -2443,6 +2600,7 @@ class GameServer:
 
         # Save to database
         self.save_player_to_db(session)
+        await self.spawn_player_companion(session)
         
     def get_monster_max_hp(self, level: int) -> int:
         return level * 20 + 80
@@ -3478,6 +3636,9 @@ class GameServer:
         challenger.pvp_battle_id = None
         target.in_battle = False
         target.pvp_battle_id = None
+
+        self.save_player_to_db(challenger)
+        self.save_player_to_db(target)
         
         logger.info(f"[Battle] PvP finished: challenger_won={challenger_won}")
 
@@ -4092,7 +4253,7 @@ class GameServer:
             session.gold += gold_reward
             await self.give_exp(session, exp_reward)
 
-            # Pet rewards
+            # Pet EXP rewards
             if pet_f:
                 pet_slot = pet_f['click_id'] + 1
                 if 1 <= pet_slot <= len(session.pets):
@@ -4105,17 +4266,34 @@ class GameServer:
                         pet["level"] = new_pet_lvl
                         pet["potential"] = pet.get("potential", 0) + (new_pet_lvl - old_pet_lvl) * 3
                         logger.info(f"[{session.char_name}] Pet leveled up! {old_pet_lvl} -> {new_pet_lvl}")
-                    
-                    con = pet.get("con", 5)
-                    wis = pet.get("wis", 5)
-                    pet_max_hp = int(round(((new_pet_lvl ** 0.35) * con * 2) + (new_pet_lvl * 1) + (con * 2) + 180))
-                    pet_max_sp = int(round(((new_pet_lvl ** 0.3) * wis * 3.2) + (new_pet_lvl * 1) + (wis * 2) + 94))
-                    pet["hp"] = min(pet_f["hp"], pet_max_hp)
-                    pet["sp"] = min(pet_f["sp"], pet_max_sp)
-                    
-                    self.save_player_to_db(session)
-                    await self.send_pet_stats(session, pet_slot)
-                    await self.send_pet_list(session)
+
+        # Update player HP/SP after battle
+        if won or fled:
+            session.hp = max(1, min(session.max_hp, pf.get('hp', session.hp)))
+            session.sp = max(0, min(session.max_sp, pf.get('sp', session.sp)))
+
+        # Update pet HP/SP
+        if pet_f:
+            pet_slot = pet_f.get('click_id', 0) + 1
+            if 1 <= pet_slot <= len(session.pets):
+                pet = session.pets[pet_slot - 1]
+                con = pet.get("con", 5)
+                wis = pet.get("wis", 5)
+                lvl = pet.get("level", 1)
+                pet_max_hp = int(round(((lvl ** 0.35) * con * 2) + (lvl * 1) + (con * 2) + 180))
+                pet_max_sp = int(round(((lvl ** 0.3) * wis * 3.2) + (lvl * 1) + (wis * 2) + 94))
+                if won or fled:
+                    pet["hp"] = max(0, min(pet_f.get("hp", pet_max_hp), pet_max_hp))
+                    pet["sp"] = max(0, min(pet_f.get("sp", pet_max_sp), pet_max_sp))
+                else:
+                    pet["hp"] = max(1, int(pet_max_hp * 0.10))
+                    pet["sp"] = max(1, int(pet_max_sp * 0.10))
+                await self.send_pet_stats(session, pet_slot)
+                await self.send_pet_list(session)
+
+        # Persist session state to database & sync HUD stats
+        self.save_player_to_db(session)
+        await self.send_stats_update(session)
 
         # 7. AC 22:6 [battle_type=11, 0, result]
         result = 2 if won else (1 if fled else 0)
