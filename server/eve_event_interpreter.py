@@ -425,6 +425,18 @@ class EveEventInterpreter:
         if not candidate_events and click_id in map_events:
             candidate_events.append(map_events[click_id])
 
+        # Special catch-up check for Robinson on Map 10035 (ClickID 1)
+        if session.map_id == 10035 and click_id == 1:
+            has_robinson = any(p.get('pet_id') in (12032, 12178) for p in getattr(session, 'pets', []) if isinstance(p, dict))
+            q12047 = get_session_quest_state(session, 12047)
+            if not has_robinson and q12047 == 1:
+                ev19 = map_events.get(19)
+                if ev19:
+                    sub4 = self.select_matching_branch(session, ev19)
+                    if sub4 and sub4.get("opcodes"):
+                        logger.info(f"[EveInterpreter] Robinson (ClickID 1) completing recruitment via Event 19 Sub #{sub4.get('sub_idx')}")
+                        return await self.execute_sub_opcodes(server, session, 1, ev19, sub4)
+
         for cand in candidate_events:
             if cand.get("subs"):
                 sub = self.select_matching_branch(session, cand)
@@ -624,21 +636,34 @@ class EveEventInterpreter:
                         executed_any = True
                     elif dptr == 2 and (d4 == 65280 or (d4 & 0xFF00) == 0xFF00) and d1 > 0:
                         target_click = d1
-                        hide_pkt = PacketWriter().write_8(22).write_8(10).write_16(target_click).write_8(0xFF).write_8(0xFF)
-                        await session.send_packet(hide_pkt)
-                        if not hasattr(session, '_actor_visibility') or session._actor_visibility is None:
-                            session._actor_visibility = {}
-                        session._actor_visibility[target_click] = False
+                        from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+                        await GLOBAL_PREEVENT_INTERPRETER.send_actor_hide(session, target_click)
+                        # Also broadcast dual despawn frames to map
+                        h10 = PacketWriter().write_8(22).write_8(10).write_16(target_click).write_8(0xFF).write_8(0xFF)
+                        h11 = PacketWriter().write_8(22).write_8(11).write_16(target_click).write_8(0xFF).write_8(0xFF)
+                        if hasattr(server, 'broadcast_to_map'):
+                            server.broadcast_to_map(session.map_id, h10, exclude_session=session)
+                            server.broadcast_to_map(session.map_id, h11, exclude_session=session)
                         executed_any = True
 
             # Opcode 3: Companion Pet Recruitment
             elif dptr == 3:
                 if d2 > 0:
                     companion_id = d2
-                    pet_name = "Robinson" if companion_id == 12178 else f"Companion #{companion_id}"
+                    pet_name = "Robinson" if companion_id in (12032, 12178) else f"Companion #{companion_id}"
                     from server.quests import GLOBAL_QUEST_ENGINE
                     await GLOBAL_QUEST_ENGINE.send_companion_reward(server, session, companion_id, pet_name)
                     await session.send_packet(PacketWriter().write_8(23).write_8(57).write_8(0).write_string(f"{pet_name} has joined your party!"))
+                    if companion_id in (12032, 12178):
+                        # Complete Robinson recruitment quests (Mark.dat 902/903 and event 12040/12047)
+                        set_session_quest_state(session, 902, 2, step=1)
+                        set_session_quest_state(session, 903, 2, step=1)
+                        set_session_quest_state(session, 12040, 2, step=1)
+                        set_session_quest_state(session, 12047, 2, step=1)
+                        for q_id in (902, 903, 12040, 12047):
+                            await session.send_packet(PacketWriter().write_8(24).write_8(5).write_16(q_id).write_8(2))
+                        if hasattr(session, 'quests') and session.quests:
+                            await session.send_packet(PacketWriter().write_8(24).write_8(4).write_16(len(session.quests)))
                     from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
                     await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
                     await GLOBAL_PREEVENT_INTERPRETER.replay_actor_visibility(server, session, session.map_id)
@@ -726,11 +751,17 @@ class EveEventInterpreter:
 
         # Dispatch dialogue steps
         if dialogue_steps:
+            session.current_dialogue_event = event_entry
+            session.current_dialogue_sub = sub
+            session.current_dialogue_click_id = click_id
             session.dialogue_queue = dialogue_steps[1:]  # Queue remaining steps
             first_step = dialogue_steps[0]
             await self._dispatch_step(server, session, first_step)
             executed_any = True
         elif executed_any:
+            session.current_dialogue_event = None
+            session.current_dialogue_sub = None
+            session.current_dialogue_click_id = None
             # If selectedSub was a quest flag setter with no dialogues and no choice prompt,
             # evaluate the newly activated dialogue branch (1:1 C# EveEventInterpreter.cs lines 559-568)
             next_sub = self.select_matching_branch(session, event_entry, exclude_sub=sub)

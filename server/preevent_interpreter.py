@@ -183,11 +183,14 @@ class PreEventInterpreter:
             if q13052 == 2 or q13098 in (1, 2):
                 return True
 
-        # Robinson: Quest 15283 or 12040 (state 1 or 2)
+        # Robinson: Quest 15283 in (1, 2) or Quest 15282 == 2 or Quest 902 == 2 or Quest 903 == 2 or Quest 12047 == 2
         if alias_id == 12178 or "robinson" in name_clean:
             q15283 = self._get_player_preevent_state(session, 15283)
-            q12040 = self._get_player_preevent_state(session, 12040)
-            if q15283 in (1, 2) or q12040 in (1, 2):
+            q15282 = self._get_player_preevent_state(session, 15282)
+            q902 = self._get_player_preevent_state(session, 902)
+            q903 = self._get_player_preevent_state(session, 903)
+            q12047 = self._get_player_preevent_state(session, 12047)
+            if q15283 in (1, 2) or q15282 == 2 or q902 == 2 or q903 == 2 or q12047 == 2:
                 return True
 
         # S.Monkey: Quest 12018 (state 1 or 2)
@@ -205,6 +208,13 @@ class PreEventInterpreter:
 
         try:
             handled_npcs: Set[int] = set()
+
+            # Map 10035 (Kelan Beach): Robinson recruitment lifecycle
+            if map_id == 10035:
+                has_robinson = self.has_recruited_companion(session, "Robinson", 12032)
+                if has_robinson:
+                    await self.send_actor_hide(session, 1)
+                    handled_npcs.add(1)
 
             # Map 12000 (Kelan Village outdoors): Exact per-player quest lifecycle isolation matching official WLO
             if map_id == 12000:

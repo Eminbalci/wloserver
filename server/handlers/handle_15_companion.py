@@ -192,14 +192,67 @@ async def handle(server, session, reader):
             except Exception as db_err:
                 logger.error(f"[Pet Rename] Error saving to DB: {db_err}")
 
-    elif sub == 9:  # Pet Mount/Ride Toggle Request (from C line 395444: FUN_002d6994(..., 0xf, 9, 0))
-        slot = reader.read_8() if reader.remaining_bytes() >= 1 else 1
-        logger.info(f"[{session.char_name}] Pet mount/ride toggle (AC 15 Sub 9) slot={slot}")
+    elif sub == 9:  # Vehicle Use / Mount / Dismount Request (C line 395444: FUN_002d6994(..., 0xf, 9, 0))
+        from server.vehicle_system import GLOBAL_VEHICLE_MANAGER
+        if getattr(session, 'riding_vehicle', False):
+            logger.info(f"[{session.char_name}] Player requested vehicle dismount via AC 15 Sub 9")
+            await GLOBAL_VEHICLE_MANAGER.dismount_vehicle(server, session)
+            return
+
+        slot = reader.read_8() if reader.remaining_bytes() >= 1 else 0
+        logger.info(f"[{session.char_name}] AC 15 Sub 9 action received: slot={slot}")
+
+        vehicle_item_id = 0
+        # 1. Check item at specified inventory slot
+        if slot > 0:
+            item = None
+            if hasattr(server, 'get_item_at_slot') and callable(getattr(server, 'get_item_at_slot', None)):
+                try:
+                    res = server.get_item_at_slot(session, slot)
+                    if isinstance(res, dict):
+                        item = res
+                except Exception:
+                    pass
+            if not item and hasattr(session, 'inventory') and isinstance(session.inventory, list):
+                for it in session.inventory:
+                    if isinstance(it, dict) and it.get('slot') == slot:
+                        item = it
+                        break
+            if item and isinstance(item, dict):
+                iid = item.get('item_id', 0)
+                if type(iid) is int:
+                    if (48000 <= iid <= 48050) or (36000 <= iid <= 36050) or (34100 <= iid <= 34200) or GLOBAL_VEHICLE_MANAGER.get_template(iid):
+                        vehicle_item_id = iid
+
+        # 2. Fallback: Check active vehicle or search inventory for any vehicle item
+        if not vehicle_item_id:
+            active_v = getattr(session, 'active_vehicle_id', 0)
+            if type(active_v) is int and active_v > 0 and GLOBAL_VEHICLE_MANAGER.get_template(active_v):
+                vehicle_item_id = active_v
+            else:
+                inv = getattr(session, 'inventory', [])
+                if isinstance(inv, list):
+                    for it in inv:
+                        if isinstance(it, dict):
+                            iid = it.get('item_id', 0)
+                            if type(iid) is int:
+                                if iid == 48016 or (48000 <= iid <= 48050) or GLOBAL_VEHICLE_MANAGER.get_template(iid):
+                                    vehicle_item_id = iid
+                                    break
+
+        if vehicle_item_id > 0:
+            logger.info(f"[{session.char_name}] Mounting vehicle #{vehicle_item_id} via AC 15 Sub 9")
+            await GLOBAL_VEHICLE_MANAGER.mount_vehicle(server, session, vehicle_item_id)
+            return
+
+        # 3. Fallback to Pet Mount/Ride Toggle if slot matches a companion pet
         from server.pet_ride_system import GLOBAL_PET_RIDE_MANAGER
-        if getattr(session, 'mounted_pet_slot', 0) == slot:
+        if getattr(session, 'mounted_pet_slot', 0) == slot and slot > 0:
             await GLOBAL_PET_RIDE_MANAGER.dismount_companion_pet(server, session)
-        else:
+        elif 1 <= slot <= len(getattr(session, 'pets', [])):
             await GLOBAL_PET_RIDE_MANAGER.mount_companion_pet(server, session, slot)
+        else:
+            logger.warning(f"[{session.char_name}] AC 15 Sub 9 unhandled: no vehicle found and slot {slot} is not a valid pet.")
 
     elif sub == 15:  # Pet Reborn Request
         slot = reader.read_8()
@@ -261,12 +314,11 @@ async def handle(server, session, reader):
         session.riding_vehicle = True
         session.active_vehicle_id = vehicle_item_id
         # Server confirms boarding: AC 15 Sub 10
-        # Format: [15, 10, 21, char_id(4), item_id(2)]
+        # Format: [15, 10, char_id(4), vehicle_id(2)]
         p10 = (
             PacketWriter()
             .write_8(15)
             .write_8(10)
-            .write_8(21)
             .write_32(session.char_id)
             .write_16(vehicle_item_id)
         )

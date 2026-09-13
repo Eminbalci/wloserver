@@ -57,3 +57,6 @@ tools/
 .idea/
 .DS_Store
 downloaded_screenshot.png
+
+#tests
+tests/

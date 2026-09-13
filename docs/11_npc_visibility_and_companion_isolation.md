@@ -60,9 +60,9 @@ Determines whether a given story companion has joined the player's roster, is cu
   1. **Pet Roster (`session.pets`)**: Inspects all owned pets against `COMPANION_ALIASES` mapping (e.g. Roca aliases: `14001, 14161, 14162`) and case-insensitive name matching.
   2. **Active Pet ID (`session.active_pet_id`)**: Inspects currently summoned companion ID.
   3. **Quest State Fallback**:
-     - *Roca*: Quest 13052 `state == 3` (Completed) or Quest 13098 `state in (1, 3)` (Started/Completed).
-     - *Robinson*: Quest 15283 or Quest 12040 `state in (1, 3)`.
-     - *S.Monkey*: Quest 12018 `state in (1, 3)`.
+     - *Roca*: Quest 13052 `state == 2` (Completed) or Quest 13098 `state in (1, 2)` (Started/Completed).
+     - *Robinson*: Quest 15283 `state in (1, 2)`, Quest 15282 `state == 2`, Quest 902 `state == 2`, Quest 903 `state == 2`, or Quest 12047 `state == 2` (Novice Guide Quest 12040 decoupled from recruitment).
+     - *S.Monkey*: Quest 12018 `state in (1, 2)`.
 - **Exceptions**: None; returns `False` if session or attributes are uninitialized.
 - **Edge Cases**:
   - Player with pet in storage/tent: Alias map covers base IDs, upgraded IDs, and rebirth companion IDs.
@@ -76,6 +76,8 @@ Processes map-level PreEvent bytecode from `data/eve.Emg` and applies authoritat
   - `map_id`: Integer ID of the active or destination map.
 - **Return Type**: `None`
 - **Map Lifecycle Overrides**:
+  - **Map 10035 (Kelan Beach)**:
+    - `CID 1` (Robinson): Stationed near the beach shoreline; hidden immediately via `send_actor_hide(session, 1)` once `has_recruited_companion(session, "Robinson", 12032)` returns `True` (owned in pet roster or Quest 902/903/12047/15282/15283 completed).
   - **Map 12000 (Kelan Village)**:
     - `CID 32` (Roca village square): Always hidden via `send_actor_hide(session, 32)`.
     - `CID 34` (Roca grave mourning): Visible only if Quest 13052 is in progress (`state == 1`) and not recruited; otherwise hidden.

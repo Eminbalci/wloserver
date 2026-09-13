@@ -11,6 +11,31 @@ ACTION_CODES = [20]
 from server.npc_manager import is_wild_monster
 
 
+async def _advance_dialogue_or_cascade(server, session, sub: int) -> bool:
+    """Advances dialogue queue or cascades to post-dialogue follow-up branch (1:1 C# EveEventInterpreter.cs)."""
+    queue = getattr(session, 'dialogue_queue', None)
+    if queue and len(queue) > 0:
+        next_step = queue.pop(0)
+        from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
+        await GLOBAL_EVE_INTERPRETER._dispatch_step(server, session, next_step)
+        return True
+
+    diag_event = getattr(session, 'current_dialogue_event', None)
+    if diag_event:
+        diag_sub = getattr(session, 'current_dialogue_sub', None)
+        diag_click = getattr(session, 'current_dialogue_click_id', 0)
+        session.current_dialogue_event = None
+        session.current_dialogue_sub = None
+        session.current_dialogue_click_id = None
+
+        from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
+        post_sub = GLOBAL_EVE_INTERPRETER.select_matching_branch(session, diag_event, exclude_sub=diag_sub)
+        if post_sub and post_sub.get("opcodes"):
+            logger.info(f"[EveInterpreter] Cascading post-dialogue (sub={sub}) to follow-up branch Sub #{post_sub.get('sub_idx')} for Event #{diag_event.get('click_id')}")
+            await GLOBAL_EVE_INTERPRETER.execute_sub_opcodes(server, session, diag_click, diag_event, post_sub)
+            return True
+    return False
+
 
 async def handle(server, session, reader):
     """Processes portals, chest, and dialog clicks (AC 20)."""
@@ -476,12 +501,8 @@ async def handle(server, session, reader):
                 logger.info(f"[{session.char_name}] Beach Arrival Cutscene & Robinson rescue completed successfully! Controls restored.")
                 return
 
-        # 2. Dialogue Queue Advancement (Multi-step dialogue playback)
-        queue = getattr(session, 'dialogue_queue', None)
-        if queue and len(queue) > 0:
-            next_step = queue.pop(0)
-            from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
-            await GLOBAL_EVE_INTERPRETER._dispatch_step(server, session, next_step)
+        # 2. Dialogue Queue Advancement & Post-Dialogue Cascading
+        if await _advance_dialogue_or_cascade(server, session, 6):
             return
 
         # 3. Check Defer Scene Transition Warp
@@ -578,6 +599,16 @@ async def handle(server, session, reader):
             from server.eve_event_interpreter import GLOBAL_EVE_INTERPRETER
             if await GLOBAL_EVE_INTERPRETER.handle_choice_selection(server, session, option_id):
                 return
+
+        # 0b. Advance dialogue or cascade when pressing Next/OK (option_id == 0)
+        if option_id == 0:
+            if await _advance_dialogue_or_cascade(server, session, sub):
+                return
+            await session.send_packet(PacketWriter().write_8(20).write_8(8))
+            await session.send_packet(PacketWriter().write_8(5).write_8(4))
+            from server.preevent_interpreter import GLOBAL_PREEVENT_INTERPRETER
+            await GLOBAL_PREEVENT_INTERPRETER.sync_per_player_npc_visibility(server, session, session.map_id)
+            return
         
         # Marriage Wedding Dress Check (Option 14: hold hands / oath)
         if option_id == 14:

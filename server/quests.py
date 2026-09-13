@@ -6,6 +6,7 @@ Ported from C# wlo.pserver.core/Game/QuestRelated and DataBase/QuestDataBase
 import os
 import re
 import time
+import inspect
 import struct
 import logging
 from enum import IntEnum
@@ -904,10 +905,18 @@ class QuestEngine:
             await session.send_packet(join_anim)
             server.broadcast_to_map(session.map_id, join_anim, exclude_session=session)
 
-            # 1. Hide recruited NPC from map (AC 22:10)
-            hide_pkt = PacketWriter().write_8(22).write_8(10).write_16(1).write_8(0xFF).write_8(0xFF)
-            await session.send_packet(hide_pkt)
-            server.broadcast_to_map(session.map_id, hide_pkt, exclude_session=session)
+            # 1. Hide recruited NPC from map (Dual packets: AC 22:10 despawn frame and AC 22:11 scene isolation frame)
+            click_to_hide = 1 if pet_id in (12032, 12178) else getattr(session, 'last_clicked_npc_id', 1)
+            if not hasattr(session, '_actor_visibility') or session._actor_visibility is None:
+                session._actor_visibility = {}
+            session._actor_visibility[click_to_hide] = False
+
+            hide10 = PacketWriter().write_8(22).write_8(10).write_16(click_to_hide).write_8(0xFF).write_8(0xFF)
+            hide11 = PacketWriter().write_8(22).write_8(11).write_16(click_to_hide).write_8(0xFF).write_8(0xFF)
+            await session.send_packet(hide10)
+            await session.send_packet(hide11)
+            server.broadcast_to_map(session.map_id, hide10, exclude_session=session)
+            server.broadcast_to_map(session.map_id, hide11, exclude_session=session)
 
             # 2. Add to session.pets
             pet_data = {
@@ -970,6 +979,24 @@ class QuestEngine:
                 spawn.write_32(session.char_id).write_32(pet_id).write_8(0).write_8(1)
                 spawn.write_string(pet_name).write_16(0)
                 server.broadcast_to_map(session.map_id, spawn)
+
+            # 6. Send AC 15:8 Companion List so client UI immediately renders recruited pet
+            if hasattr(server, 'send_pet_list') and callable(server.send_pet_list):
+                res = server.send_pet_list(session)
+                if inspect.isawaitable(res):
+                    await res
+
+            # 7. Complete companion recruitment quests and synchronize AC 24 journal flags
+            if pet_id in (12032, 12178):
+                from server.eve_event_interpreter import set_session_quest_state
+                set_session_quest_state(session, 902, 2, step=1)
+                set_session_quest_state(session, 903, 2, step=1)
+                set_session_quest_state(session, 12040, 2, step=1)
+                set_session_quest_state(session, 12047, 2, step=1)
+                for q_id in (902, 903, 12040, 12047):
+                    await session.send_packet(PacketWriter().write_8(24).write_8(5).write_16(q_id).write_8(2))
+                if hasattr(session, 'quests') and session.quests:
+                    await session.send_packet(PacketWriter().write_8(24).write_8(4).write_16(len(session.quests)))
 
             server.save_player_to_db(session)
             logger.info(f"[QuestEngine] Companion {pet_name} (ID: {pet_id}) recruited successfully for {session.char_name}!")

@@ -133,7 +133,17 @@ async def handle(server, session, reader):
         if item:
             item_id = item['item_id']
             item_name = server.items.get(str(item_id), "")
-            
+
+            # Check if it is a vehicle (e.g. Robinson's Raft 48016, 48000-48050, 36000-36050)
+            from server.vehicle_system import GLOBAL_VEHICLE_MANAGER
+            if (48000 <= item_id <= 48050) or (36000 <= item_id <= 36050) or (34100 <= item_id <= 34200) or GLOBAL_VEHICLE_MANAGER.get_template(item_id) or "raft" in item_name.lower():
+                logger.info(f"[{session.char_name}] Action Wear detected vehicle #{item_id} ({item_name}) at slot {loc}")
+                if getattr(session, 'riding_vehicle', False):
+                    await GLOBAL_VEHICLE_MANAGER.dismount_vehicle(server, session)
+                else:
+                    await GLOBAL_VEHICLE_MANAGER.mount_vehicle(server, session, item_id)
+                return
+
             # Check if it is a consumable recovery food/potion item (not equipment)
             is_consumable = not (10000 <= item_id < 27000)
             if is_consumable or any(x in item_name.lower() for x in ["pill", "water", "potion", "bread", "meat", "juice", "roasted"]):

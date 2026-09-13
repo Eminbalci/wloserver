@@ -172,10 +172,12 @@ Dynamic actor visibility is evaluated and pushed in real-time across four lifecy
 
 Certain world interactions in Wonderland Online—such as the Robinson Raft Chest (`Map 10035`, Chest `ClickID 7`, Event `19` `老魯加入`)—chain multiple bytecode sub-branches across single player actions:
 
-### 1. Branch Cascading
-- When an event sub-branch completes without yielding any dialogues (e.g. Sub 1 granting Robinson's Raft `Item #48016` and setting Quest Flag `12046 = 1`), [`EveEventInterpreter.execute_sub_opcodes`](file:///D:/GitHub/Wonderland%20Online/server/eve_event_interpreter.py) checks if quest flags were updated.
+### 1. Branch Cascading & Post-Dialogue Follow-Up
+- When an event sub-branch completes without yielding any dialogues (e.g. Sub 0 granting Robinson's Raft `Item #48016` and setting Quest Flag `12046 = 1`), [`EveEventInterpreter.execute_sub_opcodes`](file:///D:/GitHub/Wonderland%20Online/server/eve_event_interpreter.py) checks if quest flags were updated.
 - If flags changed and no dialogue was queued, the interpreter automatically cascades to re-evaluate the event tree's sub-branches against the updated player quest state.
-- For Event 19, the freshly set Quest Flag `12046 == 1` immediately qualifies Sub 3 (Talk `20355`, Robinson speech line, speaker `ClickID 1`, portrait `3`, followed by player dialogue chain), advancing Quest Flag `12046` to `2` (Completed) and `12047` to `1` (InProgress).
+- For Event 19, the freshly set Quest Flag `12046 == 1` immediately qualifies Sub 2 (Talk `20355`, Robinson speech line, speaker `ClickID 1`, portrait `3`, followed by player dialogue chain), advancing Quest Flag `12046` to `2` (Completed) and `12047` to `1` (InProgress).
+- **Post-Dialogue Action Cascading (`handle_20_interaction.py`)**: When the dialogue queue is exhausted (player clicks Next on the final dialogue step), the interaction handler evaluates follow-up action branches via `select_matching_branch(session, diag_event, exclude_sub=diag_sub)` (matching authentic C# `EveEventInterpreter.cs` lines 597-610). For Event 19, this activates Sub 4 (`w1 = 12047, w2 = 1, w4 = 261`), which executes Opcode 3 (`dptr == 3, d2 == 12178`) to recruit Robinson as a pet, dispatches `AC 15:1` and `AC 15:8` (companion list update), despawns Robinson NPC (`AC 22:10` hide packet), and sets Quest Flags `15282 = 2` (Completed) and `15283 = 1` (InProgress).
+- **Map 10035 Robinson Catch-Up**: If a player whose dialogue was interrupted or completed earlier interacts directly with Robinson (`ClickID 1`) on Map 10035 with Quest Flag `12047 == 1`, the interpreter intercepts the interaction to execute Event 19 Sub 4, immediately finalizing companion recruitment.
 
 ### 2. Fallback Filtering & Chest Anti-Duplication
 - Candidate events matching the clicked entity are evaluated first. If no branch matches current quest flags, [`EveEventInterpreter.select_matching_branch`](file:///D:/GitHub/Wonderland%20Online/server/eve_event_interpreter.py) filters candidate branches to exclude any whose quest flags are already completed (`state >= 2` or paired state `> 0`).
@@ -238,3 +240,9 @@ Wonderland Online coordinates quest progression across two symbiotic engines:
 2. **Robinson Rescue Sequence**:
    - Unconscious player is found on beach by Robinson.
    - Dynamic actor spawning (`AC 3:123`), camera panning (`AC 22:4`), and quest award of starter tent (`Item #32101`).
+3. **Robinson Recruitment & Raft Award (`Event #19` / `Mark.dat Quest 902/903`)**:
+   - Chest 7 on Map 10035 grants Robinson's Raft (`Item #48016`) and triggers the dialogue with Robinson.
+   - Player progresses through dialogue using `AC 20 Sub 2` / `Sub 6` / `Sub 9` with `option_id = 0`.
+   - On dialogue completion, `_advance_dialogue_or_cascade` automatically triggers Event 19 Sub 4, which executes Opcode 3 companion recruitment (`12032` Robinson).
+   - Server delivers Robinson (`AC 15 Sub 1` 54-byte recruitment frame), skill learning (`AC 8 Sub 2`), companion list (`AC 15 Sub 8`), and hides Robinson's world entity using dual despawn frames (`AC 22 Sub 10` and `AC 22 Sub 11`).
+   - Server marks `Mark.dat` Quests 902 & 903 and event flags 12040 & 12047 as Completed (`state = 2`), dispatching `AC 24 Sub 5 [24, 5, quest_id, 2]` to immediately clear the yellow exclamation mark (`!`) from the beach map and mini-map radar.

@@ -98,6 +98,12 @@ When a player enters the game world (`commence_login`) or warps between maps (`w
 - **Riding Mount**: If a pet is set as mounted (`riding = True`):
   1. `AC 15 Sub 16`: Broadcasts mount attachment to the map viewport with pet model ID.
 - **Viewport Catch-Up (`spawn_existing_map_players`)**: When a player transitions to a new map, the server renders all companions and mounts for players already present in that map zone.
+- **Vehicle Summoning & Boarding (`VehicleManager`)**:
+  1. `AC 15 Sub 9`: Client inventory use sends vehicle request. Server validates and triggers `mount_vehicle`.
+  2. `AC 15 Sub 18`: Dispatches vehicle model placement `[15, 18, 1, char_id, item_id, x, y]`.
+  3. `AC 15 Sub 10`: Dispatches authentic vehicle board frame `[15, 10, char_id, item_id]` (setting client vehicle state `0x207d = 2`).
+  4. `AC 23 Sub 51`: Dispatches board UI ACK `[23, 51, 1]`.
+  5. `AC 15 Sub 10 (with 0)` & `AC 15 Sub 15 / 11`: Dispatches dismount, packup, and cleanup frames, confirmed by `AC 23 Sub 52`.
 
 ---
 
@@ -105,6 +111,8 @@ When a player enters the game world (`commence_login`) or warps between maps (`w
 
 Certain world entities (quest NPCs, cutscene actors, recruited companions) change visibility dynamically:
 - **PreEvent Integration**: [`PreEventInterpreter`](file:///D:/GitHub/Wonderland%20Online/server/preevent_interpreter.py) evaluates bytecode from `eve.Emg` to determine whether an actor should be rendered (`AC 22:10 0x00 0x00`) or hidden (`AC 22:10 0xFF 0xFF`).
+- **Dual-Packet Despawn Frame Isolation**: Recruited companions and dynamic quest actors transmit both `AC 22 Sub 10` (render despawn) and `AC 22 Sub 11` (hitbox isolation), while static world chests omit `Sub 11` to prevent scene corruption.
+- **Robinson Lifecycle on Map 10035**: Robinson (ClickID 1) is stationed on Kelan Beach and remains visible until recruited. Upon completing recruitment dialogue, dual despawn frames are broadcast and Quest 902/903 completion clears map exclamation markers.
 - **Delta Optimization**: Redundant show packets to static props and chests are suppressed to avoid sprite animation frame resets.
 - **Client Interaction Gating**: [`handle_20_interaction.py`](file:///D:/GitHub/Wonderland%20Online/server/handlers/handle_20_interaction.py) verifies `is_npc_visible_to_player` prior to processing click events. Clicks on hidden entities are rejected with despawn confirmation and interface release (`AC 20:8`).
 
