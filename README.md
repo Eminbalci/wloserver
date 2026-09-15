@@ -1,5 +1,7 @@
 # Wonderland Online Server
 
+Discord invite link : http://discord.gg/J79ezkpzrT
+
 An asynchronous, production-grade game server implementation for Wonderland Online (WLRI / WLO) written in Python 3.
 
 ## Overview
